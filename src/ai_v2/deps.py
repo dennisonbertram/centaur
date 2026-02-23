@@ -20,13 +20,21 @@ async def get_embedding_service(
 
 
 async def verify_api_key(
-    x_api_key: Annotated[str, Header()],
+    request: Request,
+    x_api_key: Annotated[str | None, Header()] = None,
 ) -> str:
     if not settings.api_secret_key:
         raise HTTPException(status_code=500, detail="API key not configured")
-    if x_api_key != settings.api_secret_key:
+
+    token = x_api_key
+    if not token:
+        auth = request.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            token = auth[7:]
+
+    if not token or token != settings.api_secret_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
-    return x_api_key
+    return token
 
 
 class EmbeddingService:

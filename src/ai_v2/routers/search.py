@@ -68,10 +68,10 @@ async def search(
     fts_results AS (
         SELECT id, source, kind, source_id, content, metadata,
                ROW_NUMBER() OVER (
-                   ORDER BY ts_rank_cd(content_tsv, plainto_tsquery('english', $1)) DESC
+                   ORDER BY ts_rank_cd(tsv, plainto_tsquery('english', $1)) DESC
                ) AS fts_rank
         FROM embeddings
-        WHERE content_tsv @@ plainto_tsquery('english', $1) {source_filter}
+        WHERE tsv @@ plainto_tsquery('english', $1) {source_filter}
         LIMIT $2
     ),
     combined AS (

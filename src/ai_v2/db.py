@@ -117,4 +117,31 @@ async def _ensure_schema(pool: asyncpg.Pool) -> None:
                 ON embeddings (source, kind);
             """
         )
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sync_runs (
+                id              BIGSERIAL PRIMARY KEY,
+                source          TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'pending',
+                started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+                finished_at     TIMESTAMPTZ,
+                records_synced  INT NOT NULL DEFAULT 0,
+                error_message   TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_sync_runs_source
+                ON sync_runs (source, started_at DESC);
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS secrets (
+                key          TEXT PRIMARY KEY,
+                value        TEXT NOT NULL,
+                source       TEXT,
+                description  TEXT,
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            """
+        )
     log.info("schema_ensured")

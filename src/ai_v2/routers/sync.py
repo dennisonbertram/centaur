@@ -53,7 +53,7 @@ async def sync_status(
             """
             SELECT
                 c.source,
-                c.cursor_value,
+                c.cursor AS cursor_value,
                 c.updated_at AS cursor_updated_at,
                 r.status AS last_run_status,
                 r.started_at AS last_run_started,

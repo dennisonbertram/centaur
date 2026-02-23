@@ -6,10 +6,15 @@ from typing import Any
 
 import asyncpg
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from .deps import EmbeddingService
 
-mcp = FastMCP("Tempo AI v2")
+mcp = FastMCP(
+    "Tempo AI v2",
+    streamable_http_path="/",
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)  # mounted at /mcp in app.py
 
 _pool: asyncpg.Pool | None = None
 
@@ -63,10 +68,10 @@ async def search(query: str, sources: list[str] | None = None, limit: int = 20) 
     fts_results AS (
         SELECT id, source, kind, source_id, content, metadata,
                ROW_NUMBER() OVER (
-                   ORDER BY ts_rank_cd(content_tsv, plainto_tsquery('english', $1)) DESC
+                   ORDER BY ts_rank_cd(tsv, plainto_tsquery('english', $1)) DESC
                ) AS fts_rank
         FROM embeddings
-        WHERE content_tsv @@ plainto_tsquery('english', $1) {source_filter}
+        WHERE tsv @@ plainto_tsquery('english', $1) {source_filter}
         LIMIT $2
     ),
     combined AS (
@@ -221,10 +226,10 @@ async def sync_status() -> str:
                 r.status AS last_run_status,
                 r.started_at AS last_run_started,
                 r.finished_at AS last_run_finished,
-                r.records AS last_run_records
+                r.records_synced AS last_run_records
             FROM sync_cursors c
             LEFT JOIN LATERAL (
-                SELECT status, started_at, finished_at, records
+                SELECT status, started_at, finished_at, records_synced
                 FROM sync_runs
                 WHERE source = c.source
                 ORDER BY started_at DESC
