@@ -1,0 +1,3 @@
+{
+  "plugins": ["slack", "reshift", "gsuite", "linear", "parchiver"]
+}

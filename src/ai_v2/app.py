@@ -12,7 +12,8 @@ from starlette.responses import JSONResponse
 from .config import settings
 from .db import close_pool, create_pool
 from .mcp_server import mcp, set_pool
-from .routers import health, query, search, secrets, sync, tools
+from .plugin_manager import PluginManager
+from .routers import health, query, search, secrets, sync
 
 log = structlog.get_logger()
 
@@ -50,7 +51,19 @@ app.include_router(search.router)
 app.include_router(query.router)
 app.include_router(sync.router)
 app.include_router(secrets.router)
-app.include_router(tools.router)
+
+# Load plugins before creating MCP starlette app
+import os
+from pathlib import Path
+
+_app_root = Path(__file__).resolve().parent.parent.parent
+_plugins_dir = Path(os.environ.get("PLUGINS_DIR", _app_root / "plugins"))
+_profiles_dir = Path(os.environ.get("PROFILES_DIR", _app_root / "profiles"))
+
+plugin_manager = PluginManager(_plugins_dir, _profiles_dir)
+plugin_manager.discover(profile=os.environ.get("ACTIVE_PROFILE"))
+plugin_manager.register_mcp_tools(mcp)
+app.include_router(plugin_manager.create_rest_router())
 
 _mcp_starlette = mcp.streamable_http_app()
 
