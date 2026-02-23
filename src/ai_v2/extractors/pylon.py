@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -111,9 +111,7 @@ class PylonExtractor(BaseExtractor):
                 log.error("pylon_preflight_failed", error=str(e))
                 return False
 
-    async def extract(
-        self, pool: asyncpg.Pool, cursors: CursorStore
-    ) -> ExtractResult:
+    async def extract(self, pool: asyncpg.Pool, cursors: CursorStore) -> ExtractResult:
         start = time.monotonic()
         kinds: dict[str, int] = {}
         total = 0
@@ -121,10 +119,7 @@ class PylonExtractor(BaseExtractor):
         async with httpx.AsyncClient() as client:
             # 1. Accounts
             accounts = await self._paginate_all(client, "/accounts")
-            records = [
-                make_record("pylon", "account", a.get("id", "unknown"), a)
-                for a in accounts
-            ]
+            records = [make_record("pylon", "account", a.get("id", "unknown"), a) for a in accounts]
             n = await self._write_records(pool, records)
             kinds["account"] = n
             total += n
@@ -132,26 +127,21 @@ class PylonExtractor(BaseExtractor):
 
             # 2. Contacts
             contacts = await self._paginate_all(client, "/contacts")
-            records = [
-                make_record("pylon", "contact", c.get("id", "unknown"), c)
-                for c in contacts
-            ]
+            records = [make_record("pylon", "contact", c.get("id", "unknown"), c) for c in contacts]
             n = await self._write_records(pool, records)
             kinds["contact"] = n
             total += n
             log.info("pylon_contacts", count=len(contacts), written=n)
 
             # 3. Issues (windowed by time, incremental via cursor)
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             backfill_start = now - timedelta(days=self._backfill_days)
 
             cursor_val = await cursors.get(pool, "pylon", "issue")
             if cursor_val:
                 overlap = CursorStore.apply_overlap(cursor_val)
                 try:
-                    cursor_dt = datetime.fromisoformat(
-                        overlap.replace("Z", "+00:00")
-                    )
+                    cursor_dt = datetime.fromisoformat(overlap.replace("Z", "+00:00"))
                     if cursor_dt > backfill_start:
                         backfill_start = cursor_dt
                 except ValueError:
@@ -168,10 +158,7 @@ class PylonExtractor(BaseExtractor):
                 )
                 all_issues.extend(window_issues)
 
-            records = [
-                make_record("pylon", "issue", i.get("id", "unknown"), i)
-                for i in all_issues
-            ]
+            records = [make_record("pylon", "issue", i.get("id", "unknown"), i) for i in all_issues]
             n = await self._write_records(pool, records)
             kinds["issue"] = n
             total += n
@@ -194,16 +181,12 @@ class PylonExtractor(BaseExtractor):
 
                     # Skip if already synced and issue not updated
                     issue_ts = issue.get("updated_at") or issue.get("created_at")
-                    msg_cursor = await cursors.get(
-                        pool, "pylon", "message", issue_id
-                    )
+                    msg_cursor = await cursors.get(pool, "pylon", "message", issue_id)
                     if msg_cursor and issue_ts and issue_ts <= msg_cursor:
                         return 0
 
                     try:
-                        data = await self._api(
-                            client, f"/issues/{issue_id}/messages"
-                        )
+                        data = await self._api(client, f"/issues/{issue_id}/messages")
                         messages = data.get("data", [])[:MAX_MESSAGES_PER_ISSUE]
 
                         records = [
@@ -218,9 +201,7 @@ class PylonExtractor(BaseExtractor):
                         written = await self._write_records(pool, records)
 
                         if issue_ts:
-                            await cursors.set(
-                                pool, "pylon", "message", issue_ts, issue_id
-                            )
+                            await cursors.set(pool, "pylon", "message", issue_ts, issue_id)
 
                         if self._rate_limit_delay > 0:
                             await asyncio.sleep(self._rate_limit_delay)
@@ -252,15 +233,11 @@ class PylonExtractor(BaseExtractor):
         )
 
 
-def _build_time_windows(
-    start: datetime, end: datetime
-) -> list[dict[str, str]]:
+def _build_time_windows(start: datetime, end: datetime) -> list[dict[str, str]]:
     windows: list[dict[str, str]] = []
     window_start = start
     while window_start < end:
-        window_end = min(
-            window_start + timedelta(days=MAX_WINDOW_DAYS), end
-        )
+        window_end = min(window_start + timedelta(days=MAX_WINDOW_DAYS), end)
         windows.append(
             {
                 "start": window_start.isoformat(),

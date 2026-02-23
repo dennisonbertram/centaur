@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 import time
 from typing import Any
@@ -15,7 +14,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from ..cursors import CursorStore, track_max_timestamp
+from ..cursors import CursorStore
 from .base import BaseExtractor, ExtractResult, make_record
 
 log = structlog.get_logger()
@@ -64,6 +63,7 @@ class GitHubExtractor(BaseExtractor):
             retry_after = int(resp.headers.get("Retry-After", "60"))
             log.warning("github_rate_limited", retry_after=retry_after)
             import asyncio
+
             await asyncio.sleep(retry_after)
             resp.raise_for_status()
         resp.raise_for_status()
@@ -79,9 +79,7 @@ class GitHubExtractor(BaseExtractor):
                 log.error("github_preflight_failed", error=str(e))
                 return False
 
-    async def extract(
-        self, pool: asyncpg.Pool, cursors: CursorStore
-    ) -> ExtractResult:
+    async def extract(self, pool: asyncpg.Pool, cursors: CursorStore) -> ExtractResult:
         start = time.monotonic()
         kinds: dict[str, int] = {}
         total = 0
@@ -101,10 +99,7 @@ class GitHubExtractor(BaseExtractor):
                     break
                 page += 1
 
-            records = [
-                make_record("github", "repo", str(r.get("id", "")), r)
-                for r in all_repos
-            ]
+            records = [make_record("github", "repo", str(r.get("id", "")), r) for r in all_repos]
             n = await self._write_records(pool, records)
             kinds["repo"] = n
             total += n
@@ -125,8 +120,7 @@ class GitHubExtractor(BaseExtractor):
                 page += 1
 
             records = [
-                make_record("github", "member", str(m.get("id", "")), m)
-                for m in all_members
+                make_record("github", "member", str(m.get("id", "")), m) for m in all_members
             ]
             n = await self._write_records(pool, records)
             kinds["member"] = n
@@ -134,9 +128,9 @@ class GitHubExtractor(BaseExtractor):
             log.info("github_members", count=len(all_members), written=n)
 
             # 3. PRs (per repo)
-            target_repos = self._repos if self._repos else [
-                r["name"] for r in all_repos if r.get("name")
-            ]
+            target_repos = (
+                self._repos if self._repos else [r["name"] for r in all_repos if r.get("name")]
+            )
             pr_author_logins: set[str] = set()
 
             for repo in target_repos:
@@ -183,9 +177,7 @@ class GitHubExtractor(BaseExtractor):
                             pr_author_logins.add(user["login"])
 
                     records = [
-                        make_record(
-                            "github", "pr", str(pr.get("id", "")), {**pr, "repo": repo}
-                        )
+                        make_record("github", "pr", str(pr.get("id", "")), {**pr, "repo": repo})
                         for pr in prs
                     ]
                     n = await self._write_records(pool, records)

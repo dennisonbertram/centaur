@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import time
+from datetime import UTC
 from typing import Any
 
 import asyncpg
@@ -15,7 +15,7 @@ from tenacity import (
     wait_exponential,
 )
 
-from ..cursors import CursorStore, track_max_timestamp
+from ..cursors import CursorStore
 from .base import BaseExtractor, ExtractResult, make_record
 
 log = structlog.get_logger()
@@ -122,9 +122,7 @@ class GranolaExtractor(BaseExtractor):
             log.error("granola_preflight_failed")
             return False
 
-    async def extract(
-        self, pool: asyncpg.Pool, cursors: CursorStore
-    ) -> ExtractResult:
+    async def extract(self, pool: asyncpg.Pool, cursors: CursorStore) -> ExtractResult:
         start = time.monotonic()
         kinds: dict[str, int] = {}
         total = 0
@@ -148,9 +146,7 @@ class GranolaExtractor(BaseExtractor):
             # Enterprise
             if self._enterprise_api_key:
                 try:
-                    n = await self._extract_enterprise(
-                        client, pool, cursors, kinds
-                    )
+                    n = await self._extract_enterprise(client, pool, cursors, kinds)
                     total += n
                 except Exception as e:
                     log.warning("granola_enterprise_failed", error=str(e))
@@ -195,14 +191,13 @@ class GranolaExtractor(BaseExtractor):
 
         # Fetch transcripts for recent meetings
         cutoff_ts = time.time() - MAX_TRANSCRIPT_DAYS * 86400
-        from datetime import datetime, timezone
-        cutoff = datetime.fromtimestamp(cutoff_ts, tz=timezone.utc).isoformat()
+        from datetime import datetime
 
-        recent = [
-            d
-            for d in docs
-            if d.get("created_at") and d["created_at"] >= cutoff
-        ][: self._max_transcripts]
+        cutoff = datetime.fromtimestamp(cutoff_ts, tz=UTC).isoformat()
+
+        recent = [d for d in docs if d.get("created_at") and d["created_at"] >= cutoff][
+            : self._max_transcripts
+        ]
 
         for doc in recent:
             doc_id = doc.get("id", "")
@@ -211,9 +206,7 @@ class GranolaExtractor(BaseExtractor):
                     client, token, "/v1/get-transcript", {"document_id": doc_id}
                 )
                 segments = (
-                    transcript
-                    if isinstance(transcript, list)
-                    else transcript.get("segments", [])
+                    transcript if isinstance(transcript, list) else transcript.get("segments", [])
                 )
                 if segments:
                     rec = make_record("granola", "transcript", doc_id, segments)
@@ -261,9 +254,7 @@ class GranolaExtractor(BaseExtractor):
 
                 # Get full note with transcript
                 try:
-                    full = await self._enterprise_get(
-                        client, f"/v1/notes/{note_id}"
-                    )
+                    full = await self._enterprise_get(client, f"/v1/notes/{note_id}")
                 except Exception:
                     full = note
 

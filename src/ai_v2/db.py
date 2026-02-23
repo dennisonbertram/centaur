@@ -32,9 +32,7 @@ async def fetch(pool: asyncpg.Pool, query: str, *args: Any) -> list[asyncpg.Reco
     return await pool.fetch(query, *args)
 
 
-async def fetchrow(
-    pool: asyncpg.Pool, query: str, *args: Any
-) -> asyncpg.Record | None:
+async def fetchrow(pool: asyncpg.Pool, query: str, *args: Any) -> asyncpg.Record | None:
     return await pool.fetchrow(query, *args)
 
 

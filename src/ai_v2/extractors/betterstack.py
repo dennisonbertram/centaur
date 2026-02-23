@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -53,9 +53,7 @@ class BetterStackExtractor(BaseExtractor):
         url_or_path: str,
     ) -> dict[str, Any]:
         full_url = (
-            url_or_path
-            if url_or_path.startswith("http")
-            else f"{BETTERSTACK_API}{url_or_path}"
+            url_or_path if url_or_path.startswith("http") else f"{BETTERSTACK_API}{url_or_path}"
         )
         resp = await client.get(
             full_url,
@@ -114,9 +112,7 @@ class BetterStackExtractor(BaseExtractor):
                 log.error("betterstack_preflight_failed", error=str(e))
                 return False
 
-    async def extract(
-        self, pool: asyncpg.Pool, cursors: CursorStore
-    ) -> ExtractResult:
+    async def extract(self, pool: asyncpg.Pool, cursors: CursorStore) -> ExtractResult:
         start = time.monotonic()
         kinds: dict[str, int] = {}
         total = 0
@@ -139,9 +135,7 @@ class BetterStackExtractor(BaseExtractor):
             log.info("betterstack_monitors", count=len(monitors), written=n)
 
             # 2. Slack integrations (full refresh)
-            slack_integrations = await self._paginate_jsonapi(
-                client, "/api/v2/slack-integrations"
-            )
+            slack_integrations = await self._paginate_jsonapi(client, "/api/v2/slack-integrations")
             records = [
                 make_record(
                     "betterstack",
@@ -156,10 +150,10 @@ class BetterStackExtractor(BaseExtractor):
             total += n
 
             # 3. On-call schedules (per day, incremental)
-            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-            on_call_from = (
-                datetime.now(timezone.utc) - timedelta(days=self._backfill_days)
-            ).strftime("%Y-%m-%d")
+            today = datetime.now(UTC).strftime("%Y-%m-%d")
+            on_call_from = (datetime.now(UTC) - timedelta(days=self._backfill_days)).strftime(
+                "%Y-%m-%d"
+            )
 
             cursor_val = await cursors.get(pool, "betterstack", "on-call")
             if cursor_val and cursor_val > on_call_from:
@@ -171,9 +165,7 @@ class BetterStackExtractor(BaseExtractor):
 
             while current <= end:
                 date_str = current.strftime("%Y-%m-%d")
-                data = await self._api(
-                    client, f"/api/v2/on-calls?date={date_str}"
-                )
+                data = await self._api(client, f"/api/v2/on-calls?date={date_str}")
                 resources = data.get("data", [])
                 included = data.get("included", [])
 
@@ -200,10 +192,12 @@ class BetterStackExtractor(BaseExtractor):
                             if user:
                                 users.append(user)
                             else:
-                                users.append({
-                                    "id": ref.get("id", ""),
-                                    "email": ref.get("meta", {}).get("email", ""),
-                                })
+                                users.append(
+                                    {
+                                        "id": ref.get("id", ""),
+                                        "email": ref.get("meta", {}).get("email", ""),
+                                    }
+                                )
 
                     schedule = {
                         "id": r.get("id"),
@@ -212,7 +206,7 @@ class BetterStackExtractor(BaseExtractor):
                         "team_name": attrs.get("team_name", ""),
                         "on_call_users": users,
                         "date": date_str,
-                        "synced_at": datetime.now(timezone.utc).isoformat(),
+                        "synced_at": datetime.now(UTC).isoformat(),
                     }
                     rec = make_record(
                         "betterstack",
@@ -238,18 +232,14 @@ class BetterStackExtractor(BaseExtractor):
             if cursor_val:
                 overlap = CursorStore.apply_overlap(cursor_val)
                 try:
-                    cursor_dt = datetime.fromisoformat(
-                        overlap.replace("Z", "+00:00")
-                    )
+                    cursor_dt = datetime.fromisoformat(overlap.replace("Z", "+00:00"))
                     cursor_ts = cursor_dt.timestamp()
                     if cursor_ts > backfill_start:
                         backfill_start = cursor_ts
                 except ValueError:
                     pass
 
-            from_date = datetime.fromtimestamp(
-                backfill_start, tz=timezone.utc
-            ).strftime("%Y-%m-%d")
+            from_date = datetime.fromtimestamp(backfill_start, tz=UTC).strftime("%Y-%m-%d")
 
             incidents = await self._paginate_jsonapi(
                 client, f"/api/v3/incidents?per_page=50&from={from_date}"
@@ -289,9 +279,7 @@ class BetterStackExtractor(BaseExtractor):
                         or incident.get("acknowledged_at")
                         or incident.get("started_at")
                     )
-                    tl_cursor = await cursors.get(
-                        pool, "betterstack", "incident-timeline", inc_id
-                    )
+                    tl_cursor = await cursors.get(pool, "betterstack", "incident-timeline", inc_id)
                     if tl_cursor and inc_ts and inc_ts <= tl_cursor:
                         return 0
 

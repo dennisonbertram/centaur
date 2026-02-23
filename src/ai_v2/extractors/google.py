@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -87,15 +87,12 @@ class GoogleExtractor(BaseExtractor):
         return resp.json()["access_token"]
 
     async def _service_account_auth(self, client: httpx.AsyncClient) -> str:
-        import base64
-        import hashlib
-        import time as _time
 
         key_data = json.loads(self._service_account_key)
         # Use google-auth if available, fall back to manual JWT
         try:
-            from google.oauth2 import service_account
             from google.auth.transport.requests import Request as GoogleRequest
+            from google.oauth2 import service_account
 
             creds = service_account.Credentials.from_service_account_info(
                 key_data,
@@ -114,9 +111,7 @@ class GoogleExtractor(BaseExtractor):
             creds.refresh(GoogleRequest())
             return creds.token
         except ImportError:
-            raise RuntimeError(
-                "google-auth package required for service account auth"
-            )
+            raise RuntimeError("google-auth package required for service account auth")
 
     @retry(
         retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TimeoutException)),
@@ -170,9 +165,7 @@ class GoogleExtractor(BaseExtractor):
                 log.error("google_preflight_failed", error=str(e))
                 return False
 
-    async def extract(
-        self, pool: asyncpg.Pool, cursors: CursorStore
-    ) -> ExtractResult:
+    async def extract(self, pool: asyncpg.Pool, cursors: CursorStore) -> ExtractResult:
         start = time.monotonic()
         kinds: dict[str, int] = {}
         total = 0
@@ -210,7 +203,7 @@ class GoogleExtractor(BaseExtractor):
         kinds: dict[str, int],
     ) -> int:
         written = 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         time_min = (now - timedelta(days=self._past_days)).isoformat()
         time_max = (now + timedelta(days=self._future_days)).isoformat()
 
@@ -221,10 +214,7 @@ class GoogleExtractor(BaseExtractor):
             {"maxResults": 250},
         )
         calendars = data.get("items", [])
-        records = [
-            make_record("gcal", "calendar", c.get("id", "unknown"), c)
-            for c in calendars
-        ]
+        records = [make_record("gcal", "calendar", c.get("id", "unknown"), c) for c in calendars]
         n = await self._write_records(pool, records)
         kinds["calendar"] = n
         written += n
@@ -316,9 +306,7 @@ class GoogleExtractor(BaseExtractor):
         log.info("gcal_done", calendars=len(cal_targets), events=event_count)
         return written
 
-    async def _list_directory_people(
-        self, client: httpx.AsyncClient
-    ) -> list[dict[str, str]]:
+    async def _list_directory_people(self, client: httpx.AsyncClient) -> list[dict[str, str]]:
         people: list[dict[str, str]] = []
         page_token: str | None = None
 
@@ -381,13 +369,9 @@ class GoogleExtractor(BaseExtractor):
             if page_token:
                 params["pageToken"] = page_token
 
-            data = await self._api(
-                client, f"{GMAIL_API}/users/{user_id}/messages", params
-            )
+            data = await self._api(client, f"{GMAIL_API}/users/{user_id}/messages", params)
             for m in data.get("messages", []):
-                all_refs.append(
-                    {"id": m.get("id", ""), "threadId": m.get("threadId", "")}
-                )
+                all_refs.append({"id": m.get("id", ""), "threadId": m.get("threadId", "")})
             page_token = data.get("nextPageToken")
             if not page_token:
                 break
@@ -497,10 +481,7 @@ class GoogleExtractor(BaseExtractor):
                 break
 
         # Write file records
-        file_records = [
-            make_record("gdrive", "file", f.get("id", "unknown"), f)
-            for f in all_files
-        ]
+        file_records = [make_record("gdrive", "file", f.get("id", "unknown"), f) for f in all_files]
         n = await self._write_records(pool, file_records)
         kinds["file"] = kinds.get("file", 0) + n
         written += n
@@ -669,9 +650,7 @@ class GoogleExtractor(BaseExtractor):
                 body: dict[str, Any] = {"pageSize": 100}
                 if act_page:
                     body["pageToken"] = act_page
-                adata = await self._api(
-                    client, ACTIVITY_API, method="POST", json_body=body
-                )
+                adata = await self._api(client, ACTIVITY_API, method="POST", json_body=body)
                 activities = adata.get("activities", [])
                 if activities:
                     arecs = [
@@ -702,9 +681,7 @@ class GoogleExtractor(BaseExtractor):
                 }
                 if sd_page:
                     sdparams["pageToken"] = sd_page
-                sddata = await self._api(
-                    client, f"{GDRIVE_API}/drives", sdparams
-                )
+                sddata = await self._api(client, f"{GDRIVE_API}/drives", sdparams)
                 drives = sddata.get("drives", [])
                 if drives:
                     sdrecs = [
@@ -730,8 +707,7 @@ class GoogleExtractor(BaseExtractor):
         shortcuts = [f for f in all_files if f.get("mimeType") == folder_mime]
         if shortcuts:
             srecs = [
-                make_record("gdrive", "shortcut", s.get("id", "unknown"), s)
-                for s in shortcuts
+                make_record("gdrive", "shortcut", s.get("id", "unknown"), s) for s in shortcuts
             ]
             sn = await self._write_records(pool, srecs)
             kinds["shortcut"] = sn

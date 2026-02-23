@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import asyncpg
@@ -28,14 +27,10 @@ class BaseExtractor(ABC):
     source: str
 
     @abstractmethod
-    async def preflight(self) -> bool:
-        ...
+    async def preflight(self) -> bool: ...
 
     @abstractmethod
-    async def extract(
-        self, pool: asyncpg.Pool, cursors: CursorStore
-    ) -> ExtractResult:
-        ...
+    async def extract(self, pool: asyncpg.Pool, cursors: CursorStore) -> ExtractResult: ...
 
     async def _write_records(
         self,
@@ -54,7 +49,7 @@ class BaseExtractor(ABC):
                 ON CONFLICT (source, kind, external_id, content_hash) DO NOTHING
                 """
             )
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             for rec in records:
                 chash = _content_hash(rec["data"])
                 result = await stmt.execute(

@@ -16,14 +16,17 @@ structlog.configure(
         structlog.dev.ConsoleRenderer(),
     ],
 )
-
 log = structlog.get_logger()
 
 
 @click.group()
 def cli() -> None:
-    """ai-v2-dataplane: ETL pipeline for Postgres+pgvector."""
-    pass
+    """Tempo AI v2 — Postgres+pgvector data plane, API, and sandbox."""
+
+
+# ---------------------------------------------------------------------------
+# Dataplane commands
+# ---------------------------------------------------------------------------
 
 
 @cli.command()
@@ -35,9 +38,7 @@ def sync(source: tuple[str, ...]) -> None:
 
     settings = Settings()
     sources = list(source) if source else None
-
     results = asyncio.run(run_sync(settings, sources))
-
     total = sum(r.records_written for r in results)
     click.echo(f"\nSync complete: {len(results)} sources, {total} records written")
     for r in results:
@@ -68,15 +69,12 @@ def embed(source: str | None, batch_size: int) -> None:
             settings.embedding_model,
             settings.embedding_dimensions,
         )
-
         try:
-            # Find records without embeddings
             source_clause = ""
             args: list = []
             if source:
                 source_clause = "WHERE r.source = $1"
                 args.append(source)
-
             query = f"""
                 SELECT r.source, r.kind, r.external_id,
                        r.data::text AS data_text
@@ -89,16 +87,27 @@ def embed(source: str | None, batch_size: int) -> None:
                 AND e.id IS NULL
                 ORDER BY r.fetched_at DESC
             """
-
             rows = await fetch(pool, query, *args)
             click.echo(f"Found {len(rows)} records without embeddings")
 
             records: list[EmbeddingRecord] = []
             for row in rows:
-                data = json.loads(row["data_text"]) if isinstance(row["data_text"], str) else row["data_text"]
-                # Build content string from data
+                data = (
+                    json.loads(row["data_text"])
+                    if isinstance(row["data_text"], str)
+                    else row["data_text"]
+                )
                 content_parts: list[str] = []
-                for key in ("title", "name", "text", "body", "content", "description", "summary", "snippet"):
+                for key in (
+                    "title",
+                    "name",
+                    "text",
+                    "body",
+                    "content",
+                    "description",
+                    "summary",
+                    "snippet",
+                ):
                     val = data.get(key)
                     if val and isinstance(val, str):
                         content_parts.append(val)
@@ -115,16 +124,12 @@ def embed(source: str | None, batch_size: int) -> None:
                     )
                 )
 
-            # Process in batches
             total_stored = 0
             for i in range(0, len(records), batch_size):
                 batch = records[i : i + batch_size]
                 stored = await svc.embed_and_store(pool, batch)
                 total_stored += stored
-                click.echo(
-                    f"  Embedded batch {i // batch_size + 1}: {stored} records"
-                )
-
+                click.echo(f"  Embedded batch {i // batch_size + 1}: {stored} records")
             click.echo(f"Embedding complete: {total_stored} records")
         finally:
             await close_pool(pool)
@@ -143,14 +148,11 @@ def status() -> None:
     async def _run() -> None:
         pool = await create_pool(settings.database_url)
         try:
-            # Record counts by source
             rows = await fetch(
                 pool,
                 """
                 SELECT source, kind, COUNT(*) as count
-                FROM raw_records
-                GROUP BY source, kind
-                ORDER BY source, kind
+                FROM raw_records GROUP BY source, kind ORDER BY source, kind
                 """,
             )
             click.echo("=== Record Counts ===")
@@ -161,13 +163,11 @@ def status() -> None:
                     click.echo(f"\n  {current_source}:")
                 click.echo(f"    {row['kind']}: {row['count']}")
 
-            # Cursor positions
             cursors = await fetch(
                 pool,
                 """
                 SELECT source, kind, entity_id, cursor, updated_at
-                FROM sync_cursors
-                ORDER BY source, kind
+                FROM sync_cursors ORDER BY source, kind
                 """,
             )
             click.echo("\n=== Sync Cursors ===")
@@ -178,20 +178,16 @@ def status() -> None:
                     f"{row['cursor']} (updated: {row['updated_at']})"
                 )
 
-            # Embedding counts
             emb_rows = await fetch(
                 pool,
                 """
                 SELECT source, kind, COUNT(*) as count
-                FROM embeddings
-                GROUP BY source, kind
-                ORDER BY source, kind
+                FROM embeddings GROUP BY source, kind ORDER BY source, kind
                 """,
             )
             click.echo("\n=== Embeddings ===")
             for row in emb_rows:
                 click.echo(f"  {row['source']}/{row['kind']}: {row['count']}")
-
         finally:
             await close_pool(pool)
 
@@ -220,19 +216,12 @@ def search(query: str, limit: int, source: str | None) -> None:
             settings.embedding_model,
             settings.embedding_dimensions,
         )
-
         try:
             embeddings = await svc.embed_texts([query])
             query_embedding = embeddings[0]
-
             results = await hybrid_search(
-                pool,
-                query,
-                query_embedding,
-                limit=limit,
-                source_filter=source,
+                pool, query, query_embedding, limit=limit, source_filter=source
             )
-
             click.echo(f"\nSearch results for: {query}\n")
             for i, r in enumerate(results):
                 click.echo(f"--- Result {i + 1} ---")
@@ -240,8 +229,7 @@ def search(query: str, limit: int, source: str | None) -> None:
                 click.echo(f"  ID: {r['source_id']}")
                 click.echo(
                     f"  Scores: vec={r['vec_score']:.4f} "
-                    f"fts={r['fts_score']:.4f} "
-                    f"rrf={r['rrf_score']:.6f}"
+                    f"fts={r['fts_score']:.4f} rrf={r['rrf_score']:.6f}"
                 )
                 content = r["content"][:200]
                 click.echo(f"  Content: {content}...")
@@ -269,31 +257,26 @@ def migrate_from_sqlite(sqlite_path: str) -> None:
 
     async def _run() -> None:
         pool = await create_pool(settings.database_url)
-
         try:
             conn = sqlite3.connect(str(db_path))
             conn.row_factory = sqlite3.Row
 
-            # Migrate raw records
             click.echo("Migrating raw_records...")
             cursor = conn.execute(
-                "SELECT source, kind, external_id, fetched_at, content_hash, data "
-                "FROM raw__records"
+                "SELECT source, kind, external_id, fetched_at, content_hash, data FROM raw__records"
             )
-
-            batch: list[tuple] = []
             total = 0
             while True:
                 rows = cursor.fetchmany(1000)
                 if not rows:
                     break
-
                 async with pool.acquire() as pg:
                     for row in rows:
                         await pg.execute(
                             """
                             INSERT INTO raw_records
-                                (source, kind, external_id, fetched_at, content_hash, data)
+                                (source, kind, external_id,
+                                 fetched_at, content_hash, data)
                             VALUES ($1, $2, $3, $4, $5, $6::jsonb)
                             ON CONFLICT DO NOTHING
                             """,
@@ -305,15 +288,13 @@ def migrate_from_sqlite(sqlite_path: str) -> None:
                             row["data"],
                         )
                         total += 1
-
                 click.echo(f"  Migrated {total} records...")
 
-            # Migrate cursors
             click.echo("Migrating sync_cursors...")
             try:
                 cursor = conn.execute(
-                    "SELECT cursor_key, source, kind, entity_id, cursor, updated_at "
-                    "FROM sync_cursors"
+                    "SELECT cursor_key, source, kind, entity_id, "
+                    "cursor, updated_at FROM sync_cursors"
                 )
                 cursor_rows = cursor.fetchall()
                 async with pool.acquire() as pg:
@@ -321,7 +302,8 @@ def migrate_from_sqlite(sqlite_path: str) -> None:
                         await pg.execute(
                             """
                             INSERT INTO sync_cursors
-                                (cursor_key, source, kind, entity_id, cursor, updated_at)
+                                (cursor_key, source, kind,
+                                 entity_id, cursor, updated_at)
                             VALUES ($1, $2, $3, $4, $5, $6)
                             ON CONFLICT DO NOTHING
                             """,
@@ -335,12 +317,10 @@ def migrate_from_sqlite(sqlite_path: str) -> None:
             except sqlite3.OperationalError:
                 click.echo("  No sync_cursors table found, skipping")
 
-            # Migrate people
             click.echo("Migrating people...")
             try:
                 cursor = conn.execute(
-                    "SELECT slug, name, email, role, is_direct_report, focus_area "
-                    "FROM people"
+                    "SELECT slug, name, email, role, is_direct_report, focus_area FROM people"
                 )
                 people_rows = cursor.fetchall()
                 async with pool.acquire() as pg:
@@ -348,7 +328,8 @@ def migrate_from_sqlite(sqlite_path: str) -> None:
                         await pg.execute(
                             """
                             INSERT INTO people
-                                (slug, name, email, role, is_direct_report, focus_area)
+                                (slug, name, email, role,
+                                 is_direct_report, focus_area)
                             VALUES ($1, $2, $3, $4, $5, $6)
                             ON CONFLICT DO NOTHING
                             """,
@@ -362,7 +343,6 @@ def migrate_from_sqlite(sqlite_path: str) -> None:
             except sqlite3.OperationalError:
                 click.echo("  No people table found, skipping")
 
-            # Migrate entity mappings
             click.echo("Migrating entity_mappings...")
             try:
                 cursor = conn.execute(
@@ -402,6 +382,171 @@ def continuous(interval: int | None) -> None:
 
     settings = Settings()
     asyncio.run(run_continuous(settings, interval))
+
+
+# ---------------------------------------------------------------------------
+# API command
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--host", default="0.0.0.0", help="Bind host")
+@click.option("--port", default=8000, type=int, help="Bind port")
+@click.option("--reload", is_flag=True, help="Enable auto-reload")
+def serve(host: str, port: int, reload: bool) -> None:
+    """Run the API server."""
+    import uvicorn
+
+    uvicorn.run("ai_v2.app:app", host=host, port=port, reload=reload)
+
+
+# ---------------------------------------------------------------------------
+# Sandbox subgroup
+# ---------------------------------------------------------------------------
+
+
+@cli.group()
+@click.option(
+    "--repos-dir",
+    default="/repos",
+    envvar="SANDBOX_REPOS_DIR",
+    help="Directory to clone repos into.",
+)
+@click.option(
+    "--api-url",
+    default="http://localhost:8000",
+    envvar="SANDBOX_API_BASE_URL",
+    help="API base URL for sandbox containers.",
+)
+@click.pass_context
+def sandbox(ctx: click.Context, repos_dir: str, api_url: str) -> None:
+    """Sandbox — build Docker images preloaded with all Tempo repos."""
+    from ai_v2.sandbox.config import SandboxConfig
+
+    ctx.ensure_object(dict)
+    ctx.obj["repos_dir"] = repos_dir
+    ctx.obj["config"] = SandboxConfig(api_base_url=api_url)
+
+
+@sandbox.command("sync-repos")
+@click.pass_context
+def sync_repos_cmd(ctx: click.Context) -> None:
+    """Clone or update all configured repos to the local directory."""
+    from ai_v2.sandbox.repo_sync import sync_repos
+
+    config = ctx.obj["config"]
+    repos_dir: str = ctx.obj["repos_dir"]
+
+    result = asyncio.run(sync_repos(config, target_dir=repos_dir))
+    click.echo(f"Synced: {result.synced}, Failed: {result.failed}")
+    if result.errors:
+        click.echo("Errors:")
+        for err in result.errors:
+            click.echo(f"  - {err}")
+        sys.exit(1)
+
+
+@sandbox.command("build")
+@click.option("--tag", default=None, help="Image tag (default: latest).")
+@click.pass_context
+def build_cmd(ctx: click.Context, tag: str | None) -> None:
+    """Build Docker image with current repos."""
+    from ai_v2.sandbox.docker_builder import build_sandbox_image
+
+    config = ctx.obj["config"]
+    repos_dir: str = ctx.obj["repos_dir"]
+
+    success = build_sandbox_image(config, tag=tag, repos_dir=repos_dir)
+    if success:
+        image = f"{config.sandbox_image_name}:{tag or 'latest'}"
+        click.echo(f"Built image: {image}")
+    else:
+        click.echo("Build failed. Check logs for details.", err=True)
+        sys.exit(1)
+
+
+@sandbox.command("update")
+@click.option("--tag", default=None, help="Image tag (default: latest).")
+@click.pass_context
+def update_cmd(ctx: click.Context, tag: str | None) -> None:
+    """Sync repos and rebuild the Docker image."""
+    from ai_v2.sandbox.docker_builder import build_sandbox_image
+    from ai_v2.sandbox.repo_sync import sync_repos
+
+    config = ctx.obj["config"]
+    repos_dir: str = ctx.obj["repos_dir"]
+
+    click.echo("Step 1/2: Syncing repos...")
+    result = asyncio.run(sync_repos(config, target_dir=repos_dir))
+    click.echo(f"  Synced: {result.synced}, Failed: {result.failed}")
+    if result.errors:
+        click.echo("  Errors during sync:")
+        for err in result.errors:
+            click.echo(f"    - {err}")
+
+    click.echo("Step 2/2: Building image...")
+    success = build_sandbox_image(config, tag=tag, repos_dir=repos_dir)
+    if success:
+        image = f"{config.sandbox_image_name}:{tag or 'latest'}"
+        click.echo(f"Done. Image: {image}")
+    else:
+        click.echo("Build failed.", err=True)
+        sys.exit(1)
+
+
+@sandbox.command("run")
+@click.option("--tag", default="latest", help="Image tag to run.")
+@click.option(
+    "--sync-on-start/--no-sync-on-start",
+    default=False,
+    help="Sync repos when container starts.",
+)
+@click.pass_context
+def run_cmd(ctx: click.Context, tag: str, sync_on_start: bool) -> None:
+    """Run sandbox container interactively."""
+    import subprocess
+
+    config = ctx.obj["config"]
+    image = f"{config.sandbox_image_name}:{tag}"
+
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "-it",
+        "-e",
+        f"AI_V2_API_URL={config.api_base_url}",
+    ]
+    if sync_on_start:
+        cmd.extend(["-e", "SYNC_ON_START=true"])
+
+    cmd.append(image)
+
+    click.echo(f"Starting sandbox: {image}")
+    try:
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as exc:
+        click.echo(f"Container exited with code {exc.returncode}", err=True)
+        sys.exit(exc.returncode)
+    except FileNotFoundError:
+        click.echo("Error: docker not found. Is Docker installed?", err=True)
+        sys.exit(1)
+
+
+@sandbox.command("cron")
+@click.pass_context
+def cron_cmd(ctx: click.Context) -> None:
+    """Run continuous sync loop (for cron/systemd)."""
+    from ai_v2.sandbox.repo_sync import sync_loop
+
+    config = ctx.obj["config"]
+    repos_dir: str = ctx.obj["repos_dir"]
+
+    click.echo(f"Starting sync loop (interval: {config.update_interval_hours}h, dir: {repos_dir})")
+    try:
+        asyncio.run(sync_loop(config, target_dir=repos_dir))
+    except KeyboardInterrupt:
+        click.echo("Sync loop stopped.")
 
 
 if __name__ == "__main__":

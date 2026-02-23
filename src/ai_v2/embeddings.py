@@ -32,9 +32,7 @@ class EmbeddingService:
             all_embeddings.extend([d.embedding for d in resp.data])
         return all_embeddings
 
-    async def embed_and_store(
-        self, pool: asyncpg.Pool, records: list[EmbeddingRecord]
-    ) -> int:
+    async def embed_and_store(self, pool: asyncpg.Pool, records: list[EmbeddingRecord]) -> int:
         if not records:
             return 0
 

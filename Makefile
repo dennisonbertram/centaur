@@ -1,7 +1,7 @@
 .PHONY: install lint test migrate sync api sandbox-build sandbox-update-repos fmt clean
 
 install:
-	uv sync --all-packages
+	uv sync
 
 lint:
 	uv run ruff check .
@@ -15,19 +15,19 @@ test:
 	uv run pytest
 
 migrate:
-	uv run alembic upgrade head
+	uv run alembic -c migrations/alembic.ini upgrade head
 
 sync:
-	uv run python -m dataplane.cli sync
+	uv run ai-v2 sync
 
 api:
-	uv run uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+	uv run ai-v2 serve
 
 sandbox-build:
 	docker build -t tempo-ai-sandbox:latest sandbox/
 
 sandbox-update-repos:
-	uv run python -m sandbox.update_repos
+	uv run ai-v2 sandbox sync-repos
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

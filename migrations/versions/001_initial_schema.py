@@ -3,6 +3,7 @@
 Revision ID: 001
 Revises: None
 """
+
 from alembic import op
 
 revision = "001"
@@ -84,8 +85,7 @@ def upgrade() -> None:
         )
     """)
     op.execute(
-        "CREATE INDEX idx_embeddings_vector ON embeddings "
-        "USING hnsw (embedding vector_cosine_ops)"
+        "CREATE INDEX idx_embeddings_vector ON embeddings USING hnsw (embedding vector_cosine_ops)"
     )
     op.execute("CREATE INDEX idx_embeddings_source ON embeddings (source, kind)")
     op.execute("CREATE INDEX idx_embeddings_metadata ON embeddings USING GIN (metadata)")
@@ -141,9 +141,14 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     for table in [
-        "enrichment_feedback", "sync_runs", "secrets",
-        "embeddings", "entity_mappings", "people",
-        "sync_cursors", "raw_records",
+        "enrichment_feedback",
+        "sync_runs",
+        "secrets",
+        "embeddings",
+        "entity_mappings",
+        "people",
+        "sync_cursors",
+        "raw_records",
     ]:
         op.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
     op.execute("DROP EXTENSION IF EXISTS vector")

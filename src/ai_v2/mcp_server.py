@@ -7,7 +7,6 @@ from typing import Any
 import asyncpg
 from mcp.server.fastmcp import FastMCP
 
-from .config import settings
 from .deps import EmbeddingService
 
 mcp = FastMCP("Tempo AI v2")
@@ -36,9 +35,7 @@ def _serialize(rows: list[asyncpg.Record]) -> str:
 
 
 @mcp.tool()
-async def search(
-    query: str, sources: list[str] | None = None, limit: int = 20
-) -> str:
+async def search(query: str, sources: list[str] | None = None, limit: int = 20) -> str:
     """Hybrid semantic + keyword search across all ingested data."""
     pool = _get_pool()
     svc = EmbeddingService(pool=pool)
@@ -161,9 +158,7 @@ async def get_person(slug: str) -> str:
 
 
 @mcp.tool()
-async def get_timeline(
-    days: int = 7, source: str | None = None
-) -> str:
+async def get_timeline(days: int = 7, source: str | None = None) -> str:
     """Recent raw records across sources."""
     pool = _get_pool()
     conditions = [f"fetched_at >= NOW() - INTERVAL '{days} days'"]

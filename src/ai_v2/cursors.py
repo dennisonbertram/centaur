@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 import asyncpg
 import structlog
@@ -15,9 +15,7 @@ class CursorStore:
         self, pool: asyncpg.Pool, source: str, kind: str, entity_id: str | None = None
     ) -> str | None:
         key = _cursor_key(source, kind, entity_id)
-        row = await pool.fetchrow(
-            "SELECT cursor FROM sync_cursors WHERE cursor_key = $1", key
-        )
+        row = await pool.fetchrow("SELECT cursor FROM sync_cursors WHERE cursor_key = $1", key)
         return row["cursor"] if row else None
 
     async def set(
@@ -64,9 +62,7 @@ def _cursor_key(source: str, kind: str, entity_id: str | None = None) -> str:
     return f"{source}:{kind}"
 
 
-def track_max_timestamp(
-    items: list[dict], field: str
-) -> str | None:
+def track_max_timestamp(items: list[dict], field: str) -> str | None:
     max_val: str | None = None
     for item in items:
         val = item.get(field)

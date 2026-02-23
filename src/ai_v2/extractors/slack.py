@@ -108,9 +108,7 @@ class SlackExtractor(BaseExtractor):
                 log.error("slack_preflight_failed", error=str(e))
                 return False
 
-    async def extract(
-        self, pool: asyncpg.Pool, cursors: CursorStore
-    ) -> ExtractResult:
+    async def extract(self, pool: asyncpg.Pool, cursors: CursorStore) -> ExtractResult:
         start = time.monotonic()
         kinds: dict[str, int] = {}
         total = 0
@@ -119,8 +117,7 @@ class SlackExtractor(BaseExtractor):
             # 1. Channels
             channels = await self._fetch_all_channels(client)
             records = [
-                make_record("slack", "channel", ch.get("id", "unknown"), ch)
-                for ch in channels
+                make_record("slack", "channel", ch.get("id", "unknown"), ch) for ch in channels
             ]
             n = await self._write_records(pool, records)
             kinds["channel"] = n
@@ -129,19 +126,14 @@ class SlackExtractor(BaseExtractor):
 
             # 2. Users
             users = await self._fetch_all_users(client)
-            records = [
-                make_record("slack", "user", u.get("id", "unknown"), u)
-                for u in users
-            ]
+            records = [make_record("slack", "user", u.get("id", "unknown"), u) for u in users]
             n = await self._write_records(pool, records)
             kinds["user"] = n
             total += n
             log.info("slack_users", count=len(users), written=n)
 
             # 3. Messages (per channel, with thread replies)
-            oldest = str(
-                int(time.time()) - self._backfill_days * 86400
-            )
+            oldest = str(int(time.time()) - self._backfill_days * 86400)
             msg_targets = self._filter_message_targets(channels)
 
             for ch in msg_targets:
@@ -153,9 +145,7 @@ class SlackExtractor(BaseExtractor):
                 # Apply thread lookback overlap
                 if cursor_val:
                     lookback = THREAD_LOOKBACK_DAYS * 86400
-                    effective_oldest = str(
-                        max(float(cursor_val) - lookback, float(oldest))
-                    )
+                    effective_oldest = str(max(float(cursor_val) - lookback, float(oldest)))
 
                 ch_written, max_ts = await self._fetch_channel_messages(
                     client, pool, ch_id, effective_oldest, cursors
@@ -180,9 +170,7 @@ class SlackExtractor(BaseExtractor):
                     continue
                 try:
                     await self._throttle("pins.list", TIER2_DELAY)
-                    data = await self._api(
-                        client, "pins.list", {"channel": ch_id}
-                    )
+                    data = await self._api(client, "pins.list", {"channel": ch_id})
                     items = data.get("items", [])
                     records = [
                         make_record(
@@ -208,9 +196,7 @@ class SlackExtractor(BaseExtractor):
                     continue
                 try:
                     await self._throttle("bookmarks.list", TIER2_DELAY)
-                    data = await self._api(
-                        client, "bookmarks.list", {"channel_id": ch_id}
-                    )
+                    data = await self._api(client, "bookmarks.list", {"channel_id": ch_id})
                     bookmarks = data.get("bookmarks", [])
                     records = [
                         make_record(
@@ -272,9 +258,7 @@ class SlackExtractor(BaseExtractor):
             duration_ms=duration,
         )
 
-    async def _fetch_all_channels(
-        self, client: httpx.AsyncClient
-    ) -> list[dict[str, Any]]:
+    async def _fetch_all_channels(self, client: httpx.AsyncClient) -> list[dict[str, Any]]:
         all_channels: list[dict[str, Any]] = []
         cursor: str | None = None
         while True:
@@ -293,17 +277,13 @@ class SlackExtractor(BaseExtractor):
                 data = await self._api(client, "conversations.list", params)
 
             all_channels.extend(data.get("channels", []))
-            next_cursor = (
-                data.get("response_metadata", {}).get("next_cursor", "") or ""
-            )
+            next_cursor = data.get("response_metadata", {}).get("next_cursor", "") or ""
             if not next_cursor:
                 break
             cursor = next_cursor
         return all_channels
 
-    async def _fetch_all_users(
-        self, client: httpx.AsyncClient
-    ) -> list[dict[str, Any]]:
+    async def _fetch_all_users(self, client: httpx.AsyncClient) -> list[dict[str, Any]]:
         all_users: list[dict[str, Any]] = []
         cursor: str | None = None
         while True:
@@ -313,17 +293,13 @@ class SlackExtractor(BaseExtractor):
                 params["cursor"] = cursor
             data = await self._api(client, "users.list", params)
             all_users.extend(data.get("members", []))
-            next_cursor = (
-                data.get("response_metadata", {}).get("next_cursor", "") or ""
-            )
+            next_cursor = data.get("response_metadata", {}).get("next_cursor", "") or ""
             if not next_cursor:
                 break
             cursor = next_cursor
         return all_users
 
-    def _filter_message_targets(
-        self, channels: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _filter_message_targets(self, channels: list[dict[str, Any]]) -> list[dict[str, Any]]:
         targets = []
         for ch in channels:
             is_dm = ch.get("is_im") or ch.get("is_mpim")
@@ -363,8 +339,7 @@ class SlackExtractor(BaseExtractor):
             except Exception as e:
                 err_msg = str(e)
                 if any(
-                    s in err_msg
-                    for s in ("not_in_channel", "channel_not_found", "missing_scope")
+                    s in err_msg for s in ("not_in_channel", "channel_not_found", "missing_scope")
                 ):
                     break
                 raise
@@ -393,11 +368,7 @@ class SlackExtractor(BaseExtractor):
             written += n
 
             # Fetch thread replies for messages with replies
-            threaded = [
-                m
-                for m in messages
-                if m.get("reply_count", 0) > 0 and m.get("ts")
-            ]
+            threaded = [m for m in messages if m.get("reply_count", 0) > 0 and m.get("ts")]
             for msg in threaded:
                 thread_ts = msg["ts"]
                 reply_cursor: str | None = None
@@ -412,17 +383,11 @@ class SlackExtractor(BaseExtractor):
                         rparams["cursor"] = reply_cursor
 
                     try:
-                        rdata = await self._api(
-                            client, "conversations.replies", rparams
-                        )
+                        rdata = await self._api(client, "conversations.replies", rparams)
                     except Exception:
                         break
 
-                    replies = [
-                        r
-                        for r in rdata.get("messages", [])
-                        if r.get("ts") != thread_ts
-                    ]
+                    replies = [r for r in rdata.get("messages", []) if r.get("ts") != thread_ts]
                     for r in replies:
                         ts = r.get("ts")
                         if ts and (max_ts is None or ts > max_ts):
@@ -444,20 +409,13 @@ class SlackExtractor(BaseExtractor):
                     rn = await self._write_records(pool, reply_records)
                     written += rn
 
-                    next_cursor = (
-                        rdata.get("response_metadata", {}).get(
-                            "next_cursor", ""
-                        )
-                        or ""
-                    )
+                    next_cursor = rdata.get("response_metadata", {}).get("next_cursor", "") or ""
                     if not next_cursor:
                         break
                     reply_cursor = next_cursor
 
             # Check pagination
-            next_cursor = (
-                data.get("response_metadata", {}).get("next_cursor", "") or ""
-            )
+            next_cursor = data.get("response_metadata", {}).get("next_cursor", "") or ""
             if not next_cursor or not data.get("has_more"):
                 break
             history_cursor = next_cursor

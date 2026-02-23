@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     # Sync
     sync_interval_seconds: int = 300
 
+    # API
+    api_secret_key: str = Field(default="", alias="API_SECRET_KEY")
+    host: str = "0.0.0.0"
+    port: int = 8000
+    cors_origins: list[str] = ["*"]
+
     # --- Extractor credentials ---
 
     # Slack
@@ -36,20 +42,12 @@ class Settings(BaseSettings):
     pov_google_refresh_token: str = Field(default="", alias="POV_GOOGLE_REFRESH_TOKEN")
 
     # Google (service account)
-    pov_google_service_account_key: str = Field(
-        default="", alias="POV_GOOGLE_SERVICE_ACCOUNT_KEY"
-    )
+    pov_google_service_account_key: str = Field(default="", alias="POV_GOOGLE_SERVICE_ACCOUNT_KEY")
 
     # Granola
-    pov_granola_access_token: str = Field(
-        default="", alias="POV_GRANOLA_ACCESS_TOKEN"
-    )
-    pov_granola_access_token_2: str = Field(
-        default="", alias="POV_GRANOLA_ACCESS_TOKEN_2"
-    )
-    pov_granola_enterprise_api_key: str = Field(
-        default="", alias="POV_GRANOLA_ENTERPRISE_API_KEY"
-    )
+    pov_granola_access_token: str = Field(default="", alias="POV_GRANOLA_ACCESS_TOKEN")
+    pov_granola_access_token_2: str = Field(default="", alias="POV_GRANOLA_ACCESS_TOKEN_2")
+    pov_granola_enterprise_api_key: str = Field(default="", alias="POV_GRANOLA_ENTERPRISE_API_KEY")
 
     # Attio
     pov_attio_api_key: str = Field(default="", alias="POV_ATTIO_API_KEY")
@@ -58,6 +56,7 @@ class Settings(BaseSettings):
     pov_pylon_api_token: str = Field(default="", alias="POV_PYLON_API_TOKEN")
 
     # BetterStack
-    pov_betterstack_api_token: str = Field(
-        default="", alias="POV_BETTERSTACK_API_TOKEN"
-    )
+    pov_betterstack_api_token: str = Field(default="", alias="POV_BETTERSTACK_API_TOKEN")
+
+
+settings = Settings()

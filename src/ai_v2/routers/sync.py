@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ..deps import get_pool, verify_api_key
@@ -31,9 +31,7 @@ async def trigger_sync(
                     source,
                 )
         else:
-            sources = await conn.fetch(
-                "SELECT DISTINCT source FROM sync_cursors ORDER BY source"
-            )
+            sources = await conn.fetch("SELECT DISTINCT source FROM sync_cursors ORDER BY source")
             for row in sources:
                 await conn.execute(
                     """

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import UTC
 from typing import Any
 
 import asyncpg
@@ -139,9 +140,7 @@ class AttioExtractor(BaseExtractor):
                 log.error("attio_preflight_failed", error=str(e))
                 return False
 
-    async def extract(
-        self, pool: asyncpg.Pool, cursors: CursorStore
-    ) -> ExtractResult:
+    async def extract(self, pool: asyncpg.Pool, cursors: CursorStore) -> ExtractResult:
         start = time.monotonic()
         kinds: dict[str, int] = {}
         total = 0
@@ -336,23 +335,17 @@ class AttioExtractor(BaseExtractor):
                     await asyncio.sleep(self._rate_limit_delay)
 
             # 9. Meetings
-            from datetime import datetime, timedelta, timezone
+            from datetime import datetime, timedelta
 
-            cutoff = (
-                datetime.now(timezone.utc) + timedelta(days=14)
-            ).isoformat()
+            cutoff = (datetime.now(UTC) + timedelta(days=14)).isoformat()
             cursor_val = await cursors.get(pool, "attio", "meeting", "start")
-            starts_after = (
-                CursorStore.apply_overlap(cursor_val) if cursor_val else None
-            )
+            starts_after = CursorStore.apply_overlap(cursor_val) if cursor_val else None
 
             meeting_params: dict[str, str] = {"starts_before": cutoff}
             if starts_after:
                 meeting_params["starts_after"] = starts_after
 
-            meetings = await self._paginate_cursor(
-                client, "/meetings", meeting_params
-            )
+            meetings = await self._paginate_cursor(client, "/meetings", meeting_params)
             records = [
                 make_record(
                     "attio",

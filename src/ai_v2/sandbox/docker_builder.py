@@ -6,7 +6,7 @@ from pathlib import Path
 
 import structlog
 
-from ai_v2_sandbox.config import SandboxConfig
+from ai_v2.sandbox.config import SandboxConfig
 
 log = structlog.get_logger()
 
@@ -119,10 +119,14 @@ def build_sandbox_image(
     full_tag = f"{image_name}:{tag}"
     latest_tag = f"{image_name}:latest"
     cmd = [
-        "docker", "build",
-        "-f", str(dockerfile_path),
-        "-t", full_tag,
-        "-t", latest_tag,
+        "docker",
+        "build",
+        "-f",
+        str(dockerfile_path),
+        "-t",
+        full_tag,
+        "-t",
+        latest_tag,
         str(build_ctx),
     ]
 
@@ -134,7 +138,9 @@ def build_sandbox_image(
             capture_output=True,
             text=True,
         )
-        log.info("build_complete", image=full_tag, stdout=result.stdout[-500:] if result.stdout else "")
+        log.info(
+            "build_complete", image=full_tag, stdout=result.stdout[-500:] if result.stdout else ""
+        )
         return True
     except subprocess.CalledProcessError as exc:
         log.error(

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import structlog
 
-from ai_v2_sandbox.config import RepoSpec, SandboxConfig
+from ai_v2.sandbox.config import RepoSpec, SandboxConfig
 
 log = structlog.get_logger()
 
@@ -49,15 +49,11 @@ async def _sync_one_repo(
 
         if repo_dir.exists() and (repo_dir / ".git").exists():
             log.info("updating_repo", repo=spec.full_name)
-            rc, _out, err = await _run_cmd(
-                ["git", "fetch", "origin"], cwd=repo_dir
-            )
+            rc, _out, err = await _run_cmd(["git", "fetch", "origin"], cwd=repo_dir)
             if rc != 0:
                 return spec.full_name, False, f"fetch failed: {err.strip()}"
 
-            rc, _out, err = await _run_cmd(
-                ["git", "reset", "--hard", "origin/HEAD"], cwd=repo_dir
-            )
+            rc, _out, err = await _run_cmd(["git", "reset", "--hard", "origin/HEAD"], cwd=repo_dir)
             if rc != 0:
                 return spec.full_name, False, f"reset failed: {err.strip()}"
 
@@ -82,9 +78,7 @@ async def _sync_one_repo(
             return spec.full_name, True, None
 
 
-async def sync_repos(
-    config: SandboxConfig, target_dir: str = "/repos"
-) -> SyncResult:
+async def sync_repos(config: SandboxConfig, target_dir: str = "/repos") -> SyncResult:
     """Clone or update all configured repos.
 
     Uses asyncio.subprocess for parallel cloning with max 5 concurrent operations.
@@ -97,9 +91,7 @@ async def sync_repos(
     token = config.github_token if config.github_token else None
     semaphore = asyncio.Semaphore(5)
 
-    tasks = [
-        _sync_one_repo(spec, target_path, token, semaphore) for spec in specs
-    ]
+    tasks = [_sync_one_repo(spec, target_path, token, semaphore) for spec in specs]
     outcomes = await asyncio.gather(*tasks, return_exceptions=True)
 
     for outcome in outcomes:
@@ -123,9 +115,7 @@ async def sync_repos(
     return result
 
 
-async def sync_loop(
-    config: SandboxConfig, target_dir: str = "/repos"
-) -> None:
+async def sync_loop(config: SandboxConfig, target_dir: str = "/repos") -> None:
     """Run sync_repos on a recurring interval. Runs forever."""
     interval_seconds = config.update_interval_hours * 3600
     log.info(

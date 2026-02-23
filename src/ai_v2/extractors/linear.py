@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import UTC
 from typing import Any
 
 import asyncpg
@@ -202,9 +203,7 @@ class LinearExtractor(BaseExtractor):
 
         return all_nodes
 
-    def _build_simple_query(
-        self, entity: str, config: dict[str, str], has_filter: bool
-    ) -> str:
+    def _build_simple_query(self, entity: str, config: dict[str, str], has_filter: bool) -> str:
         filter_type = config["filter_type"]
         filter_param = f", $filter: {filter_type}" if has_filter else ""
         filter_arg = ", filter: $filter" if has_filter else ""
@@ -234,9 +233,7 @@ class LinearExtractor(BaseExtractor):
                 log.error("linear_preflight_failed", error=str(e))
                 return False
 
-    async def extract(
-        self, pool: asyncpg.Pool, cursors: CursorStore
-    ) -> ExtractResult:
+    async def extract(self, pool: asyncpg.Pool, cursors: CursorStore) -> ExtractResult:
         start = time.monotonic()
         kinds: dict[str, int] = {}
         total = 0
@@ -253,15 +250,10 @@ class LinearExtractor(BaseExtractor):
                 if since:
                     variables["filter"] = {"updatedAt": {"gte": since}}
 
-                nodes = await self._fetch_all_pages(
-                    client, query, variables, entity_name
-                )
+                nodes = await self._fetch_all_pages(client, query, variables, entity_name)
 
                 kind = entity_name.lower()
-                records = [
-                    make_record("linear", kind, n.get("id", "unknown"), n)
-                    for n in nodes
-                ]
+                records = [make_record("linear", kind, n.get("id", "unknown"), n) for n in nodes]
                 n_written = await self._write_records(pool, records)
                 kinds[kind] = n_written
                 total += n_written
@@ -277,8 +269,9 @@ class LinearExtractor(BaseExtractor):
             since = CursorStore.apply_overlap(cursor_val) if cursor_val else None
 
             cutoff_ts = time.time() - self._issue_age_days * 86400
-            from datetime import datetime, timezone
-            cutoff = datetime.fromtimestamp(cutoff_ts, tz=timezone.utc).isoformat()
+            from datetime import datetime
+
+            cutoff = datetime.fromtimestamp(cutoff_ts, tz=UTC).isoformat()
             gte = since if since and since > cutoff else cutoff
 
             issue_vars: dict[str, Any] = {
@@ -298,12 +291,14 @@ class LinearExtractor(BaseExtractor):
                 issue_id = issue.get("id", "")
                 label_nodes = (issue.get("labels") or {}).get("nodes", [])
                 for lbl in label_nodes:
-                    labels.append({
-                        "id": f"{issue_id}:{lbl.get('id', '')}",
-                        "name": lbl.get("name"),
-                        "color": lbl.get("color"),
-                        "issue_id": issue_id,
-                    })
+                    labels.append(
+                        {
+                            "id": f"{issue_id}:{lbl.get('id', '')}",
+                            "name": lbl.get("name"),
+                            "color": lbl.get("color"),
+                            "issue_id": issue_id,
+                        }
+                    )
                 att_nodes = (issue.get("attachments") or {}).get("nodes", [])
                 for att in att_nodes:
                     attachments.append({**att, "issue_id": issue_id})
@@ -313,26 +308,21 @@ class LinearExtractor(BaseExtractor):
 
             # Write issues
             issue_records = [
-                make_record("linear", "issue", i.get("id", "unknown"), i)
-                for i in issue_nodes
+                make_record("linear", "issue", i.get("id", "unknown"), i) for i in issue_nodes
             ]
             n_written = await self._write_records(pool, issue_records)
             kinds["issue"] = n_written
             total += n_written
 
             # Write labels
-            label_records = [
-                make_record("linear", "issue_label_link", l["id"], l)
-                for l in labels
-            ]
+            label_records = [make_record("linear", "issue_label_link", l["id"], l) for l in labels]
             n_written = await self._write_records(pool, label_records)
             kinds["issue_label_link"] = n_written
             total += n_written
 
             # Write attachments
             att_records = [
-                make_record("linear", "attachment", a.get("id", "unknown"), a)
-                for a in attachments
+                make_record("linear", "attachment", a.get("id", "unknown"), a) for a in attachments
             ]
             n_written = await self._write_records(pool, att_records)
             kinds["attachment"] = n_written
@@ -340,8 +330,7 @@ class LinearExtractor(BaseExtractor):
 
             # Write history
             hist_records = [
-                make_record("linear", "issue_history", h.get("id", "unknown"), h)
-                for h in history
+                make_record("linear", "issue_history", h.get("id", "unknown"), h) for h in history
             ]
             n_written = await self._write_records(pool, hist_records)
             kinds["issue_history"] = n_written
@@ -369,8 +358,7 @@ class LinearExtractor(BaseExtractor):
                 client, CUSTOMERS_QUERY, cust_vars, "customers"
             )
             cust_records = [
-                make_record("linear", "customer", c.get("id", "unknown"), c)
-                for c in cust_nodes
+                make_record("linear", "customer", c.get("id", "unknown"), c) for c in cust_nodes
             ]
             n_written = await self._write_records(pool, cust_records)
             kinds["customer"] = n_written
@@ -389,8 +377,7 @@ class LinearExtractor(BaseExtractor):
                 client, CUSTOMER_NEEDS_QUERY, cn_vars, "customerNeeds"
             )
             cn_records = [
-                make_record("linear", "customer_need", c.get("id", "unknown"), c)
-                for c in cn_nodes
+                make_record("linear", "customer_need", c.get("id", "unknown"), c) for c in cn_nodes
             ]
             n_written = await self._write_records(pool, cn_records)
             kinds["customer_need"] = n_written

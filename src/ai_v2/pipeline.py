@@ -63,9 +63,7 @@ def _build_extractors(settings: Settings) -> list[BaseExtractor]:
         extractors.append(PylonExtractor(api_token=settings.pov_pylon_api_token))
 
     if settings.pov_betterstack_api_token:
-        extractors.append(
-            BetterStackExtractor(api_token=settings.pov_betterstack_api_token)
-        )
+        extractors.append(BetterStackExtractor(api_token=settings.pov_betterstack_api_token))
 
     return extractors
 
