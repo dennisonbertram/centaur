@@ -5,7 +5,9 @@ import json
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.table import Table
+from ai_v2.cli_tables import Table
+
+from .client import BitGoClient
 
 load_dotenv()
 
@@ -72,9 +74,8 @@ def wallets(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List all wallets."""
-    from .client import list_wallets
-
-    data = list_wallets(coin=coin, limit=limit)
+    client = BitGoClient()
+    data = client.list_wallets(coin=coin, limit=limit)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -127,9 +128,8 @@ def wallet(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Get wallet details."""
-    from .client import get_wallet
-
-    data = get_wallet(coin, wallet_id)
+    client = BitGoClient()
+    data = client.get_wallet(coin, wallet_id)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -169,9 +169,8 @@ def balances(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """Get total balances across all wallets."""
-    from .client import get_total_balances
-
-    data = get_total_balances(enterprise_id=enterprise)
+    client = BitGoClient()
+    data = client.get_total_balances(enterprise_id=enterprise)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -211,9 +210,8 @@ def balance(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Get specific wallet balance."""
-    from .client import get_wallet_balance
-
-    data = get_wallet_balance(coin, wallet_id)
+    client = BitGoClient()
+    data = client.get_wallet_balance(coin, wallet_id)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -246,9 +244,8 @@ def transactions(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List transactions for a wallet."""
-    from .client import list_transactions
-
-    data = list_transactions(coin, wallet_id, limit=limit)
+    client = BitGoClient()
+    data = client.list_transactions(coin, wallet_id, limit=limit)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -299,9 +296,8 @@ def transaction(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Get transaction details."""
-    from .client import get_transaction
-
-    data = get_transaction(coin, wallet_id, txid)
+    client = BitGoClient()
+    data = client.get_transaction(coin, wallet_id, txid)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -353,9 +349,8 @@ def addresses(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List addresses for a wallet."""
-    from .client import list_addresses
-
-    data = list_addresses(coin, wallet_id, limit=limit)
+    client = BitGoClient()
+    data = client.list_addresses(coin, wallet_id, limit=limit)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -400,9 +395,8 @@ def enterprises(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List enterprises."""
-    from .client import list_enterprises
-
-    data = list_enterprises()
+    client = BitGoClient()
+    data = client.list_enterprises()
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -453,14 +447,13 @@ def raw(
         bitgo raw /enterprise
         bitgo raw /eth/wallet/WALLET_ID/transfer --method GET
     """
-    from .client import raw_request
-
+    client = BitGoClient()
     kwargs = {}
     if data:
         kwargs["json"] = json.loads(data)
 
     try:
-        result = raw_request(endpoint, method=method, **kwargs)
+        result = client.raw_request(endpoint, method=method, **kwargs)
         print(json.dumps(result, indent=2))
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/]")
@@ -474,9 +467,8 @@ def staking_coins(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List coins available for staking."""
-    from .client import list_staking_coins
-
-    data = list_staking_coins()
+    client = BitGoClient()
+    data = client.list_staking_coins()
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -516,9 +508,8 @@ def staking_requests(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List staking requests."""
-    from .client import list_staking_requests
-
-    data = list_staking_requests(enterprise_id=enterprise, limit=limit)
+    client = BitGoClient()
+    data = client.list_staking_requests(enterprise_id=enterprise, limit=limit)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -568,9 +559,8 @@ def staking_request(
     json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
 ):
     """Get details of a staking request."""
-    from .client import get_staking_request
-
-    data = get_staking_request(request_id)
+    client = BitGoClient()
+    data = client.get_staking_request(request_id)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -594,9 +584,8 @@ def staking_delegations(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List staking delegations for a wallet."""
-    from .client import list_staking_delegations
-
-    data = list_staking_delegations(coin, wallet_id, limit=limit)
+    client = BitGoClient()
+    data = client.list_staking_delegations(coin, wallet_id, limit=limit)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -644,9 +633,8 @@ def staking_rewards(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List staking rewards for an enterprise."""
-    from .client import list_staking_rewards
-
-    data = list_staking_rewards(enterprise)
+    client = BitGoClient()
+    data = client.list_staking_rewards(enterprise)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -691,9 +679,8 @@ def staking_validators(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List partnered validators for staking."""
-    from .client import list_partnered_validators
-
-    data = list_partnered_validators(coin=coin)
+    client = BitGoClient()
+    data = client.list_partnered_validators(coin=coin)
 
     if json_output:
         print(json.dumps(data, indent=2))

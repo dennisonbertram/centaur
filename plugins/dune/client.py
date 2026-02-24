@@ -5,35 +5,28 @@ from typing import Any
 
 import httpx
 
-BASE_URL = "https://api.dune.com/api/v1"
 
+class DuneClient:
+    """Dune Analytics API client."""
 
-def _get_api_key() -> str:
-    """Get Dune API key from environment."""
-    api_key = os.getenv("DUNE_API_KEY")
-    if not api_key:
-        raise RuntimeError(
-            "DUNE_API_KEY not set.\nGet your API key at https://dune.com/settings/api"
+    def __init__(self, api_key: str | None = None):
+        self._api_key = api_key or os.getenv("DUNE_API_KEY")
+        if not self._api_key:
+            raise RuntimeError(
+                "DUNE_API_KEY not set.\nGet your API key at https://dune.com/settings/api"
+            )
+        self._client = httpx.Client(
+            base_url="https://api.dune.com/api/v1",
+            headers={
+                "X-Dune-API-Key": self._api_key,
+                "Content-Type": "application/json",
+            },
+            timeout=60.0,
         )
-    return api_key
 
-
-def get_client() -> httpx.Client:
-    """Get authenticated Dune HTTP client."""
-    return httpx.Client(
-        base_url=BASE_URL,
-        headers={
-            "X-Dune-API-Key": _get_api_key(),
-            "Content-Type": "application/json",
-        },
-        timeout=60.0,
-    )
-
-
-def _request(method: str, path: str, **kwargs) -> dict[str, Any]:
-    """Make authenticated request to Dune API."""
-    with get_client() as client:
-        response = client.request(method, path, **kwargs)
+    def _request(self, method: str, path: str, **kwargs) -> dict[str, Any]:
+        """Make authenticated request to Dune API."""
+        response = self._client.request(method, path, **kwargs)
         if response.status_code >= 400:
             try:
                 error = response.json()
@@ -43,79 +36,84 @@ def _request(method: str, path: str, **kwargs) -> dict[str, Any]:
             raise RuntimeError(f"Dune API error ({response.status_code}): {msg}")
         return response.json()
 
+    def execute_query(self, query_id: int, params: dict[str, Any] | None = None) -> dict:
+        """Execute a query and return execution ID.
 
-def execute_query(query_id: int, params: dict[str, Any] | None = None) -> dict:
-    """Execute a query and return execution ID.
+        Args:
+            query_id: The Dune query ID
+            params: Optional query parameters
 
-    Args:
-        query_id: The Dune query ID
-        params: Optional query parameters
+        Returns:
+            Dict with execution_id and state
+        """
+        body = {}
+        if params:
+            body["query_parameters"] = params
+        return self._request("POST", f"/query/{query_id}/execute", json=body if body else None)
 
-    Returns:
-        Dict with execution_id and state
-    """
-    body = {}
-    if params:
-        body["query_parameters"] = params
-    return _request("POST", f"/query/{query_id}/execute", json=body if body else None)
+    def get_execution_status(self, execution_id: str) -> dict:
+        """Get the status of a query execution.
+
+        Args:
+            execution_id: The execution ID
+
+        Returns:
+            Dict with state, queue position, etc.
+        """
+        return self._request("GET", f"/execution/{execution_id}/status")
+
+    def get_execution_results(self, execution_id: str) -> dict:
+        """Get the results of a completed execution.
+
+        Args:
+            execution_id: The execution ID
+
+        Returns:
+            Dict with result rows and metadata
+        """
+        return self._request("GET", f"/execution/{execution_id}/results")
+
+    def cancel_execution(self, execution_id: str) -> dict:
+        """Cancel a running execution.
+
+        Args:
+            execution_id: The execution ID
+
+        Returns:
+            Cancellation confirmation
+        """
+        return self._request("POST", f"/execution/{execution_id}/cancel")
+
+    def get_query(self, query_id: int) -> dict:
+        """Get query metadata.
+
+        Args:
+            query_id: The Dune query ID
+
+        Returns:
+            Query metadata including name, description, parameters
+        """
+        return self._request("GET", f"/query/{query_id}")
+
+    def raw_request(self, method: str, endpoint: str, **kwargs) -> dict:
+        """Make a raw API call.
+
+        Args:
+            method: HTTP method
+            endpoint: API endpoint path
+
+        Returns:
+            JSON response
+        """
+        return self._request(method, endpoint, **kwargs)
+
+    def close(self):
+        """Close the underlying HTTP client."""
+        self._client.close()
 
 
-def get_execution_status(execution_id: str) -> dict:
-    """Get the status of a query execution.
+def _client() -> DuneClient:
+    """Factory function for plugin SDK."""
+    from ai_v2.plugin_sdk import secret
 
-    Args:
-        execution_id: The execution ID
-
-    Returns:
-        Dict with state, queue position, etc.
-    """
-    return _request("GET", f"/execution/{execution_id}/status")
-
-
-def get_execution_results(execution_id: str) -> dict:
-    """Get the results of a completed execution.
-
-    Args:
-        execution_id: The execution ID
-
-    Returns:
-        Dict with result rows and metadata
-    """
-    return _request("GET", f"/execution/{execution_id}/results")
-
-
-def cancel_execution(execution_id: str) -> dict:
-    """Cancel a running execution.
-
-    Args:
-        execution_id: The execution ID
-
-    Returns:
-        Cancellation confirmation
-    """
-    return _request("POST", f"/execution/{execution_id}/cancel")
-
-
-def get_query(query_id: int) -> dict:
-    """Get query metadata.
-
-    Args:
-        query_id: The Dune query ID
-
-    Returns:
-        Query metadata including name, description, parameters
-    """
-    return _request("GET", f"/query/{query_id}")
-
-
-def raw_request(method: str, endpoint: str, **kwargs) -> dict:
-    """Make a raw API call.
-
-    Args:
-        method: HTTP method
-        endpoint: API endpoint path
-
-    Returns:
-        JSON response
-    """
-    return _request(method, endpoint, **kwargs)
+    return DuneClient(api_key=secret("DUNE_API_KEY"))

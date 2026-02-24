@@ -1,6 +1,6 @@
 [project]
-name = "ai-v2-plugin-falconx"
-description = "FalconX trading API — quotes, execution, balances, trade history"
+name = "ai-v2-plugin-attio"
+description = "Attio CRM — objects, records, lists, notes, tasks"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-falconx-plugin = "falconx_plugin.cli:app"
+attio-plugin = "attio_plugin.cli:app"
 
 [build-system]
 requires = ["hatchling"]

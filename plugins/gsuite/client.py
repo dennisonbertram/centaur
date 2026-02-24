@@ -1975,3 +1975,157 @@ def analytics_get_daily_users(
             )
         ],
     )
+
+
+# --- Plugin tools ---
+
+try:
+    from ai_v2.plugin_sdk import plugin_tool
+except ImportError:
+
+    def plugin_tool(*, name=None):
+        def decorator(fn):
+            fn.__plugin_tool__ = name or fn.__name__
+            return fn
+        return decorator
+
+
+@plugin_tool(name="gmail_search")
+def gmail_search_tool(query: str, max_results: int = 20) -> list[dict]:
+    """Search Gmail messages.
+
+    Args:
+        query: Gmail search query (same syntax as Gmail web)
+        max_results: Maximum number of results
+    """
+    return gmail_search(query, max_results=max_results)
+
+
+@plugin_tool()
+def gmail_get(message_id: str) -> dict:
+    """Read a specific Gmail message by ID.
+
+    Args:
+        message_id: The message ID
+    """
+    return gmail_read(message_id)
+
+
+@plugin_tool(name="gmail_send")
+def gmail_send_tool(
+    to: str, subject: str, body: str, cc: str | None = None
+) -> dict:
+    """Send an email.
+
+    Args:
+        to: Recipient email address
+        subject: Email subject
+        body: Email body (plain text)
+        cc: Optional CC recipients
+    """
+    return gmail_send(to, subject, body, cc=cc)
+
+
+@plugin_tool(name="calendar_list")
+def calendar_list_tool() -> list[dict]:
+    """List all calendars."""
+    return calendar_list()
+
+
+@plugin_tool(name="calendar_events")
+def calendar_events_tool(
+    calendar_id: str = "primary",
+    time_min: str | None = None,
+    time_max: str | None = None,
+    max_results: int = 50,
+    query: str | None = None,
+) -> list[dict]:
+    """List calendar events.
+
+    Args:
+        calendar_id: Calendar ID (default: primary)
+        time_min: Start time in RFC3339 format
+        time_max: End time in RFC3339 format
+        max_results: Maximum number of events
+        query: Search query
+    """
+    return calendar_events(
+        calendar_id=calendar_id,
+        time_min=time_min,
+        time_max=time_max,
+        max_results=max_results,
+        query=query,
+    )
+
+
+@plugin_tool(name="calendar_create_event")
+def calendar_create_event_tool(
+    summary: str,
+    start: str,
+    end: str,
+    calendar_id: str = "primary",
+    description: str | None = None,
+    location: str | None = None,
+    attendees: list[str] | None = None,
+) -> dict:
+    """Create a calendar event.
+
+    Args:
+        summary: Event title
+        start: Start time in RFC3339 format or date (YYYY-MM-DD)
+        end: End time in RFC3339 format or date
+        calendar_id: Calendar ID (default: primary)
+        description: Event description
+        location: Event location
+        attendees: List of attendee emails
+    """
+    return calendar_create_event(
+        summary,
+        start,
+        end,
+        calendar_id=calendar_id,
+        description=description,
+        location=location,
+        attendees=attendees,
+    )
+
+
+@plugin_tool()
+def drive_search(query: str, max_results: int = 50) -> list[dict]:
+    """Search files in Google Drive by name.
+
+    Args:
+        query: Search query (matches file names)
+        max_results: Maximum number of results
+    """
+    return drive_list(query=query, max_results=max_results)
+
+
+@plugin_tool(name="drive_get")
+def drive_get_tool(file_id: str) -> dict:
+    """Get file metadata from Google Drive.
+
+    Args:
+        file_id: The file ID
+    """
+    return drive_get(file_id)
+
+
+@plugin_tool(name="drive_list")
+def drive_list_tool(
+    folder_id: str | None = None,
+    max_results: int = 50,
+    file_type: str | None = None,
+) -> list[dict]:
+    """List files in Google Drive.
+
+    Args:
+        folder_id: Folder ID to list contents
+        max_results: Maximum number of results
+        file_type: Filter by MIME type prefix
+    """
+    return drive_list(
+        folder_id=folder_id,
+        max_results=max_results,
+        file_type=file_type,
+    )

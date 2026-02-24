@@ -377,3 +377,8 @@ class NansenClient:
 
     def __exit__(self, *args):
         self.close()
+
+
+
+def _client() -> NansenClient:
+    return NansenClient()

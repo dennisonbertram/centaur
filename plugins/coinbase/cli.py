@@ -7,7 +7,7 @@ from collections import defaultdict
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.table import Table
+from ai_v2.cli_tables import Table
 
 load_dotenv()
 
@@ -227,7 +227,7 @@ def balances(
         coinbase balances --all              # All portfolios aggregated
         coinbase balances --all --nonzero    # All non-zero across all portfolios
     """
-    from .client import get_portfolio_balances
+    from .client import CoinbasePrimeClient
 
     symbol_list = symbols.split(",") if symbols else None
 
@@ -244,7 +244,8 @@ def balances(
 
             set_credentials_for_suffix(suffix)
             try:
-                data = get_portfolio_balances(creds[3], symbol_list)
+                client = CoinbasePrimeClient()
+                data = client.get_portfolio_balances(creds[3], symbol_list)
 
                 for b in data:
                     symbol = b.get("symbol", "").upper()
@@ -270,7 +271,8 @@ def balances(
         if suffix and len(suffix) != 36:  # Not a raw UUID
             set_credentials_for_suffix(suffix)
         pid = get_portfolio_id(fund)
-        data = get_portfolio_balances(pid, symbol_list)
+        client = CoinbasePrimeClient()
+        data = client.get_portfolio_balances(pid, symbol_list)
         title = f"Balances ({suffix_to_name(suffix) if suffix else 'pf'})"
 
     # Filter non-zero if requested
@@ -318,13 +320,14 @@ def wallets(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List wallets."""
-    from .client import list_wallets
+    from .client import CoinbasePrimeClient
 
     suffix = resolve_portfolio(fund)
     if suffix:
         set_credentials_for_suffix(suffix)
     pid = get_portfolio_id(fund)
-    data = list_wallets(pid, wallet_type)
+    client = CoinbasePrimeClient()
+    data = client.list_wallets(pid, wallet_type)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -372,13 +375,14 @@ def wallet(
     json_output: bool = typer.Option(False, "--json", "-j", help="Output as JSON"),
 ):
     """Get wallet details."""
-    from .client import get_wallet
+    from .client import CoinbasePrimeClient
 
     suffix = resolve_portfolio(fund)
     if suffix:
         set_credentials_for_suffix(suffix)
     pid = get_portfolio_id(fund)
-    data = get_wallet(pid, wallet_id)
+    client = CoinbasePrimeClient()
+    data = client.get_wallet(pid, wallet_id)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -402,15 +406,16 @@ def transactions(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List transactions."""
-    from .client import list_transactions
+    from .client import CoinbasePrimeClient
 
     suffix = resolve_portfolio(fund)
     if suffix:
         set_credentials_for_suffix(suffix)
     pid = get_portfolio_id(fund)
+    client = CoinbasePrimeClient()
     symbol_list = symbols.split(",") if symbols else None
     type_list = types.split(",") if types else None
-    data = list_transactions(pid, symbol_list, type_list, limit)
+    data = client.list_transactions(pid, symbol_list, type_list, limit)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -464,7 +469,7 @@ def staking(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List staking positions."""
-    from .client import list_staking_positions
+    from .client import CoinbasePrimeClient
 
     if all_funds:
         all_data = []
@@ -474,7 +479,8 @@ def staking(
                 continue
             set_credentials_for_suffix(suffix)
             try:
-                data = list_staking_positions(creds[3])
+                client = CoinbasePrimeClient()
+                data = client.list_staking_positions(creds[3])
                 for pos in data:
                     pos["portfolio"] = suffix_to_name(suffix)
                 all_data.extend(data)
@@ -487,7 +493,8 @@ def staking(
         if suffix:
             set_credentials_for_suffix(suffix)
         pid = get_portfolio_id(fund)
-        data = list_staking_positions(pid)
+        client = CoinbasePrimeClient()
+        data = client.list_staking_positions(pid)
         title = "Staking Positions"
 
     if json_output:
@@ -548,13 +555,14 @@ def rewards(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """Get staking rewards."""
-    from .client import get_staking_rewards
+    from .client import CoinbasePrimeClient
 
     suffix = resolve_portfolio(fund)
     if suffix:
         set_credentials_for_suffix(suffix)
     pid = get_portfolio_id(fund)
-    data = get_staking_rewards(pid, symbol, start_date, end_date)
+    client = CoinbasePrimeClient()
+    data = client.get_staking_rewards(pid, symbol, start_date, end_date)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -590,9 +598,10 @@ def assets(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List supported assets."""
-    from .client import list_assets
+    from .client import CoinbasePrimeClient
 
-    data = list_assets()
+    client = CoinbasePrimeClient()
+    data = client.list_assets()
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -631,15 +640,16 @@ def activities(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List activities."""
-    from .client import list_activities
+    from .client import CoinbasePrimeClient
 
     suffix = resolve_portfolio(fund)
     if suffix:
         set_credentials_for_suffix(suffix)
     pid = get_portfolio_id(fund)
+    client = CoinbasePrimeClient()
     symbol_list = symbols.split(",") if symbols else None
     category_list = categories.split(",") if categories else None
-    data = list_activities(pid, symbol_list, category_list, limit)
+    data = client.list_activities(pid, symbol_list, category_list, limit)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -697,7 +707,7 @@ def raw(
         coinbase raw /assets
         coinbase raw /portfolios/PORTFOLIO_ID/balances
     """
-    from .client import raw_request
+    from .client import CoinbasePrimeClient
 
     suffix = resolve_portfolio(fund)
     if suffix:
@@ -706,7 +716,8 @@ def raw(
     body = json.loads(data) if data else None
 
     try:
-        result = raw_request(endpoint, method=method, body=body)
+        client = CoinbasePrimeClient()
+        result = client.raw_request(endpoint, method=method, body=body)
         print(json.dumps(result, indent=2))
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/]")

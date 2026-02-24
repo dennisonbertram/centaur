@@ -7,11 +7,20 @@ import typer
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.status import Status
-from rich.table import Table
+from ai_v2.cli_tables import Table
 
-from . import client
+from .client import DuneClient
 
 load_dotenv()
+
+_client: DuneClient | None = None
+
+
+def _get_client() -> DuneClient:
+    global _client
+    if _client is None:
+        _client = DuneClient()
+    return _client
 
 app = typer.Typer(name="dune", help="Dune Analytics CLI for executing queries and fetching results")
 console = Console()
@@ -33,7 +42,7 @@ def execute(
             raise typer.Exit(1)
 
     try:
-        result = client.execute_query(query_id, query_params)
+        result = _get_client().execute_query(query_id, query_params)
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/]")
         raise typer.Exit(1)
@@ -54,7 +63,7 @@ def status(
 ):
     """Check the status of an execution."""
     try:
-        result = client.get_execution_status(execution_id)
+        result = _get_client().get_execution_status(execution_id)
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/]")
         raise typer.Exit(1)
@@ -87,7 +96,7 @@ def results(
 ):
     """Get results of a completed execution."""
     try:
-        result = client.get_execution_results(execution_id)
+        result = _get_client().get_execution_results(execution_id)
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/]")
         raise typer.Exit(1)
@@ -143,7 +152,7 @@ def run(
             raise typer.Exit(1)
 
     try:
-        exec_result = client.execute_query(query_id, query_params)
+        exec_result = _get_client().execute_query(query_id, query_params)
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/]")
         raise typer.Exit(1)
@@ -163,7 +172,7 @@ def run(
                 raise typer.Exit(1)
 
             try:
-                status_result = client.get_execution_status(execution_id)
+                status_result = _get_client().get_execution_status(execution_id)
             except RuntimeError as e:
                 console.print(f"[red]Error checking status: {e}[/]")
                 raise typer.Exit(1)
@@ -189,7 +198,7 @@ def run(
             time.sleep(poll_interval)
 
     try:
-        final_result = client.get_execution_results(execution_id)
+        final_result = _get_client().get_execution_results(execution_id)
     except RuntimeError as e:
         console.print(f"[red]Error fetching results: {e}[/]")
         raise typer.Exit(1)
@@ -228,7 +237,7 @@ def cancel(
 ):
     """Cancel a running execution."""
     try:
-        result = client.cancel_execution(execution_id)
+        result = _get_client().cancel_execution(execution_id)
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/]")
         raise typer.Exit(1)
@@ -247,7 +256,7 @@ def query(
 ):
     """Get query metadata."""
     try:
-        result = client.get_query(query_id)
+        result = _get_client().get_query(query_id)
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/]")
         raise typer.Exit(1)
@@ -287,7 +296,7 @@ def raw(
             raise typer.Exit(1)
 
     try:
-        result = client.raw_request(method.upper(), endpoint, **kwargs)
+        result = _get_client().raw_request(method.upper(), endpoint, **kwargs)
         print(json.dumps(result, indent=2))
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/]")

@@ -19,4 +19,4 @@ build-backend = "hatchling.build"
 
 
 [tool.ai-v2-plugin]
-module = "tools.py"
+module = "client.py"

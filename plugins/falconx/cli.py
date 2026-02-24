@@ -6,7 +6,7 @@ from typing import Annotated
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.table import Table
+from ai_v2.cli_tables import Table
 
 from .client import AccountType, FalconXClient
 

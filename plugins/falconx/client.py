@@ -277,3 +277,8 @@ class FalconXClient:
 
     def __exit__(self, *args):
         self.close()
+
+
+
+def _client(account: str = "p1") -> FalconXClient:
+    return FalconXClient(account=account)

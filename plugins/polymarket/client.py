@@ -4,6 +4,7 @@ import httpx
 
 
 class PolymarketClient:
+
     """Client for Polymarket APIs (Gamma and CLOB)."""
 
     def __init__(self, timeout: float = 30.0):
@@ -113,7 +114,13 @@ class PolymarketClient:
         interval: str = "1w",
         fidelity: int | None = None,
     ) -> dict:
-        """Get price history for a token."""
+        """Get price history for a token.
+
+        Args:
+            token_id: CLOB token ID
+            interval: 1m, 1w, 1d, 6h, 1h, or max
+            fidelity: Resolution in minutes
+        """
         params = {"market": token_id, "interval": interval}
         if fidelity:
             params["fidelity"] = fidelity
@@ -148,3 +155,8 @@ class PolymarketClient:
 
     def __exit__(self, *args):
         self.close()
+
+
+
+def _client() -> PolymarketClient:
+    return PolymarketClient()

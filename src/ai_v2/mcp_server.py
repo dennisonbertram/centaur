@@ -254,26 +254,8 @@ async def sync_status() -> str:
     return _serialize(rows)
 
 
-# --- CLI tool wrappers ---
-
-
 @mcp.tool()
-async def cli(tool: str, args: list[str]) -> str:
-    """Run a plugin CLI by plugin name or configured script alias.
-
-    Use list_tools() to enumerate currently loaded plugin CLIs.
-
-    Examples:
-        cli("slack", ["search", "reth benchmarks"])
-        cli("gsuite", ["gmail", "search", "term sheet"])
-        cli("defillama-plugin", ["stablecoins"])
-    """
+async def list_plugin_tools() -> str:
+    """List all dynamically discovered in-process plugin tools exposed to MCP."""
     manager = _get_plugin_manager()
-    return manager.run_cli(tool, args)
-
-
-@mcp.tool()
-async def list_tools() -> str:
-    """List all dynamically discovered plugin CLIs and aliases."""
-    manager = _get_plugin_manager()
-    return json.dumps(manager.list_cli_tools(), indent=2)
+    return json.dumps(manager.list_mcp_tools(), indent=2)

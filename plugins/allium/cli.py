@@ -9,7 +9,7 @@ import sys
 
 import typer
 from rich.console import Console
-from rich.table import Table
+from ai_v2.cli_tables import Table
 
 from .client import AlliumClient, get_example_queries
 

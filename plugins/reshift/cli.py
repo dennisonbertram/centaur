@@ -6,7 +6,7 @@ load_dotenv()
 
 import typer
 from rich.console import Console
-from rich.table import Table
+from ai_v2.cli_tables import Table
 
 app = typer.Typer(name="reshift", help="Paradigm I&R Knowledge Platform")
 console = Console()

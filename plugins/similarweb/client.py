@@ -8,6 +8,7 @@ import httpx
 
 
 class SimilarWebClient:
+
     """Client for SimilarWeb API.
 
     API docs: https://developers.similarweb.com/reference
@@ -89,7 +90,16 @@ class SimilarWebClient:
         granularity: Literal["daily", "weekly", "monthly"] = "monthly",
         main_domain_only: bool = True,
     ) -> dict:
-        """Get total visits (desktop + mobile)."""
+        """Get total visits (desktop + mobile).
+
+        Args:
+            domain: Website domain (e.g., 'google.com')
+            start_date: Start date
+            end_date: End date
+            country: Country code or 'world' for global
+            granularity: Data granularity
+            main_domain_only: Exclude subdomains
+        """
         params = {
             "start_date": self._format_date(start_date),
             "end_date": self._format_date(end_date),
@@ -110,7 +120,10 @@ class SimilarWebClient:
         granularity: Literal["daily", "weekly", "monthly"] = "monthly",
         main_domain_only: bool = True,
     ) -> dict:
-        """Get comprehensive traffic metrics (visits, page views, bounce rate, etc.)."""
+        """Get comprehensive traffic metrics (visits, page views, bounce rate, etc.).
+
+        Returns visits, pages per visit, avg visit duration, bounce rate.
+        """
         visits = self.get_visits(
             domain, start_date, end_date, country, granularity, main_domain_only
         )
@@ -272,7 +285,12 @@ class SimilarWebClient:
         category: str | None = None,
         country: str = "world",
     ) -> dict:
-        """Get top ranked websites by category."""
+        """Get top ranked websites by category.
+
+        Args:
+            category: Category path (e.g., 'Finance/Investing') or None for overall
+            country: Country code or 'world'
+        """
         params = {"country": country}
         if category:
             params["category"] = category
@@ -296,7 +314,12 @@ class SimilarWebClient:
         return self._request(f"/v1/website/{domain}/search-keywords/keywords", params=params)
 
     def get_app_details(self, app_id: str, store: Literal["google", "apple"] = "google") -> dict:
-        """Get mobile app details."""
+        """Get mobile app details.
+
+        Args:
+            app_id: App ID (package name for Android, numeric ID for iOS)
+            store: 'google' or 'apple'
+        """
         return self._request(f"/v1/app/{store}/{app_id}/details")
 
     def get_app_downloads(
@@ -354,3 +377,9 @@ class SimilarWebClient:
 
     def __exit__(self, *args):
         self.close()
+
+
+
+def _client() -> SimilarWebClient:
+    api_key = os.getenv("SIMILARWEB_API_KEY")
+    return SimilarWebClient(api_key=api_key)

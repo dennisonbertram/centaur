@@ -415,3 +415,8 @@ class LinearClient:
         }
         result = self._query(mutation, {"input": input_data})
         return result.get("issueRelationCreate", {})
+
+
+
+def _client() -> LinearClient:
+    return LinearClient()

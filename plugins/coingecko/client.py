@@ -136,3 +136,10 @@ class CoinGeckoClient:
 
     def __exit__(self, *args):
         self.close()
+
+
+def _client() -> CoinGeckoClient:
+    api_key = os.getenv("COINGECKO_API_KEY")
+    if not api_key:
+        raise RuntimeError("COINGECKO_API_KEY not set.")
+    return CoinGeckoClient(api_key=api_key)

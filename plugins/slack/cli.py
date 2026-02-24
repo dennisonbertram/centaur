@@ -1,65 +1,838 @@
-"""Slack plugin CLI — standalone usage for debugging/testing."""
-
-from __future__ import annotations
-
-import asyncio
-import json
+"""CLI for Slack search and analysis."""
 
 import typer
 from dotenv import load_dotenv
-
-from . import tools
+from rich.console import Console
+from ai_v2.cli_tables import Table
 
 load_dotenv()
 
-app = typer.Typer(help="Slack plugin CLI")
+app = typer.Typer(name="slack", help="Slack CLI for AI agents")
+console = Console()
 
 
-def _run(coro):
-    """Print result of an async tool call as JSON."""
-    result = asyncio.run(coro)
-    typer.echo(json.dumps(result, indent=2, default=str))
+@app.command()
+def send(
+    channel: str = typer.Argument(..., help="Channel name (with or without #)"),
+    message: str = typer.Argument(..., help="Message text to send"),
+    thread: str = typer.Option(None, "--thread", "-t", help="Thread timestamp to reply to"),
+    no_attribution: bool = typer.Option(
+        False,
+        "--no-attribution",
+        help="Skip auto-adding requester attribution (from SLACK_REQUESTER_ID)",
+    ),
+):
+    """Send a message to a channel.
+
+    Examples:
+        slack send "#eng-ai" "Hello from the CLI!"
+        slack send eng-ai "Reply in thread" --thread 1234567890.123456
+    """
+    from .client import send_message
+
+    try:
+        result = send_message(channel, message, thread_ts=thread, no_attribution=no_attribution)
+        console.print("[green]✓ Message sent[/]")
+        console.print(f"[dim]{result['permalink']}[/]")
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
 
 
 @app.command()
 def search(
-    query: str,
-    channels: str = typer.Option("", help="Comma-separated channel names"),
-    limit: int = typer.Option(20, help="Max results"),
+    query: str = typer.Argument(..., help="Text to search for (supports multiple terms)"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max results"),
+    full: bool = typer.Option(False, "--full", "-f", help="Show full message text"),
+    channels: str = typer.Option(
+        None, "--channels", "-c", help="Comma-separated channel names to search"
+    ),
+    from_user: str = typer.Option(None, "--from", help="Filter by username"),
+    depth: int = typer.Option(200, "--depth", "-d", help="Messages per channel to scan"),
 ):
-    """Search Slack messages."""
-    _run(tools.search_messages(query, channels=channels, limit=limit))
+    """Search messages in bot-accessible channels.
+
+    Searches across all channels the bot is a member of. Results are ranked by
+    relevance (exact phrase matches score higher). Use --channels to limit scope.
+
+    Note: Only searches channels where the bot is a member. To search more channels,
+    invite the bot to those channels first.
+
+    Examples:
+        slack search "deploy"
+        slack search "kubernetes error" --channels eng-infra,eng-ai
+        slack search "database migration" --from alice --depth 500
+    """
+    from .client import search_messages
+
+    channel_list = [c.strip() for c in channels.split(",")] if channels else None
+    results = search_messages(
+        query,
+        max_results=limit,
+        channels=channel_list,
+        from_user=from_user,
+        messages_per_channel=depth,
+    )
+
+    if not results:
+        console.print("[yellow]No messages found.[/]")
+        raise typer.Exit()
+
+    if full:
+        for i, msg in enumerate(results, 1):
+            console.print(f"\n[bold cyan]#{msg['channel']}[/] | [green]{msg['user']}[/]")
+            console.print(msg["text"])
+            console.print(f"[dim]{msg['permalink']}[/]")
+            if i < len(results):
+                console.print("---")
+    else:
+        table = Table(title=f"Slack: '{query}' ({len(results)} results)")
+        table.add_column("Channel", style="cyan", max_width=15)
+        table.add_column("User", style="green", max_width=15)
+        table.add_column("Message", style="white", max_width=80)
+
+        for msg in results:
+            text = msg["text"][:80].replace("\n", " ")
+            if len(msg["text"]) > 80:
+                text += "..."
+            table.add_row(f"#{msg['channel']}", msg["user"], text)
+
+        console.print(table)
 
 
 @app.command()
 def channel(
-    name: str,
-    limit: int = typer.Option(50, "-n", help="Number of messages"),
+    name: str = typer.Argument(..., help="Channel name (without #)"),
+    limit: int = typer.Option(50, "--limit", "-n", help="Max messages"),
+    full: bool = typer.Option(False, "--full", "-f", help="Show full message text"),
 ):
     """Get recent messages from a channel."""
-    _run(tools.channel_history(name, limit=limit))
+    from .client import get_channel_history
+
+    messages = get_channel_history(name, limit=limit)
+
+    if not messages:
+        console.print("[yellow]No messages found.[/]")
+        raise typer.Exit()
+
+    console.print(f"[bold]#{name}[/] - {len(messages)} messages\n")
+
+    for msg in messages:
+        text = msg["text"] if full else msg["text"][:120].replace("\n", " ")
+        if not full and len(msg["text"]) > 120:
+            text += "..."
+
+        thread_info = f" [dim]({msg['reply_count']} replies)[/]" if msg.get("reply_count") else ""
+        console.print(f"[green]{msg['user']}[/]{thread_info}: {text}")
 
 
-@app.command("thread")
-def get_thread(
-    channel_id: str,
-    thread_ts: str,
+@app.command()
+def thread(
+    permalink: str = typer.Argument(..., help="Slack permalink or 'channel_id:timestamp'"),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """Get all replies in a thread."""
-    _run(tools.thread(channel_id, thread_ts))
+    """Get all replies in a thread.
+
+    Examples:
+        slack thread "https://slack.com/archives/C01234567/p1234567890123456"
+        slack thread "C01234567:1234567890.123456"
+        slack thread "https://..." --json
+    """
+    import json
+    import re
+    import sys
+
+    from .client import get_thread_replies
+
+    if permalink.startswith("https://"):
+        match = re.search(r"/archives/([A-Z0-9]+)/p(\d+)", permalink)
+        if not match:
+            console.print("[red]Invalid permalink format[/]")
+            raise typer.Exit(1)
+        channel_id = match.group(1)
+        ts_raw = match.group(2)
+        thread_ts = f"{ts_raw[:10]}.{ts_raw[10:]}"
+    elif ":" in permalink:
+        channel_id, thread_ts = permalink.split(":", 1)
+    else:
+        console.print("[red]Provide a Slack permalink or 'channel_id:timestamp'[/]")
+        raise typer.Exit(1)
+
+    messages = get_thread_replies(channel_id, thread_ts)
+
+    if not messages:
+        console.print("[yellow]No messages found in thread.[/]")
+        raise typer.Exit()
+
+    if json_output:
+        print(json.dumps(messages, indent=2, ensure_ascii=False), file=sys.stdout)
+        raise typer.Exit()
+
+    console.print(f"\n[bold]Thread ({len(messages)} messages)[/]\n")
+    for i, msg in enumerate(messages):
+        prefix = "[bold]>[/]" if i == 0 else "  "
+        user = f"[cyan]@{msg['user']}[/]"
+        text = msg["text"].replace("\n", "\n     ")
+        console.print(f"{prefix} {user}: {text}\n")
 
 
-@app.command("channels")
-def channels_cmd(
-    include_private: bool = typer.Option(True, help="Include private channels"),
+@app.command()
+def channels(
+    include_private: bool = typer.Option(False, "--private", "-p", help="Include private channels"),
+    limit: int = typer.Option(100, "--limit", "-n", help="Max channels"),
+    query: str = typer.Option(None, "--query", "-q", help="Filter by name"),
 ):
-    """List channels."""
-    _run(tools.list_channels(include_private=include_private))
+    """List all Slack channels."""
+    from .client import list_channels
+
+    results = list_channels(include_private=include_private, limit=limit)
+
+    if query:
+        results = [c for c in results if query.lower() in c["name"].lower()]
+
+    if not results:
+        console.print("[yellow]No channels found.[/]")
+        raise typer.Exit()
+
+    table = Table(title=f"Channels ({len(results)})")
+    table.add_column("Name", style="cyan", max_width=25)
+    table.add_column("Members", style="green", justify="right", max_width=8)
+    table.add_column("Purpose", style="white", max_width=50)
+
+    for ch in results:
+        priv = "[dim]🔒[/]" if ch["is_private"] else ""
+        purpose = (ch["purpose"] or ch["topic"] or "")[:50]
+        table.add_row(f"#{ch['name']}{priv}", str(ch["member_count"]), purpose)
+
+    console.print(table)
 
 
-@app.command("users")
-def users_cmd(
-    limit: int = typer.Option(200, help="Max users"),
+@app.command("channel-members")
+def channel_members_cmd(
+    channel: str = typer.Argument(..., help="Channel name (without #) or channel ID"),
+    emails_only: bool = typer.Option(
+        False, "--emails", "-e", help="Output only email addresses (one per line)"
+    ),
 ):
-    """List workspace members."""
-    _run(tools.list_users(limit=limit))
+    """List all members of a Slack channel.
+
+    Examples:
+        slack channel-members eng-ai
+        slack channel-members eng-ai --emails
+    """
+    from .client import get_channel_members
+
+    try:
+        members = get_channel_members(channel)
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
+
+    if not members:
+        console.print("[yellow]No members found.[/]")
+        raise typer.Exit()
+
+    if emails_only:
+        for m in members:
+            if m.get("email"):
+                console.print(m["email"])
+    else:
+        table = Table(title=f"#{channel} Members ({len(members)})")
+        table.add_column("Name", style="cyan", max_width=20)
+        table.add_column("Real Name", style="white", max_width=25)
+        table.add_column("Email", style="green", max_width=35)
+
+        for m in members:
+            table.add_row(f"@{m['name']}", m.get("real_name", ""), m.get("email", ""))
+
+        console.print(table)
+
+
+@app.command()
+def users(
+    limit: int = typer.Option(100, "--limit", "-n", help="Max users"),
+    query: str = typer.Option(None, "--query", "-q", help="Filter by name/email"),
+    bots: bool = typer.Option(False, "--bots", "-b", help="Include bots"),
+):
+    """List all Slack workspace members."""
+    from .client import list_users
+
+    results = list_users(limit=limit)
+
+    if not bots:
+        results = [u for u in results if not u["is_bot"]]
+
+    if query:
+        query_lower = query.lower()
+        results = [
+            u
+            for u in results
+            if query_lower in u["name"].lower()
+            or query_lower in u["real_name"].lower()
+            or query_lower in u["email"].lower()
+        ]
+
+    if not results:
+        console.print("[yellow]No users found.[/]")
+        raise typer.Exit()
+
+    table = Table(title=f"Users ({len(results)})")
+    table.add_column("Name", style="cyan", max_width=20)
+    table.add_column("Real Name", style="white", max_width=25)
+    table.add_column("Title", style="dim", max_width=30)
+
+    for u in results:
+        bot = " [dim]🤖[/]" if u["is_bot"] else ""
+        table.add_row(f"@{u['name']}{bot}", u["real_name"], u["title"][:30])
+
+    console.print(table)
+
+
+@app.command()
+def upload(
+    channel: str = typer.Argument(..., help="Channel name (with or without #)"),
+    files: list[str] = typer.Argument(..., help="File path(s) to upload"),
+    comment: str = typer.Option(None, "--comment", "-c", help="Comment to post with files"),
+    thread: str = typer.Option(None, "--thread", "-t", help="Thread timestamp to reply to"),
+):
+    """Upload file(s) to a channel.
+
+    Examples:
+        slack upload "#eng-ai" screenshot.png
+        slack upload eng-ai file1.png file2.jpg -c "Here are the screenshots"
+        slack upload eng-ai report.pdf --thread 1234567890.123456
+    """
+    from pathlib import Path
+
+    from .client import upload_file
+
+    for file_path in files:
+        path = Path(file_path)
+        if not path.exists():
+            console.print(f"[red]File not found: {file_path}[/]")
+            raise typer.Exit(1)
+
+        try:
+            result = upload_file(
+                channel,
+                str(path.absolute()),
+                title=path.name,
+                comment=comment if file_path == files[0] else None,  # Only comment on first file
+                thread_ts=thread,
+            )
+            console.print(f"[green]✓ Uploaded {path.name}[/]")
+            console.print(f"[dim]{result['permalink']}[/]")
+        except RuntimeError as e:
+            console.print(f"[red]Error uploading {path.name}: {e}[/]")
+            raise typer.Exit(1)
+
+
+@app.command()
+def questions(
+    channel: str = typer.Argument(..., help="Channel name (without #)"),
+    limit: int = typer.Option(100, "--limit", "-n", help="Messages to scan"),
+):
+    """Find questions in a channel (messages ending with ? or containing question words)."""
+    from .client import get_channel_history
+
+    messages = get_channel_history(channel, limit=limit)
+
+    question_words = [
+        "how",
+        "why",
+        "what",
+        "when",
+        "where",
+        "who",
+        "which",
+        "can i",
+        "could",
+        "should",
+        "is there",
+        "does anyone",
+        "has anyone",
+    ]
+
+    questions = []
+    for msg in messages:
+        text = msg["text"].lower()
+        is_question = text.rstrip().endswith("?") or any(text.startswith(w) for w in question_words)
+        if is_question and len(msg["text"]) > 10:
+            questions.append(msg)
+
+    if not questions:
+        console.print("[yellow]No questions found.[/]")
+        raise typer.Exit()
+
+    console.print(f"[bold]#{channel}[/] - {len(questions)} questions found\n")
+
+    for msg in questions:
+        text = msg["text"][:150].replace("\n", " ")
+        if len(msg["text"]) > 150:
+            text += "..."
+        replies = f" ({msg['reply_count']} replies)" if msg.get("reply_count") else ""
+        console.print(f"[green]{msg['user']}[/]{replies}: {text}\n")
+
+
+@app.command()
+def usergroups(
+    query: str = typer.Option(None, "--query", "-q", help="Filter by handle/name"),
+):
+    """List all Slack user groups."""
+    from .client import list_usergroups
+
+    results = list_usergroups()
+
+    if query:
+        query_lower = query.lower()
+        results = [
+            g
+            for g in results
+            if query_lower in g["handle"].lower() or query_lower in g["name"].lower()
+        ]
+
+    if not results:
+        console.print("[yellow]No user groups found.[/]")
+        raise typer.Exit()
+
+    table = Table(title=f"User Groups ({len(results)})")
+    table.add_column("Handle", style="cyan", max_width=15)
+    table.add_column("Name", style="white", max_width=25)
+    table.add_column("Members", style="green", justify="right", max_width=8)
+    table.add_column("Description", style="dim", max_width=40)
+
+    for g in results:
+        table.add_row(f"@{g['handle']}", g["name"], str(g["user_count"]), g["description"][:40])
+
+    console.print(table)
+
+
+@app.command()
+def usergroup_create(
+    handle: str = typer.Argument(..., help="Handle for the group (e.g., 'perf')"),
+    name: str = typer.Argument(..., help="Display name for the group"),
+    description: str = typer.Option("", "--description", "-d", help="Group description"),
+    users: str = typer.Option(None, "--users", "-u", help="Comma-separated user IDs to add"),
+):
+    """Create a new user group.
+
+    Examples:
+        slack usergroup-create perf "Performance Team"
+        slack usergroup-create perf "Performance Team" -u U123,U456,U789
+    """
+    from .client import create_usergroup
+
+    user_ids = users.split(",") if users else None
+
+    try:
+        result = create_usergroup(handle, name, description, user_ids)
+        console.print(f"[green]✓ Created @{result['handle']}[/]")
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def usergroup_update(
+    handle: str = typer.Argument(..., help="Group handle (e.g., 'perf')"),
+    users: str = typer.Argument(..., help="Comma-separated user IDs to set as members"),
+):
+    """Update members of a user group.
+
+    Examples:
+        slack usergroup-update perf U123,U456,U789
+    """
+    from .client import update_usergroup_users
+
+    user_ids = [u.strip() for u in users.split(",")]
+
+    try:
+        result = update_usergroup_users(handle, user_ids)
+        console.print(f"[green]✓ Updated @{result['handle']} with {len(user_ids)} members[/]")
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
+
+
+@app.command()
+def dump(
+    name: str = typer.Argument(..., help="Channel name (without #)"),
+    output: str = typer.Option(None, "--output", "-o", help="Output file path (default: stdout)"),
+    limit: int = typer.Option(500, "--limit", "-n", help="Max messages from channel"),
+    min_replies: int = typer.Option(
+        0, "--min-replies", "-r", help="Only include threads with >= N replies"
+    ),
+):
+    """Dump full channel history with all thread replies to JSON.
+
+    Fetches channel messages and expands all threads inline. Useful for
+    analyzing conversations and finding multi-turn interactions.
+
+    Examples:
+        slack dump test-bot -o /tmp/test-bot.json
+        slack dump test-bot --min-replies 3  # Only threads with 3+ replies
+        slack dump test-bot -n 100 | jq '.[] | select(.replies | length > 5)'
+    """
+    import json
+    import sys
+
+    from .client import dump_channel_with_threads
+
+    try:
+        data = dump_channel_with_threads(name, limit=limit, min_replies=min_replies)
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/]", file=sys.stderr)
+        raise typer.Exit(1)
+
+    result = json.dumps(data, indent=2, ensure_ascii=False)
+
+    if output:
+        from pathlib import Path
+
+        Path(output).write_text(result)
+        import sys as _sys
+
+        _sys.stderr.write(f"✓ Dumped {len(data['messages'])} messages to {output}\n")
+        _sys.stderr.write(
+            f"  {data['stats']['threads_fetched']} threads expanded, {data['stats']['total_replies']} total replies\n"
+        )
+    else:
+        print(result)
+
+
+@app.command()
+def files(
+    permalink: str = typer.Argument(..., help="Slack permalink to message with attachments"),
+    download: bool = typer.Option(
+        False, "--download", "-d", help="Download files to current directory"
+    ),
+    output: str = typer.Option(".", "--output", "-o", help="Output directory for downloads"),
+):
+    """List or download files attached to a message.
+
+    Examples:
+        slack files "https://slack.com/archives/C01234567/p1234567890123456"
+        slack files "https://..." --download
+        slack files "https://..." -d -o /tmp/slack-files
+    """
+    import re
+    from pathlib import Path
+
+    from .client import download_file, get_message_files
+
+    if permalink.startswith("https://"):
+        match = re.search(r"/archives/([A-Z0-9]+)/p(\d+)", permalink)
+        if not match:
+            console.print("[red]Invalid permalink format[/]")
+            raise typer.Exit(1)
+        channel_id = match.group(1)
+        ts_raw = match.group(2)
+        message_ts = f"{ts_raw[:10]}.{ts_raw[10:]}"
+    elif ":" in permalink:
+        channel_id, message_ts = permalink.split(":", 1)
+    else:
+        console.print("[red]Provide a Slack permalink or 'channel_id:timestamp'[/]")
+        raise typer.Exit(1)
+
+    files_list = get_message_files(channel_id, message_ts)
+
+    if not files_list:
+        console.print("[yellow]No files attached to this message.[/]")
+        raise typer.Exit()
+
+    if download:
+        output_dir = Path(output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        for f in files_list:
+            if not f["url_private"]:
+                console.print(f"[yellow]⚠ No download URL for {f['name']}[/]")
+                continue
+
+            out_path = output_dir / f["name"]
+            try:
+                download_file(f["url_private"], str(out_path))
+                console.print(f"[green]✓ Downloaded {f['name']}[/] ({f['size']} bytes)")
+                console.print(f"[dim]{out_path.absolute()}[/]")
+            except Exception as e:
+                console.print(f"[red]Error downloading {f['name']}: {e}[/]")
+    else:
+        console.print(f"[bold]Files ({len(files_list)})[/]\n")
+        for f in files_list:
+            size_kb = f["size"] / 1024
+            console.print(f"[cyan]{f['name']}[/] ({f['filetype']}, {size_kb:.1f} KB)")
+            console.print(f"  [dim]{f['url_private']}[/]")
+
+
+# === Feedback Commands ===
+
+
+@app.command()
+def feedback(
+    action: str = typer.Argument(
+        "collect",
+        help="Action: collect, digest, show, update-status, improve",
+    ),
+    channels: str = typer.Option(
+        "test-bot",
+        "--channels",
+        "-c",
+        help="Comma-separated channel names to scan",
+    ),
+    since_days: int = typer.Option(
+        None,
+        "--since-days",
+        "-d",
+        help="Override checkpoint, scan last N days",
+    ),
+    limit: int = typer.Option(200, "--limit", "-n", help="Max threads per channel"),
+    status: str = typer.Option(
+        None, "--status", "-s", help="Filter by status (new, triaged, fixed)"
+    ),
+    category: str = typer.Option(None, "--category", help="Filter by category"),
+    severity: str = typer.Option(None, "--severity", help="Min severity (low, medium, high)"),
+    item_id: int = typer.Option(None, "--id", help="Feedback item ID (for show/update-status)"),
+    new_status: str = typer.Option(None, "--new-status", help="New status for update-status"),
+    output: str = typer.Option(None, "--output", "-o", help="Output file path"),
+):
+    """Collect and analyze feedback from bot interactions.
+
+    Actions:
+      collect  - Scan channels for new feedback (incremental)
+      digest   - Generate markdown digest of feedback
+      show     - Show details of a specific feedback item
+      update-status - Update status of a feedback item
+      improve  - Full pipeline: collect, analyze, suggest fixes
+
+    Examples:
+        slack feedback collect -c test-bot
+        slack feedback collect -c test-bot,eng-ai --since-days 7
+        slack feedback digest --severity medium
+        slack feedback digest --status new -o /tmp/digest.md
+        slack feedback update-status --id 42 --new-status triaged
+        slack feedback improve  # Full automated improvement cycle
+    """
+    import json
+
+    from .feedback import (
+        collect_feedback,
+        format_digest_markdown,
+        get_feedback_digest,
+        update_feedback_status,
+        init_db,
+    )
+
+    channel_list = [c.strip() for c in channels.split(",")]
+
+    if action == "collect":
+        console.print(f"[bold]Collecting feedback from: {', '.join(channel_list)}[/]")
+        stats = collect_feedback(
+            channels=channel_list,
+            limit_per_channel=limit,
+            since_days=since_days,
+        )
+        console.print("\n[green]✓ Collection complete[/]")
+        console.print(f"  Channels scanned: {stats['channels_scanned']}")
+        console.print(f"  Threads analyzed: {stats['threads_analyzed']}")
+        console.print(f"  Feedback items: {stats['feedback_items_created']}")
+        if stats["by_category"]:
+            console.print(f"  By category: {stats['by_category']}")
+        if stats["by_severity"]:
+            console.print(f"  By severity: {stats['by_severity']}")
+
+    elif action == "digest":
+        items = get_feedback_digest(
+            since_days=since_days or 7,
+            status=status,
+            category=category,
+            min_severity=severity,
+        )
+        md = format_digest_markdown(items)
+
+        if output:
+            from pathlib import Path
+
+            Path(output).write_text(md)
+            console.print(f"[green]✓ Digest written to {output}[/]")
+        else:
+            print(md)
+
+    elif action == "show":
+        if not item_id:
+            console.print("[red]Error: --id required for show action[/]")
+            raise typer.Exit(1)
+
+        conn = init_db()
+        row = conn.execute("SELECT * FROM feedback_items WHERE id = ?", (item_id,)).fetchone()
+        conn.close()
+
+        if not row:
+            console.print(f"[red]Error: Feedback item {item_id} not found[/]")
+            raise typer.Exit(1)
+
+        console.print(f"\n[bold]Feedback Item #{row['id']}[/]\n")
+        console.print(f"[cyan]Channel:[/] {row['slack_channel']}")
+        console.print(f"[cyan]Permalink:[/] {row['permalink']}")
+        console.print(f"[cyan]Category:[/] {row['category']}")
+        console.print(f"[cyan]Severity:[/] {row['severity']}")
+        console.print(f"[cyan]Status:[/] {row['status']}")
+        console.print(f"[cyan]Reporter:[/] {row['reporter_user']}")
+        console.print(f"[cyan]CLI:[/] {row['cli_involved'] or 'none'}")
+        if row["amp_thread_id"]:
+            console.print(
+                f"[cyan]Amp Thread:[/] https://ampcode.com/threads/{row['amp_thread_id']}"
+            )
+        console.print(f"\n[cyan]Summary:[/]\n{row['summary']}")
+        console.print(f"\n[cyan]Evidence:[/]\n{json.dumps(json.loads(row['evidence']), indent=2)}")
+
+    elif action == "update-status":
+        if not item_id or not new_status:
+            console.print("[red]Error: --id and --new-status required[/]")
+            raise typer.Exit(1)
+
+        valid_statuses = ["new", "triaged", "in_progress", "fixed", "wontfix"]
+        if new_status not in valid_statuses:
+            console.print(f"[red]Error: Status must be one of: {valid_statuses}[/]")
+            raise typer.Exit(1)
+
+        if update_feedback_status(item_id, new_status):
+            console.print(f"[green]✓ Updated item {item_id} to status: {new_status}[/]")
+        else:
+            console.print(f"[red]Error: Item {item_id} not found[/]")
+            raise typer.Exit(1)
+
+    elif action == "improve":
+        # Full pipeline: collect → digest → output for agent to process
+        from rich.console import Console
+
+        stderr_console = Console(stderr=True)
+        stderr_console.print("[bold]Running full improvement pipeline...[/]\n")
+
+        # Step 1: Collect
+        stderr_console.print("[dim]Step 1: Collecting feedback...[/]")
+        stats = collect_feedback(
+            channels=channel_list,
+            limit_per_channel=limit,
+            since_days=since_days or 7,
+        )
+        stderr_console.print(f"[dim]  → {stats['feedback_items_created']} items collected[/]")
+
+        # Step 2: Get digest of actionable items (new, non-success, medium+)
+        stderr_console.print("[dim]Step 2: Generating actionable digest...[/]")
+        items = get_feedback_digest(
+            since_days=since_days or 7,
+            status="new",
+            min_severity="medium",
+        )
+
+        # Filter out successes for improvement focus
+        items = [i for i in items if i.category != "success"]
+
+        if not items:
+            console.print("\n[green]✓ No actionable feedback found![/]")
+            console.print("[dim]All recent interactions were successful or low severity.[/]")
+            return
+
+        # Output structured data for agent consumption
+        md = format_digest_markdown(items)
+        print(md)
+
+        # Also output raw JSON for programmatic use
+        stderr_console.print("\n---\n")
+        stderr_console.print("[dim]Raw JSON for programmatic processing:[/]")
+        items_json = [
+            {
+                "id": i.id,
+                "category": i.category,
+                "severity": i.severity,
+                "summary": i.summary,
+                "cli_involved": i.cli_involved,
+                "permalink": i.permalink,
+                "amp_thread_id": i.amp_thread_id,
+                "evidence": i.evidence,
+            }
+            for i in items
+        ]
+        print(json.dumps(items_json, indent=2))
+
+    else:
+        console.print(f"[red]Unknown action: {action}[/]")
+        console.print("Valid actions: collect, digest, show, update-status, improve")
+        raise typer.Exit(1)
+
+
+@app.command("channel-emails")
+def channel_emails(
+    channel: str = typer.Argument(..., help="Channel name (with or without #)"),
+    output: str = typer.Option("text", "-o", "--output", help="Output format: text or json"),
+):
+    """Get email addresses of all members in a channel.
+
+    Examples:
+        slack channel-emails eng-ai
+        slack channel-emails #general -o json
+    """
+    import json
+    from .client import get_channel_member_emails
+
+    try:
+        emails = get_channel_member_emails(channel)
+        if output == "json":
+            print(json.dumps({"channel": channel, "emails": emails, "count": len(emails)}))
+        else:
+            if emails:
+                console.print(f"[bold]Members of #{channel} ({len(emails)}):[/]")
+                for email in emails:
+                    console.print(f"  {email}")
+            else:
+                console.print(f"[yellow]No members with emails found in #{channel}[/]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
+
+
+@app.command("user-info")
+def user_info(
+    user_id: str = typer.Argument(..., help="Slack user ID (e.g., U123ABC)"),
+    output: str = typer.Option("text", "-o", "--output", help="Output format: text or json"),
+):
+    """Get user information including email by Slack user ID.
+
+    Examples:
+        slack user-info U123ABC
+        slack user-info U123ABC -o json
+    """
+    import json
+    from .client import get_slack_client
+
+    try:
+        client = get_slack_client()
+        result = client.users_info(user=user_id)
+        user = result.get("user", {})
+        email = user.get("profile", {}).get("email")
+        name = user.get("real_name") or user.get("name")
+
+        if output == "json":
+            print(
+                json.dumps(
+                    {
+                        "id": user_id,
+                        "name": name,
+                        "email": email,
+                        "display_name": user.get("profile", {}).get("display_name"),
+                    }
+                )
+            )
+        else:
+            console.print(f"[bold]User:[/] {name}")
+            if email:
+                console.print(f"[bold]Email:[/] {email}")
+            else:
+                console.print("[yellow]No email found[/]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
+
+
+if __name__ == "__main__":
+    app()

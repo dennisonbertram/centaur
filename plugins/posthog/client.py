@@ -6,6 +6,7 @@ import httpx
 
 
 class PostHogClient:
+
     """Client for PostHog API.
 
     Uses HogQL queries for flexible analytics. Requires a personal API key
@@ -19,6 +20,14 @@ class PostHogClient:
         host: str | None = None,
         timeout: float = 60.0,
     ):
+        """Initialize the PostHog client.
+
+        Args:
+            api_key: Personal API key (or set POSTHOG_API_KEY)
+            project_id: Project ID (or set POSTHOG_PROJECT_ID)
+            host: API host (default: us.posthog.com)
+            timeout: Request timeout in seconds
+        """
         self._api_key = api_key
         self._project_id = project_id
         self._host = host
@@ -69,7 +78,20 @@ class PostHogClient:
         json_data: dict | None = None,
         params: dict | None = None,
     ) -> dict | list:
-        """Make an authenticated API request."""
+        """Make an authenticated API request.
+
+        Args:
+            method: HTTP method (GET, POST, etc.)
+            endpoint: API endpoint path
+            json_data: JSON body for POST requests
+            params: Query parameters
+
+        Returns:
+            JSON response data
+
+        Raises:
+            RuntimeError: If the request fails
+        """
         url = f"{self.base_url}{endpoint}"
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
@@ -85,7 +107,15 @@ class PostHogClient:
             raise RuntimeError(f"Request failed: {e}")
 
     def query(self, sql: str, name: str | None = None) -> dict:
-        """Execute a HogQL query."""
+        """Execute a HogQL query.
+
+        Args:
+            sql: HogQL SQL query
+            name: Optional query name for logging
+
+        Returns:
+            Query results with columns and results
+        """
         payload = {
             "query": {
                 "kind": "HogQLQuery",
@@ -105,7 +135,18 @@ class PostHogClient:
         after: str | None = None,
         before: str | None = None,
     ) -> list[dict]:
-        """Query events using HogQL."""
+        """Query events using HogQL.
+
+        Args:
+            event: Filter by event name
+            properties: Filter by properties
+            limit: Max results
+            after: Events after this datetime
+            before: Events before this datetime
+
+        Returns:
+            List of events
+        """
         conditions = []
         if event:
             conditions.append(f"event = '{event}'")
@@ -131,7 +172,17 @@ class PostHogClient:
         days: int = 7,
         limit: int = 20,
     ) -> dict:
-        """Get event breakdown by a property."""
+        """Get event breakdown by a property.
+
+        Args:
+            event: Event name to filter (None for all events)
+            property: Property to breakdown by (e.g., '$browser', '$os')
+            days: Number of days to look back
+            limit: Max results
+
+        Returns:
+            Query results with breakdown
+        """
         event_filter = f"AND event = '{event}'" if event else ""
         sql = f"""
             SELECT
@@ -153,7 +204,16 @@ class PostHogClient:
         days: int = 7,
         limit: int = 20,
     ) -> dict:
-        """Get pageview analytics."""
+        """Get pageview analytics.
+
+        Args:
+            url_pattern: Filter URLs containing this pattern
+            days: Number of days to look back
+            limit: Max results
+
+        Returns:
+            Pageview data by URL
+        """
         url_filter = f"AND properties.$current_url LIKE '%{url_pattern}%'" if url_pattern else ""
         sql = f"""
             SELECT
@@ -177,7 +237,17 @@ class PostHogClient:
         days: int = 7,
         limit: int = 20,
     ) -> dict:
-        """Get user-agent breakdown."""
+        """Get user-agent breakdown.
+
+        Args:
+            url_pattern: Filter URLs containing this pattern
+            event: Event type to filter
+            days: Number of days to look back
+            limit: Max results
+
+        Returns:
+            User-agent breakdown with counts and percentages
+        """
         url_filter = f"AND properties.$current_url LIKE '%{url_pattern}%'" if url_pattern else ""
         sql = f"""
             SELECT
@@ -206,3 +276,10 @@ class PostHogClient:
 
     def __exit__(self, *args):
         self.close()
+
+
+
+def _client() -> PostHogClient:
+    api_key = os.getenv("POSTHOG_API_KEY")
+    project_id = os.getenv("POSTHOG_PROJECT_ID")
+    return PostHogClient(api_key=api_key, project_id=project_id)

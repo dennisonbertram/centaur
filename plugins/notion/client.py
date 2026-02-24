@@ -10,6 +10,7 @@ NOTION_VERSION = "2022-06-28"
 
 
 class NotionClient:
+
     """Client for Notion's REST API."""
 
     def __init__(self, api_key: str | None = None):
@@ -436,3 +437,8 @@ class NotionClient:
             "type": "bulleted_list_item",
             "bulleted_list_item": {"rich_text": NotionClient.make_rich_text(text)},
         }
+
+
+
+def _client() -> NotionClient:
+    return NotionClient(api_key=os.getenv("NOTION_API_KEY"))

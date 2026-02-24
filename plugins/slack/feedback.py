@@ -1,0 +1,701 @@
+"""Automated feedback collection and analysis for bot improvement.
+
+Collects feedback from Slack channels where the bot operates, identifies issues,
+and generates actionable improvements for SYSTEM_AGENTS.md and CLIs.
+"""
+
+import json
+import re
+import sqlite3
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+
+from .client import (
+    _retry_on_ratelimit,
+    get_slack_client,
+    get_user_cache,
+    list_bot_channels,
+    resolve_mentions,
+)
+
+# Feedback database location
+FEEDBACK_DB_PATH = Path.home() / ".cache" / "tempo-slack" / "feedback.db"
+
+# Heuristic signals for feedback detection
+NEGATIVE_REACTIONS = {"thumbsdown", "-1", "x", "confused", "thinking_face", "bug", "facepalm"}
+POSITIVE_REACTIONS = {"thumbsup", "+1", "white_check_mark", "fire", "heart", "tada", "rocket"}
+NEGATIVE_KEYWORDS = [
+    "wrong",
+    "broken",
+    "doesn't work",
+    "didn't work",
+    "should have",
+    "why didn't",
+    "failed",
+    "error",
+    "not what i",
+    "that's not",
+    "incorrect",
+    "try again",
+    "still wrong",
+    "can't find",
+    "unable to",
+]
+POSITIVE_KEYWORDS = ["perfect", "worked", "thanks", "great", "exactly", "awesome", "nice"]
+
+# Pattern to match Amp thread IDs
+AMP_THREAD_PATTERN = re.compile(
+    r"T-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I
+)
+
+
+@dataclass
+class FeedbackSignals:
+    """Signals extracted from a thread indicating feedback type."""
+
+    has_negative_reaction: bool = False
+    has_positive_reaction: bool = False
+    negative_keywords_found: list[str] = field(default_factory=list)
+    positive_keywords_found: list[str] = field(default_factory=list)
+    user_message_count: int = 0
+    bot_message_count: int = 0
+    has_bot_error: bool = False
+    repeated_requests: bool = False  # User had to rephrase >2 times
+
+
+@dataclass
+class FeedbackItem:
+    """A structured feedback item."""
+
+    id: int | None
+    slack_channel: str
+    slack_thread_ts: str
+    permalink: str
+    amp_thread_id: str | None
+    category: str  # cli_bug, routing_error, missing_capability, success, unclear
+    severity: str  # low, medium, high
+    summary: str
+    cli_involved: str | None
+    evidence: dict[str, Any]
+    reporter_user: str
+    status: str  # new, triaged, in_progress, fixed, wontfix
+    created_at: str
+    updated_at: str
+
+
+def init_db() -> sqlite3.Connection:
+    """Initialize the feedback database."""
+    FEEDBACK_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(FEEDBACK_DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS ingestion_state (
+            channel_id TEXT PRIMARY KEY,
+            last_processed_ts TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS feedback_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            slack_channel TEXT NOT NULL,
+            slack_thread_ts TEXT NOT NULL,
+            permalink TEXT NOT NULL,
+            amp_thread_id TEXT,
+            category TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            cli_involved TEXT,
+            evidence TEXT NOT NULL,
+            reporter_user TEXT,
+            status TEXT NOT NULL DEFAULT 'new',
+            dedupe_key TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(slack_channel, slack_thread_ts)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_feedback_status ON feedback_items(status);
+        CREATE INDEX IF NOT EXISTS idx_feedback_category ON feedback_items(category);
+        CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback_items(created_at);
+    """)
+    conn.commit()
+    return conn
+
+
+def get_last_processed_ts(conn: sqlite3.Connection, channel_id: str) -> str | None:
+    """Get the last processed timestamp for a channel."""
+    row = conn.execute(
+        "SELECT last_processed_ts FROM ingestion_state WHERE channel_id = ?",
+        (channel_id,),
+    ).fetchone()
+    return row["last_processed_ts"] if row else None
+
+
+def update_last_processed_ts(conn: sqlite3.Connection, channel_id: str, ts: str) -> None:
+    """Update the last processed timestamp for a channel."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """INSERT INTO ingestion_state (channel_id, last_processed_ts, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(channel_id) DO UPDATE SET last_processed_ts = ?, updated_at = ?""",
+        (channel_id, ts, now, ts, now),
+    )
+    conn.commit()
+
+
+def extract_amp_thread_id(messages: list[dict]) -> str | None:
+    """Extract Amp thread ID from bot messages."""
+    for msg in reversed(messages):
+        if msg.get("is_bot"):
+            match = AMP_THREAD_PATTERN.search(msg.get("text", ""))
+            if match:
+                return match.group(0)
+    return None
+
+
+def extract_cli_mentions(text: str) -> list[str]:
+    """Extract CLI names mentioned in text."""
+    known_clis = [
+        "reshift",
+        "anchorage",
+        "coinbase",
+        "falconx",
+        "unit410",
+        "bitgo",
+        "slack",
+        "gsuite",
+        "defillama",
+        "allium",
+        "coingecko",
+        "dune",
+        "idxs",
+        "posthog",
+        "artemis",
+        "standard-metrics",
+        "sigma",
+        "affinity",
+    ]
+    found = []
+    text_lower = text.lower()
+    for cli in known_clis:
+        if cli in text_lower:
+            found.append(cli)
+    return found
+
+
+def analyze_thread_signals(messages: list[dict], bot_user_id: str | None = None) -> FeedbackSignals:
+    """Analyze a thread for feedback signals."""
+    signals = FeedbackSignals()
+
+    for msg in messages:
+        # Check reactions
+        reactions = msg.get("reactions", [])
+        for r in reactions:
+            name = r.get("name", "").lower()
+            if name in NEGATIVE_REACTIONS:
+                signals.has_negative_reaction = True
+            if name in POSITIVE_REACTIONS:
+                signals.has_positive_reaction = True
+
+        # Check if bot message
+        is_bot = msg.get("bot_id") or (bot_user_id and msg.get("user") == bot_user_id)
+        if is_bot:
+            signals.bot_message_count += 1
+            msg["is_bot"] = True
+            # Check for error patterns in bot output
+            text = msg.get("text", "").lower()
+            if any(
+                err in text
+                for err in [
+                    "error:",
+                    "failed:",
+                    "exception",
+                    "timeout",
+                    "container exited",
+                    "tool not found",
+                ]
+            ):
+                signals.has_bot_error = True
+        else:
+            signals.user_message_count += 1
+            msg["is_bot"] = False
+
+            # Check keywords in user messages
+            text = msg.get("text", "").lower()
+            for kw in NEGATIVE_KEYWORDS:
+                if kw in text and kw not in signals.negative_keywords_found:
+                    signals.negative_keywords_found.append(kw)
+            for kw in POSITIVE_KEYWORDS:
+                if kw in text and kw not in signals.positive_keywords_found:
+                    signals.positive_keywords_found.append(kw)
+
+    # Repeated requests = user sent >3 messages (had to keep trying)
+    if signals.user_message_count > 3 and signals.bot_message_count > 0:
+        signals.repeated_requests = True
+
+    return signals
+
+
+def should_process_thread(signals: FeedbackSignals) -> bool:
+    """Determine if a thread should be processed for feedback."""
+    # Skip threads without bot interaction
+    if signals.bot_message_count == 0:
+        return False
+
+    # Process if any negative signal
+    if signals.has_negative_reaction:
+        return True
+    if signals.negative_keywords_found:
+        return True
+    if signals.has_bot_error:
+        return True
+    if signals.repeated_requests:
+        return True
+
+    # Process successful interactions too (for positive examples)
+    if signals.has_positive_reaction or signals.positive_keywords_found:
+        return True
+
+    return False
+
+
+def classify_feedback(signals: FeedbackSignals, messages: list[dict]) -> tuple[str, str]:
+    """Classify feedback category and severity."""
+    # Determine category
+    if signals.has_bot_error:
+        category = "cli_bug"
+    elif signals.repeated_requests:
+        category = "routing_error"
+    elif signals.negative_keywords_found:
+        # Check if it's about missing capability vs wrong behavior
+        text = " ".join(m.get("text", "") for m in messages).lower()
+        if "should have" in text or "why didn't" in text or "can't" in text:
+            category = "missing_capability"
+        else:
+            category = "routing_error"
+    elif signals.has_positive_reaction or signals.positive_keywords_found:
+        category = "success"
+    else:
+        category = "unclear"
+
+    # Determine severity
+    if signals.has_bot_error:
+        severity = "high"
+    elif signals.has_negative_reaction and signals.repeated_requests:
+        severity = "high"
+    elif signals.has_negative_reaction or len(signals.negative_keywords_found) >= 2:
+        severity = "medium"
+    else:
+        severity = "low"
+
+    return category, severity
+
+
+def fetch_threads_since(
+    client: WebClient,
+    channel_id: str,
+    since_ts: str | None = None,
+    limit: int = 200,
+    bot_user_id: str | None = None,
+) -> list[dict]:
+    """Fetch threads from a channel since a timestamp, with full replies."""
+    threads = []
+    cursor = None
+
+    # Default to last 7 days if no checkpoint
+    if not since_ts:
+        since_ts = str((datetime.now(timezone.utc) - timedelta(days=7)).timestamp())
+
+    while len(threads) < limit:
+        try:
+            response = _retry_on_ratelimit(
+                client.conversations_history,
+                channel=channel_id,
+                oldest=since_ts,
+                inclusive=False,
+                limit=min(limit - len(threads), 100),
+                cursor=cursor,
+            )
+        except SlackApiError as e:
+            raise RuntimeError(f"Slack API error: {e.response['error']}")
+
+        for msg in response.get("messages", []):
+            ts = msg.get("ts", "")
+            thread_ts = msg.get("thread_ts", ts)
+            reply_count = msg.get("reply_count", 0)
+
+            # Fetch full thread if it has replies
+            thread_messages = [msg]
+            if reply_count > 0:
+                try:
+                    # Paginate thread replies
+                    thread_cursor = None
+                    while True:
+                        thread_response = _retry_on_ratelimit(
+                            client.conversations_replies,
+                            channel=channel_id,
+                            ts=thread_ts,
+                            limit=200,
+                            cursor=thread_cursor,
+                        )
+                        # Skip first message (already have it)
+                        replies = (
+                            thread_response.get("messages", [])[1:]
+                            if not thread_cursor
+                            else thread_response.get("messages", [])
+                        )
+                        thread_messages.extend(replies)
+
+                        thread_cursor = thread_response.get("response_metadata", {}).get(
+                            "next_cursor"
+                        )
+                        if not thread_cursor:
+                            break
+                except SlackApiError:
+                    pass
+
+            # Analyze signals
+            signals = analyze_thread_signals(thread_messages, bot_user_id)
+
+            if should_process_thread(signals):
+                threads.append(
+                    {
+                        "thread_ts": thread_ts,
+                        "messages": thread_messages,
+                        "signals": signals,
+                        "reply_count": len(thread_messages) - 1,
+                    }
+                )
+
+        cursor = response.get("response_metadata", {}).get("next_cursor")
+        if not cursor:
+            break
+
+    return threads
+
+
+def save_feedback_item(conn: sqlite3.Connection, item: FeedbackItem) -> int:
+    """Save or update a feedback item."""
+    now = datetime.now(timezone.utc).isoformat()
+    dedupe_key = f"{item.category}:{item.cli_involved or 'none'}:{item.summary[:50]}"
+
+    cursor = conn.execute(
+        """INSERT INTO feedback_items
+           (slack_channel, slack_thread_ts, permalink, amp_thread_id, category, severity,
+            summary, cli_involved, evidence, reporter_user, status, dedupe_key, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(slack_channel, slack_thread_ts) DO UPDATE SET
+             category = ?, severity = ?, summary = ?, cli_involved = ?, evidence = ?,
+             status = CASE WHEN status = 'new' THEN 'new' ELSE status END,
+             updated_at = ?""",
+        (
+            item.slack_channel,
+            item.slack_thread_ts,
+            item.permalink,
+            item.amp_thread_id,
+            item.category,
+            item.severity,
+            item.summary,
+            item.cli_involved,
+            json.dumps(item.evidence),
+            item.reporter_user,
+            item.status,
+            dedupe_key,
+            item.created_at or now,
+            now,
+            # For update
+            item.category,
+            item.severity,
+            item.summary,
+            item.cli_involved,
+            json.dumps(item.evidence),
+            now,
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid or 0
+
+
+def collect_feedback(
+    channels: list[str] | None = None,
+    limit_per_channel: int = 200,
+    since_days: int | None = None,
+) -> dict[str, Any]:
+    """Collect feedback from specified channels.
+
+    Args:
+        channels: Channel names to scan. Defaults to ["test-bot"].
+        limit_per_channel: Max threads to process per channel.
+        since_days: Override checkpoint, scan last N days.
+
+    Returns:
+        Stats about collection run.
+    """
+    channels = channels or ["test-bot"]
+    client = get_slack_client()
+    user_cache = get_user_cache(client)
+    conn = init_db()
+
+    # Get bot user ID
+    try:
+        auth_response = client.auth_test()
+        bot_user_id = auth_response.get("user_id")
+    except SlackApiError:
+        bot_user_id = None
+
+    # Resolve channel IDs
+    all_channels = list_bot_channels()
+    channel_map = {ch["name"]: ch["id"] for ch in all_channels}
+
+    stats = {
+        "channels_scanned": 0,
+        "threads_analyzed": 0,
+        "feedback_items_created": 0,
+        "by_category": {},
+        "by_severity": {},
+    }
+
+    for channel_name in channels:
+        channel_id = channel_map.get(channel_name.lstrip("#"))
+        if not channel_id:
+            continue
+
+        # Get checkpoint or use since_days
+        if since_days:
+            since_ts = str((datetime.now(timezone.utc) - timedelta(days=since_days)).timestamp())
+        else:
+            since_ts = get_last_processed_ts(conn, channel_id)
+
+        # Fetch and analyze threads
+        threads = fetch_threads_since(client, channel_id, since_ts, limit_per_channel, bot_user_id)
+
+        max_ts = since_ts or "0"
+        for thread in threads:
+            signals: FeedbackSignals = thread["signals"]
+            messages = thread["messages"]
+            thread_ts = thread["thread_ts"]
+
+            # Track max timestamp
+            for msg in messages:
+                if msg.get("ts", "0") > max_ts:
+                    max_ts = msg["ts"]
+
+            # Classify
+            category, severity = classify_feedback(signals, messages)
+
+            # Extract metadata
+            amp_thread_id = extract_amp_thread_id(messages)
+            all_text = " ".join(m.get("text", "") for m in messages)
+            clis = extract_cli_mentions(all_text)
+
+            # Get reporter (first non-bot user)
+            reporter = None
+            for msg in messages:
+                if not msg.get("is_bot"):
+                    user_id = msg.get("user", "")
+                    reporter = user_cache.get(user_id, user_id)
+                    break
+
+            # Build summary from first user message
+            summary = ""
+            for msg in messages:
+                if not msg.get("is_bot"):
+                    summary = resolve_mentions(msg.get("text", "")[:200], client, user_cache)
+                    break
+
+            # Build permalink
+            permalink = f"https://slack.com/archives/{channel_id}/p{thread_ts.replace('.', '')}"
+
+            # Create feedback item
+            item = FeedbackItem(
+                id=None,
+                slack_channel=channel_name,
+                slack_thread_ts=thread_ts,
+                permalink=permalink,
+                amp_thread_id=amp_thread_id,
+                category=category,
+                severity=severity,
+                summary=summary,
+                cli_involved=",".join(clis) if clis else None,
+                evidence={
+                    "negative_reactions": signals.has_negative_reaction,
+                    "positive_reactions": signals.has_positive_reaction,
+                    "negative_keywords": signals.negative_keywords_found,
+                    "positive_keywords": signals.positive_keywords_found,
+                    "user_messages": signals.user_message_count,
+                    "bot_messages": signals.bot_message_count,
+                    "bot_error": signals.has_bot_error,
+                    "repeated_requests": signals.repeated_requests,
+                },
+                reporter_user=reporter,
+                status="new",
+                created_at=datetime.now(timezone.utc).isoformat(),
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            save_feedback_item(conn, item)
+            stats["threads_analyzed"] += 1
+            stats["feedback_items_created"] += 1
+            stats["by_category"][category] = stats["by_category"].get(category, 0) + 1
+            stats["by_severity"][severity] = stats["by_severity"].get(severity, 0) + 1
+
+        # Update checkpoint
+        if max_ts and max_ts != "0":
+            update_last_processed_ts(conn, channel_id, max_ts)
+
+        stats["channels_scanned"] += 1
+
+    conn.close()
+    return stats
+
+
+def get_feedback_digest(
+    since_days: int = 7,
+    status: str | None = None,
+    category: str | None = None,
+    min_severity: str | None = None,
+) -> list[FeedbackItem]:
+    """Get feedback items for digest.
+
+    Args:
+        since_days: Look back N days.
+        status: Filter by status (new, triaged, etc.).
+        category: Filter by category.
+        min_severity: Minimum severity (low, medium, high).
+
+    Returns:
+        List of feedback items.
+    """
+    conn = init_db()
+    since_date = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+
+    query = "SELECT * FROM feedback_items WHERE created_at >= ?"
+    params: list[Any] = [since_date]
+
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+
+    if category:
+        query += " AND category = ?"
+        params.append(category)
+
+    severity_order = {"low": 0, "medium": 1, "high": 2}
+    if min_severity and min_severity in severity_order:
+        min_val = severity_order[min_severity]
+        valid = [s for s, v in severity_order.items() if v >= min_val]
+        query += f" AND severity IN ({','.join('?' * len(valid))})"
+        params.extend(valid)
+
+    query += " ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at DESC"
+
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+
+    items = []
+    for row in rows:
+        items.append(
+            FeedbackItem(
+                id=row["id"],
+                slack_channel=row["slack_channel"],
+                slack_thread_ts=row["slack_thread_ts"],
+                permalink=row["permalink"],
+                amp_thread_id=row["amp_thread_id"],
+                category=row["category"],
+                severity=row["severity"],
+                summary=row["summary"],
+                cli_involved=row["cli_involved"],
+                evidence=json.loads(row["evidence"]),
+                reporter_user=row["reporter_user"],
+                status=row["status"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+        )
+
+    return items
+
+
+def format_digest_markdown(items: list[FeedbackItem]) -> str:
+    """Format feedback items as markdown digest."""
+    if not items:
+        return "No feedback items found for the specified criteria."
+
+    # Group by category
+    by_category: dict[str, list[FeedbackItem]] = {}
+    for item in items:
+        by_category.setdefault(item.category, []).append(item)
+
+    lines = ["# Feedback Digest\n"]
+
+    # Summary
+    lines.append("## Summary\n")
+    lines.append(f"- **Total items**: {len(items)}")
+    for cat, cat_items in sorted(by_category.items()):
+        lines.append(f"- **{cat}**: {len(cat_items)}")
+    lines.append("")
+
+    # By category
+    category_order = ["cli_bug", "routing_error", "missing_capability", "unclear", "success"]
+    for cat in category_order:
+        cat_items = by_category.get(cat, [])
+        if not cat_items:
+            continue
+
+        emoji = {
+            "cli_bug": "🐛",
+            "routing_error": "🔀",
+            "missing_capability": "➕",
+            "success": "✅",
+            "unclear": "❓",
+        }.get(cat, "📝")
+        lines.append(f"## {emoji} {cat.replace('_', ' ').title()} ({len(cat_items)})\n")
+
+        for item in cat_items:
+            sev_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(item.severity, "⚪")
+            lines.append(f"### {sev_emoji} [{item.summary[:60]}...]({item.permalink})")
+            lines.append(f"- **Reporter**: {item.reporter_user or 'unknown'}")
+            if item.cli_involved:
+                lines.append(f"- **CLI**: `{item.cli_involved}`")
+            if item.amp_thread_id:
+                lines.append(
+                    f"- **Amp Thread**: [{item.amp_thread_id}](https://ampcode.com/threads/{item.amp_thread_id})"
+                )
+            lines.append(f"- **Status**: {item.status}")
+
+            # Evidence summary
+            ev = item.evidence
+            signals = []
+            if ev.get("bot_error"):
+                signals.append("bot error")
+            if ev.get("negative_reactions"):
+                signals.append("👎 reaction")
+            if ev.get("repeated_requests"):
+                signals.append("repeated requests")
+            if ev.get("negative_keywords"):
+                signals.append(f"keywords: {', '.join(ev['negative_keywords'][:3])}")
+            if signals:
+                lines.append(f"- **Signals**: {', '.join(signals)}")
+            lines.append("")
+
+    return "\n".join(lines)
+
+
+def update_feedback_status(item_id: int, status: str) -> bool:
+    """Update the status of a feedback item."""
+    conn = init_db()
+    now = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        "UPDATE feedback_items SET status = ?, updated_at = ? WHERE id = ?",
+        (status, now, item_id),
+    )
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0

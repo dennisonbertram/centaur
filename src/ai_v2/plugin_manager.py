@@ -152,13 +152,17 @@ class PluginManager:
             plugins.append((plugin_dir, meta))
         return plugins
 
-    def discover(self, profile: str | None = None) -> list[LoadedPlugin]:
+    def discover(
+        self,
+        profile: str | None = None,
+        only_plugins: set[str] | None = None,
+    ) -> list[LoadedPlugin]:
         """Discover and load all plugins."""
         if not self.plugins_dir.exists():
             log.info("plugins_dir_missing", path=str(self.plugins_dir))
             return []
 
-        enabled = self._get_enabled_plugins(profile)
+        enabled = only_plugins if only_plugins is not None else self._get_enabled_plugins(profile)
         plugin_entries = self._collect_plugins(enabled)
 
         # Collect all dependencies across enabled plugins and install in one shot
@@ -400,6 +404,41 @@ class PluginManager:
             )
         return matrix
 
+    def smoke_test_registry(self) -> list[dict[str, Any]]:
+        """Verify registry integrity for plugins, tools, and CLI aliases."""
+        entries = self.list_cli_tools()
+        results: list[dict[str, Any]] = []
+
+        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
+            problems: list[str] = []
+            if not plugin.tools:
+                problems.append("no_discovered_tools")
+            if plugin.cli_path.exists() and plugin.name not in entries:
+                problems.append("plugin_missing_from_cli_registry")
+            for alias in plugin.scripts:
+                if alias not in entries:
+                    problems.append(f"missing_alias:{alias}")
+
+            results.append(
+                {
+                    "plugin": plugin.name,
+                    "status": "ok" if not problems else "failed",
+                    "problems": problems,
+                }
+            )
+
+        return results
+
+    @staticmethod
+    def _parse_cli_output(output: str) -> dict[str, Any] | None:
+        try:
+            parsed = json.loads(output)
+            if isinstance(parsed, dict) and "error" in parsed:
+                return parsed
+        except json.JSONDecodeError:
+            return None
+        return None
+
     def smoke_test_clis(self, cli_args: list[str] | None = None) -> list[dict[str, Any]]:
         """Run a CLI smoke test for each loaded plugin that has a cli.py."""
         args = cli_args or ["--help"]
@@ -416,19 +455,16 @@ class PluginManager:
                 continue
 
             output = self.run_cli(plugin.name, args)
-            try:
-                parsed = json.loads(output)
-                if "error" in parsed:
-                    results.append(
-                        {
-                            "plugin": plugin.name,
-                            "status": "failed",
-                            "details": parsed,
-                        }
-                    )
-                    continue
-            except json.JSONDecodeError:
-                pass
+            parsed = self._parse_cli_output(output)
+            if parsed is not None:
+                results.append(
+                    {
+                        "plugin": plugin.name,
+                        "status": "failed",
+                        "details": parsed,
+                    }
+                )
+                continue
 
             results.append(
                 {
@@ -437,6 +473,41 @@ class PluginManager:
                     "cli_path": str(plugin.cli_path),
                 }
             )
+        return results
+
+    def smoke_test_aliases(self, cli_args: list[str] | None = None) -> list[dict[str, Any]]:
+        """Run CLI smoke tests via script aliases from plugin manifests."""
+        args = cli_args or ["--help"]
+        results: list[dict[str, Any]] = []
+
+        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
+            aliases = sorted(plugin.scripts)
+            if not aliases:
+                results.append({"plugin": plugin.name, "status": "missing_aliases"})
+                continue
+
+            for alias in aliases:
+                output = self.run_cli(alias, args)
+                parsed = self._parse_cli_output(output)
+                if parsed is not None:
+                    results.append(
+                        {
+                            "plugin": plugin.name,
+                            "alias": alias,
+                            "status": "failed",
+                            "details": parsed,
+                        }
+                    )
+                    continue
+
+                results.append(
+                    {
+                        "plugin": plugin.name,
+                        "alias": alias,
+                        "status": "ok",
+                    }
+                )
+
         return results
 
     @staticmethod
@@ -489,6 +560,21 @@ class PluginManager:
                 count += 1
         log.info("mcp_plugin_tools_registered", count=count)
         return count
+
+    def list_mcp_tools(self) -> list[dict[str, str]]:
+        """Return all loaded plugin tools that are exposed to MCP."""
+        items: list[dict[str, str]] = []
+        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
+            for tool in sorted(plugin.tools, key=lambda t: t.tool_name):
+                items.append(
+                    {
+                        "name": tool.qualified_name,
+                        "plugin": plugin.name,
+                        "tool": tool.tool_name,
+                        "description": tool.fn.__doc__ or "",
+                    }
+                )
+        return items
 
     def create_rest_router(self) -> APIRouter:
         """Create a FastAPI router with all plugin tools as POST endpoints."""

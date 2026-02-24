@@ -5,14 +5,18 @@ import json
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.table import Table
+from ai_v2.cli_tables import Table
 
-from . import client
+from .client import MessariClient
 
 load_dotenv()
 
 app = typer.Typer(name="messari", help="Messari CLI for crypto asset data and analytics")
 console = Console()
+
+
+def get_client() -> MessariClient:
+    return MessariClient()
 
 
 def format_number(value: float | None, decimals: int = 2, prefix: str = "$") -> str:
@@ -44,7 +48,7 @@ def assets(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """List crypto assets."""
-    data = client.list_assets(limit=limit, fields=fields)
+    data = get_client().list_assets(limit=limit, fields=fields)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -88,7 +92,7 @@ def asset(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Get details for a specific asset."""
-    data = client.get_asset(asset_key)
+    data = get_client().get_asset(asset_key)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -115,7 +119,7 @@ def metrics(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Get metrics for an asset (price, volume, market cap, etc)."""
-    data = client.get_asset_metrics(asset_key)
+    data = get_client().get_asset_metrics(asset_key)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -156,7 +160,7 @@ def profile(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Get asset profile (description, links, team, etc)."""
-    data = client.get_asset_profile(asset_key)
+    data = get_client().get_asset_profile(asset_key)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -194,7 +198,7 @@ def markets(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """Get markets for an asset."""
-    data = client.get_asset_markets(asset_key)[:limit]
+    data = get_client().get_asset_markets(asset_key)[:limit]
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -234,7 +238,7 @@ def news(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown"),
 ):
     """Get latest crypto news."""
-    data = client.get_news(limit=limit)
+    data = get_client().get_news(limit=limit)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -269,7 +273,7 @@ def timeseries(
     markdown: bool = typer.Option(False, "--markdown", "-m", help="Output as markdown table"),
 ):
     """Get historical timeseries data for an asset metric."""
-    data = client.get_timeseries(asset_key, metric, start=start, end=end)
+    data = get_client().get_timeseries(asset_key, metric, start=start, end=end)
 
     if json_output:
         print(json.dumps(data, indent=2))
@@ -322,7 +326,7 @@ def raw(
                 query_params[k.strip()] = v.strip()
 
     try:
-        data = client.raw_request(endpoint, version=version, params=query_params)
+        data = get_client().raw_request(endpoint, version=version, params=query_params)
         print(json.dumps(data, indent=2))
     except RuntimeError as e:
         console.print(f"[red]Error: {e}[/]")

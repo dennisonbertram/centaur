@@ -245,3 +245,8 @@ class CoinMetricsClient:
 
     def __exit__(self, *args):
         self.close()
+
+
+def _client() -> CoinMetricsClient:
+    api_key = os.getenv("COINMETRICS_API_KEY")
+    return CoinMetricsClient(api_key=api_key)

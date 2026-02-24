@@ -330,3 +330,8 @@ class DefiLlamaClient:
 
     def __exit__(self, *args):
         self.close()
+
+
+def _client() -> DefiLlamaClient:
+    api_key = os.getenv("DEFILLAMA_API_KEY")
+    return DefiLlamaClient(api_key=api_key)

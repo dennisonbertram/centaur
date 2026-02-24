@@ -232,3 +232,8 @@ class AnchorageClient:
 
     def __exit__(self, *args):
         self.close()
+
+
+
+def _client(fund: str = "pf") -> AnchorageClient:
+    return AnchorageClient(fund=fund)

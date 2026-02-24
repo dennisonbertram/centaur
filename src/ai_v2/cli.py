@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shlex
 import sys
 from pathlib import Path
@@ -9,7 +10,20 @@ from pathlib import Path
 import click
 import structlog
 
+from .cli_tables import render_text_table
+
+_LOG_LEVELS = {
+    "critical": 50,
+    "error": 40,
+    "warning": 30,
+    "info": 20,
+    "debug": 10,
+}
+_default_level = os.getenv("AI_V2_LOG_LEVEL", "warning").lower()
+_log_level = _LOG_LEVELS.get(_default_level, 30)
+
 structlog.configure(
+    wrapper_class=structlog.make_filtering_bound_logger(_log_level),
     processors=[
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
@@ -407,7 +421,61 @@ def plugins_list(profile: str | None) -> None:
 
     manager = PluginManager(plugins_dir, profiles_dir)
     manager.discover(profile=profile)
-    click.echo(json.dumps(manager.plugin_test_matrix(), indent=2))
+
+    rows = []
+    for plugin in manager.plugin_test_matrix():
+        rows.append(
+            {
+                "plugin": plugin["plugin"],
+                "tools": str(len(plugin["discovered_tools"])),
+                "aliases": ", ".join(plugin["aliases"]) or "-",
+                "cli": "yes" if plugin["cli_available"] else "no",
+                "cli_path": plugin["cli_path"],
+            }
+        )
+
+    if not rows:
+        click.echo("No plugins loaded.")
+        return
+
+    headers = ["Plugin", "Tools", "Aliases", "CLI", "CLI Path"]
+    table_rows = [
+        [row["plugin"], row["tools"], row["aliases"], row["cli"], row["cli_path"]]
+        for row in sorted(rows, key=lambda r: r["plugin"])
+    ]
+    click.echo(render_text_table(headers, table_rows))
+
+
+@plugins_group.command("run")
+@click.option("--profile", default=None, help="Optional profile name from profiles/*.json")
+@click.argument("tool")
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def plugins_run(profile: str | None, tool: str, args: tuple[str, ...]) -> None:
+    """Run a plugin CLI by plugin name or script alias."""
+    from .plugin_manager import PluginManager
+
+    app_root = Path(__file__).resolve().parent.parent.parent
+    plugins_dir = Path(app_root / "plugins")
+    profiles_dir = Path(app_root / "profiles")
+
+    manager = PluginManager(plugins_dir, profiles_dir)
+    if (plugins_dir / tool).is_dir():
+        manager.discover(profile=profile, only_plugins={tool})
+    else:
+        manager.discover(profile=profile)
+
+    output = manager.run_cli(tool, list(args))
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        click.echo(output)
+        return
+
+    if isinstance(parsed, dict) and "error" in parsed:
+        click.echo(json.dumps(parsed, indent=2), err=True)
+        sys.exit(1)
+
+    click.echo(output)
 
 
 @plugins_group.command("test")
@@ -419,7 +487,7 @@ def plugins_list(profile: str | None) -> None:
     help="Arguments passed to each plugin CLI for smoke testing.",
 )
 def plugins_test(profile: str | None, cli_args: str) -> None:
-    """Run plugin smoke tests: imports, dynamic tool discovery, and CLIs."""
+    """Run plugin smoke tests across imports, registry, CLIs, and aliases."""
     from .plugin_manager import PluginManager
 
     app_root = Path(__file__).resolve().parent.parent.parent
@@ -429,17 +497,47 @@ def plugins_test(profile: str | None, cli_args: str) -> None:
     manager = PluginManager(plugins_dir, profiles_dir)
     manager.discover(profile=profile)
 
+    registry_results = manager.smoke_test_registry()
     import_and_discovery = manager.plugin_test_matrix()
     cli_results = manager.smoke_test_clis(shlex.split(cli_args))
-    failures = [
+    alias_results = manager.smoke_test_aliases(shlex.split(cli_args))
+
+    failures: list[dict[str, object]] = []
+    failures.extend(result for result in registry_results if result.get("status") != "ok")
+    failures.extend(
         result for result in cli_results if result.get("status") not in {"ok", "missing_cli"}
-    ]
+    )
+    failures.extend(
+        result for result in alias_results if result.get("status") not in {"ok", "missing_aliases"}
+    )
 
     click.echo(
         json.dumps(
             {
                 "imports_and_discovery": import_and_discovery,
+                "registry_smoke": registry_results,
                 "cli_smoke": cli_results,
+                "alias_smoke": alias_results,
+                "summary": {
+                    "plugins_loaded": len(import_and_discovery),
+                    "registry_failures": len(
+                        [result for result in registry_results if result.get("status") != "ok"]
+                    ),
+                    "cli_failures": len(
+                        [
+                            result
+                            for result in cli_results
+                            if result.get("status") not in {"ok", "missing_cli"}
+                        ]
+                    ),
+                    "alias_failures": len(
+                        [
+                            result
+                            for result in alias_results
+                            if result.get("status") not in {"ok", "missing_aliases"}
+                        ]
+                    ),
+                },
             },
             indent=2,
         )

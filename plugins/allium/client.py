@@ -527,3 +527,10 @@ def get_example_queries() -> dict[str, str]:
         Dict mapping query name to SQL string
     """
     return STABLECOIN_QUERIES.copy()
+
+
+def _client() -> AlliumClient:
+    api_key = os.getenv("ALLIUM_API_KEY")
+    if not api_key:
+        raise RuntimeError("ALLIUM_API_KEY not set.")
+    return AlliumClient(api_key=api_key)

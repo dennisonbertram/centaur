@@ -1,32 +1,20 @@
-"""Reshift plugin tools — works both as imported plugin and standalone."""
+"""Reshift plugin — Paradigm I&R Knowledge Platform."""
 
 from __future__ import annotations
 
-import os
-from typing import Any
-
 try:
-    from ai_v2.plugin_sdk import plugin_tool, secret
+    from ai_v2.plugin_sdk import plugin_tool
 except ImportError:
 
-    def plugin_tool(*, name: str | None = None):  # type: ignore[misc]
-        def decorator(fn: Any) -> Any:
+    def plugin_tool(*, name=None):
+        def decorator(fn):
             fn.__plugin_tool__ = name or fn.__name__
             return fn
-
         return decorator
-
-    def secret(key: str, default: str | None = None) -> str:  # type: ignore[misc]
-        val = os.environ.get(key)
-        if val:
-            return val
-        if default is not None:
-            return default
-        raise KeyError(f"Missing env var '{key}'")
 
 
 @plugin_tool()
-async def db_query(query: str, limit: int = 20) -> list[dict]:
+def db_query(query: str, limit: int = 20) -> list[dict]:
     """Execute a read-only SQL query against Paradigm's internal PostgreSQL database.
 
     Args:
@@ -45,7 +33,7 @@ async def db_query(query: str, limit: int = 20) -> list[dict]:
 
 
 @plugin_tool()
-async def db_tables() -> list[str]:
+def db_tables() -> list[str]:
     """List all tables in the internal database."""
     from .integrations.database import get_db
     from .integrations.database.client import is_tunnel_running, start_persistent_tunnel
@@ -58,7 +46,7 @@ async def db_tables() -> list[str]:
 
 
 @plugin_tool()
-async def db_describe(table_name: str) -> list[dict]:
+def db_describe(table_name: str) -> list[dict]:
     """Describe columns of a database table.
 
     Args:
@@ -75,7 +63,7 @@ async def db_describe(table_name: str) -> list[dict]:
 
 
 @plugin_tool()
-async def notes_search(query: str, note_type: str = "", limit: int = 20) -> list[dict]:
+def notes_search(query: str, note_type: str = "", limit: int = 20) -> list[dict]:
     """Search Shift notes from the investment process.
 
     Args:
@@ -105,7 +93,7 @@ async def notes_search(query: str, note_type: str = "", limit: int = 20) -> list
 
 
 @plugin_tool()
-async def notes_read(note_id: str) -> dict:
+def notes_read(note_id: str) -> dict:
     """Read a full Shift note by ID.
 
     Args:
@@ -137,7 +125,7 @@ async def notes_read(note_id: str) -> dict:
 
 
 @plugin_tool()
-async def notes_stats() -> dict:
+def notes_stats() -> dict:
     """Get statistics about Shift notes."""
     from .integrations.database.client import is_tunnel_running, start_persistent_tunnel
     from .integrations.notes import get_notes_client
@@ -150,7 +138,7 @@ async def notes_stats() -> dict:
 
 
 @plugin_tool()
-async def email_search(query: str, limit: int = 10) -> list[dict]:
+def email_search(query: str, limit: int = 10) -> list[dict]:
     """Search Gmail emails.
 
     Args:
@@ -163,7 +151,7 @@ async def email_search(query: str, limit: int = 10) -> list[dict]:
 
 
 @plugin_tool()
-async def calendar_events(days: int = 7, past: bool = False, limit: int = 10) -> list[dict]:
+def calendar_events(days: int = 7, past: bool = False, limit: int = 10) -> list[dict]:
     """Get calendar events.
 
     Args:
@@ -179,7 +167,7 @@ async def calendar_events(days: int = 7, past: bool = False, limit: int = 10) ->
 
 
 @plugin_tool()
-async def drive_search(query: str, limit: int = 10) -> list[dict]:
+def drive_search(query: str, limit: int = 10) -> list[dict]:
     """Search Google Drive files.
 
     Args:
