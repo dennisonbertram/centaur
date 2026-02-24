@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -29,9 +30,18 @@ def get_plugin_context() -> PluginContext:
 
 
 def secret(key: str, default: str | None = None) -> str:
-    """Get a plugin-scoped secret. Never touches os.environ."""
+    """Get a secret. Resolution order: plugin .env → root .env → os.environ.
+
+    This allows secrets to be defined centrally in one root .env file,
+    overridden per-plugin, or injected via environment (Docker/k8s/sops/1pw).
+    """
     ctx = _plugin_ctx.get()
+    # 1. Plugin-scoped secrets (from plugin .env or root .env, already merged)
     val = ctx.secrets.get(key)
+    if val is not None:
+        return val
+    # 2. Fall back to os.environ (for Docker, k8s secrets, sops, 1pw, etc.)
+    val = os.environ.get(key)
     if val is not None:
         return val
     if default is not None:

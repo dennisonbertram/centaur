@@ -61,11 +61,36 @@ def _install_deps(deps: list[str]) -> None:
     subprocess.run(cmd, check=True, capture_output=True)
 
 
+def _load_env_file(path: Path) -> dict[str, str]:
+    """Parse a .env file into a dict. Ignores comments and blank lines."""
+    secrets: dict[str, str] = {}
+    if not path.exists():
+        return secrets
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        secrets[k.strip()] = v.strip()
+    return secrets
+
+
 class PluginManager:
-    def __init__(self, plugins_dir: Path, profiles_dir: Path | None = None):
+    def __init__(
+        self,
+        plugins_dir: Path,
+        profiles_dir: Path | None = None,
+        root_env_path: Path | None = None,
+    ):
         self.plugins_dir = plugins_dir
         self.profiles_dir = profiles_dir
         self.plugins: dict[str, LoadedPlugin] = {}
+        # Load root .env once — all plugins inherit these secrets
+        self._root_secrets: dict[str, str] = {}
+        if root_env_path is None:
+            # Default: .env at the repo root (parent of plugins_dir)
+            root_env_path = plugins_dir.parent / ".env"
+        self._root_secrets = _load_env_file(root_env_path)
 
     def _get_enabled_plugins(self, profile: str | None) -> set[str] | None:
         """Return set of enabled plugin names, or None for all."""
@@ -147,31 +172,52 @@ class PluginManager:
     def _load_plugin(self, plugin_dir: Path, manifest: dict) -> LoadedPlugin | None:
         name = manifest["name"]
 
-        # Load secrets from .env
-        secrets: dict[str, str] = {}
-        env_path = plugin_dir / ".env"
-        if env_path.exists():
-            for line in env_path.read_text().splitlines():
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                secrets[k.strip()] = v.strip()
+        # Build secrets: root .env (base) → plugin .env (override)
+        secrets: dict[str, str] = dict(self._root_secrets)
+        plugin_secrets = _load_env_file(plugin_dir / ".env")
+        secrets.update(plugin_secrets)
 
         ctx = PluginContext(name=name, secrets=secrets)
 
-        # Import the module
+        # Register the plugin dir as a package so relative imports work
+        pkg_name = f"ai_v2.plugins_runtime.{name}"
+        init_path = plugin_dir / "__init__.py"
+        if init_path.exists():
+            pkg_spec = importlib.util.spec_from_file_location(
+                pkg_name, init_path,
+                submodule_search_locations=[str(plugin_dir)],
+            )
+            if pkg_spec and pkg_spec.loader:
+                pkg_mod = importlib.util.module_from_spec(pkg_spec)
+                sys.modules[pkg_name] = pkg_mod
+                pkg_spec.loader.exec_module(pkg_mod)
+        else:
+            # Create a virtual package
+            import types
+            pkg_mod = types.ModuleType(pkg_name)
+            pkg_mod.__path__ = [str(plugin_dir)]  # type: ignore[attr-defined]
+            sys.modules[pkg_name] = pkg_mod
+
+        # Ensure parent namespace exists
+        if "ai_v2.plugins_runtime" not in sys.modules:
+            import types as _t
+            ns = _t.ModuleType("ai_v2.plugins_runtime")
+            ns.__path__ = []  # type: ignore[attr-defined]
+            sys.modules["ai_v2.plugins_runtime"] = ns
+
+        # Import the tools module
         module_file = manifest.get("module", "tools.py")
         module_path = plugin_dir / module_file
         if not module_path.exists():
             log.warning("plugin_module_missing", plugin=name, module=module_file)
             return None
 
-        mod_name = f"ai_v2.plugins_runtime.{name}"
+        mod_name = f"{pkg_name}.tools"
         spec = importlib.util.spec_from_file_location(mod_name, module_path)
         if not spec or not spec.loader:
             return None
         module = importlib.util.module_from_spec(spec)
+        module.__package__ = pkg_name  # type: ignore[attr-defined]
         sys.modules[mod_name] = module
         spec.loader.exec_module(module)
 

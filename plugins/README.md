@@ -5,9 +5,13 @@ Drop plugin directories here. Each plugin needs:
 ```
 plugins/
   my-plugin/
-    manifest.json    # {"name": "my-plugin", "description": "...", "module": "tools.py"}
-    .env             # PLUGIN_SCOPED_SECRET=value (gitignored)
-    tools.py         # async functions decorated with @plugin_tool
+    pyproject.toml   # [tool.ai-v2-plugin] section with module path
+    .env.example     # Document required secrets
+    src/ai_v2_plugin_my_plugin/
+      __init__.py
+      client.py      # API client
+      tools.py       # async functions decorated with @plugin_tool
+      cli.py         # typer CLI for standalone use
 ```
 
 ## Writing a plugin
@@ -26,8 +30,37 @@ async def my_search(query: str, limit: int = 10) -> dict:
 
 ## Secrets
 
-Each plugin's `.env` is loaded into an isolated context. Use `secret("KEY")` to access.
-Never use `os.environ` — plugin secrets are scoped to avoid leakage.
+Secrets are resolved in this order:
+1. **Plugin `.env`** — per-plugin overrides in `plugins/<name>/.env`
+2. **Root `.env`** — central file at repo root (define all secrets here)
+3. **Environment variables** — for Docker, k8s, sops, 1Password, etc.
+
+Use `secret("KEY")` to access. Never use `os.environ` — plugin secrets are scoped.
+
+## Available Plugins
+
+| Plugin | Description | Secrets |
+|--------|-------------|---------|
+| slack | Slack messages, channels, threads | SLACK_BOT_TOKEN |
+| linear | Linear issues, projects, cycles | LINEAR_API_KEY |
+| gsuite | Gmail, Calendar, Drive | GOOGLE_CREDENTIALS_JSON, GOOGLE_TOKEN_JSON |
+| notion | Notion pages, databases | NOTION_API_KEY |
+| reshift | Internal DB, Shift notes | RESHIFT_DB_*, SSH config |
+| allium | On-chain analytics, SQL | ALLIUM_API_KEY |
+| coingecko | Crypto market data | COINGECKO_API_KEY |
+| coinmetrics | Crypto market & on-chain analytics | COINMETRICS_API_KEY |
+| defillama | DeFi & stablecoin analytics | (none — public API) |
+| dune | Dune Analytics queries | DUNE_API_KEY |
+| messari | Crypto asset research | MESSARI_API_KEY |
+| nansen | Blockchain analytics, wallet labels | NANSEN_API_KEY |
+| posthog | Product analytics, HogQL | POSTHOG_API_KEY, POSTHOG_PROJECT_ID |
+| similarweb | Web traffic intelligence | SIMILARWEB_API_KEY |
+| kalshi | Prediction markets | KALSHI_API_KEY |
+| polymarket | Prediction markets | (none — public API) |
+| falconx | OTC crypto trading | FALCONX_API_KEY, FALCONX_API_SECRET, FALCONX_PASSPHRASE |
+| coinbase | Coinbase Prime custody | COINBASE_API_KEY, COINBASE_API_SECRET, COINBASE_PASSPHRASE |
+| anchorage | Anchorage Digital custody | ANCHORAGE_API_KEY, ANCHORAGE_API_SECRET |
+| bitgo | BitGo wallet management | BITGO_ACCESS_TOKEN, BITGO_ENTERPRISE_ID |
 
 ## Profiles
 
