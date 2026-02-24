@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import structlog
 from fastapi import FastAPI
@@ -11,7 +13,7 @@ from starlette.responses import JSONResponse
 
 from .config import settings
 from .db import close_pool, create_pool
-from .mcp_server import mcp, set_pool
+from .mcp_server import mcp, set_plugin_manager, set_pool
 from .plugin_manager import PluginManager
 from .routers import health, query, search, secrets, sync
 
@@ -53,15 +55,13 @@ app.include_router(sync.router)
 app.include_router(secrets.router)
 
 # Load plugins before creating MCP starlette app
-import os
-from pathlib import Path
-
 _app_root = Path(__file__).resolve().parent.parent.parent
 _plugins_dir = Path(os.environ.get("PLUGINS_DIR", _app_root / "plugins"))
 _profiles_dir = Path(os.environ.get("PROFILES_DIR", _app_root / "profiles"))
 
 plugin_manager = PluginManager(_plugins_dir, _profiles_dir)
 plugin_manager.discover(profile=os.environ.get("ACTIVE_PROFILE"))
+set_plugin_manager(plugin_manager)
 plugin_manager.register_mcp_tools(mcp)
 app.include_router(plugin_manager.create_rest_router())
 
@@ -80,9 +80,7 @@ class _MCPAuthMiddleware:
                 token = auth[7:]
 
             if not settings.api_secret_key or token != settings.api_secret_key:
-                resp = JSONResponse(
-                    {"detail": "Invalid or missing Bearer token"}, status_code=401
-                )
+                resp = JSONResponse({"detail": "Invalid or missing Bearer token"}, status_code=401)
                 await resp(scope, receive, send)
                 return
 

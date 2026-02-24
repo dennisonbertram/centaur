@@ -8,8 +8,8 @@ import asyncpg
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
-from .cli_tools import ALLOWED_CLIS, run_cli
 from .deps import EmbeddingService
+from .plugin_manager import PluginManager
 
 mcp = FastMCP(
     "Tempo AI v2",
@@ -18,6 +18,7 @@ mcp = FastMCP(
 )  # mounted at /mcp in app.py
 
 _pool: asyncpg.Pool | None = None
+_plugin_manager: PluginManager | None = None
 
 DISALLOWED_SQL = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE)\b",
@@ -28,6 +29,17 @@ DISALLOWED_SQL = re.compile(
 def set_pool(pool: asyncpg.Pool) -> None:
     global _pool
     _pool = pool
+
+
+def set_plugin_manager(plugin_manager: PluginManager) -> None:
+    global _plugin_manager
+    _plugin_manager = plugin_manager
+
+
+def _get_plugin_manager() -> PluginManager:
+    if _plugin_manager is None:
+        raise RuntimeError("Plugin manager not initialized")
+    return _plugin_manager
 
 
 def _get_pool() -> asyncpg.Pool:
@@ -247,25 +259,21 @@ async def sync_status() -> str:
 
 @mcp.tool()
 async def cli(tool: str, args: list[str]) -> str:
-    """Run a Paradigm CLI tool. Use list_tools() to see available tools and their descriptions.
+    """Run a plugin CLI by plugin name or configured script alias.
+
+    Use list_tools() to enumerate currently loaded plugin CLIs.
 
     Examples:
         cli("slack", ["search", "reth benchmarks"])
-        cli("slack", ["channel", "engineering", "-n", "20"])
-        cli("slack", ["thread", "https://slack.com/archives/C01/p1234"])
-        cli("reshift", ["notes", "search", "deal memo"])
-        cli("reshift", ["db", "SELECT * FROM funds LIMIT 5"])
         cli("gsuite", ["gmail", "search", "term sheet"])
-        cli("gsuite", ["calendar", "today"])
-        cli("linear", ["issues", "--state", "In Progress"])
-        cli("parchiver", ["search", "data room", "--limit", "10"])
-        cli("allium", ["sql-examples"])
-        cli("defillama", ["stablecoins"])
+        cli("defillama-plugin", ["stablecoins"])
     """
-    return await run_cli(tool, args)
+    manager = _get_plugin_manager()
+    return manager.run_cli(tool, args)
 
 
 @mcp.tool()
 async def list_tools() -> str:
-    """List all available CLI tools and their descriptions."""
-    return json.dumps(ALLOWED_CLIS, indent=2)
+    """List all dynamically discovered plugin CLIs and aliases."""
+    manager = _get_plugin_manager()
+    return json.dumps(manager.list_cli_tools(), indent=2)

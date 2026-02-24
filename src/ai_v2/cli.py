@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -382,6 +383,70 @@ def continuous(interval: int | None) -> None:
 
     settings = Settings()
     asyncio.run(run_continuous(settings, interval))
+
+
+# ---------------------------------------------------------------------------
+# Plugin commands
+# ---------------------------------------------------------------------------
+
+
+@cli.group("plugins")
+def plugins_group() -> None:
+    """Discover and test plugin imports, tools, and CLIs."""
+
+
+@plugins_group.command("list")
+@click.option("--profile", default=None, help="Optional profile name from profiles/*.json")
+def plugins_list(profile: str | None) -> None:
+    """List discovered plugins and tools from the plugin manager."""
+    from .plugin_manager import PluginManager
+
+    app_root = Path(__file__).resolve().parent.parent.parent
+    plugins_dir = Path(app_root / "plugins")
+    profiles_dir = Path(app_root / "profiles")
+
+    manager = PluginManager(plugins_dir, profiles_dir)
+    manager.discover(profile=profile)
+    click.echo(json.dumps(manager.plugin_test_matrix(), indent=2))
+
+
+@plugins_group.command("test")
+@click.option("--profile", default=None, help="Optional profile name from profiles/*.json")
+@click.option(
+    "--cli-args",
+    default="--help",
+    show_default=True,
+    help="Arguments passed to each plugin CLI for smoke testing.",
+)
+def plugins_test(profile: str | None, cli_args: str) -> None:
+    """Run plugin smoke tests: imports, dynamic tool discovery, and CLIs."""
+    from .plugin_manager import PluginManager
+
+    app_root = Path(__file__).resolve().parent.parent.parent
+    plugins_dir = Path(app_root / "plugins")
+    profiles_dir = Path(app_root / "profiles")
+
+    manager = PluginManager(plugins_dir, profiles_dir)
+    manager.discover(profile=profile)
+
+    import_and_discovery = manager.plugin_test_matrix()
+    cli_results = manager.smoke_test_clis(shlex.split(cli_args))
+    failures = [
+        result for result in cli_results if result.get("status") not in {"ok", "missing_cli"}
+    ]
+
+    click.echo(
+        json.dumps(
+            {
+                "imports_and_discovery": import_and_discovery,
+                "cli_smoke": cli_results,
+            },
+            indent=2,
+        )
+    )
+
+    if failures:
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------

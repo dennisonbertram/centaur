@@ -5,21 +5,17 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import json
+import os
 import shutil
 import subprocess
 import sys
+import tomllib
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, get_type_hints
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    try:
-        import tomllib
-    except ImportError:
-        import tomli as tomllib  # type: ignore[no-redef]
+from typing import Any, get_type_hints
 
 import structlog
+from click.testing import CliRunner
 from fastapi import APIRouter
 from pydantic import create_model
 
@@ -40,12 +36,31 @@ class LoadedTool:
         return f"{self.plugin_name}.{self.tool_name}"
 
 
+_LIFECYCLE_METHODS = frozenset({"close", "connect", "disconnect", "shutdown"})
+
+
 class LoadedPlugin:
-    def __init__(self, name: str, description: str, ctx: PluginContext, tools: list[LoadedTool]):
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        plugin_dir: Path,
+        cli_module: str,
+        scripts: dict[str, str],
+        ctx: PluginContext,
+        tools: list[LoadedTool],
+    ):
         self.name = name
         self.description = description
+        self.plugin_dir = plugin_dir
+        self.cli_module = cli_module
+        self.scripts = scripts
         self.ctx = ctx
         self.tools = tools
+
+    @property
+    def cli_path(self) -> Path:
+        return self.plugin_dir / self.cli_module
 
 
 def _install_deps(deps: list[str]) -> None:
@@ -103,9 +118,7 @@ class PluginManager:
         data = json.loads(profile_path.read_text())
         return set(data.get("plugins", []))
 
-    def _collect_plugins(
-        self, enabled: set[str] | None
-    ) -> list[tuple[Path, dict]]:
+    def _collect_plugins(self, enabled: set[str] | None) -> list[tuple[Path, dict]]:
         """Read pyproject.toml from each plugin dir and filter by profile."""
         plugins = []
         for plugin_dir in sorted(self.plugins_dir.iterdir()):
@@ -132,7 +145,9 @@ class PluginManager:
                 "name": name,
                 "description": project.get("description", ""),
                 "dependencies": project.get("dependencies", []),
+                "scripts": project.get("scripts", {}),
                 "module": plugin_conf.get("module", "tools.py"),
+                "cli_module": plugin_conf.get("cli_module", "cli.py"),
             }
             plugins.append((plugin_dir, meta))
         return plugins
@@ -153,8 +168,8 @@ class PluginManager:
         if all_deps:
             try:
                 _install_deps(list(set(all_deps)))
-            except Exception:
-                log.exception("plugin_deps_install_failed", deps=all_deps)
+            except Exception as exc:
+                log.warning("plugin_deps_install_failed", deps=all_deps, error=str(exc))
 
         # Now load each plugin
         loaded = []
@@ -163,8 +178,12 @@ class PluginManager:
                 plugin = self._load_plugin(plugin_dir, meta)
                 if plugin:
                     loaded.append(plugin)
-            except Exception:
-                log.exception("plugin_load_failed", plugin=meta.get("name", plugin_dir.name))
+            except Exception as exc:
+                log.warning(
+                    "plugin_load_failed",
+                    plugin=meta.get("name", plugin_dir.name),
+                    error=str(exc),
+                )
 
         self.plugins = {p.name: p for p in loaded}
         return loaded
@@ -184,7 +203,8 @@ class PluginManager:
         init_path = plugin_dir / "__init__.py"
         if init_path.exists():
             pkg_spec = importlib.util.spec_from_file_location(
-                pkg_name, init_path,
+                pkg_name,
+                init_path,
                 submodule_search_locations=[str(plugin_dir)],
             )
             if pkg_spec and pkg_spec.loader:
@@ -194,6 +214,7 @@ class PluginManager:
         else:
             # Create a virtual package
             import types
+
             pkg_mod = types.ModuleType(pkg_name)
             pkg_mod.__path__ = [str(plugin_dir)]  # type: ignore[attr-defined]
             sys.modules[pkg_name] = pkg_mod
@@ -201,18 +222,19 @@ class PluginManager:
         # Ensure parent namespace exists
         if "ai_v2.plugins_runtime" not in sys.modules:
             import types as _t
+
             ns = _t.ModuleType("ai_v2.plugins_runtime")
             ns.__path__ = []  # type: ignore[attr-defined]
             sys.modules["ai_v2.plugins_runtime"] = ns
 
-        # Import the tools module
-        module_file = manifest.get("module", "tools.py")
+        # Import the plugin module
+        module_file = manifest.get("module", "client.py")
         module_path = plugin_dir / module_file
         if not module_path.exists():
             log.warning("plugin_module_missing", plugin=name, module=module_file)
             return None
 
-        mod_name = f"{pkg_name}.tools"
+        mod_name = f"{pkg_name}.{Path(module_file).stem}"
         spec = importlib.util.spec_from_file_location(mod_name, module_path)
         if not spec or not spec.loader:
             return None
@@ -221,22 +243,242 @@ class PluginManager:
         sys.modules[mod_name] = module
         spec.loader.exec_module(module)
 
-        # Collect tools
-        tools: list[LoadedTool] = []
-        for attr_name in dir(module):
-            obj = getattr(module, attr_name)
-            if callable(obj) and hasattr(obj, "__plugin_tool__"):
-                tool_name = obj.__plugin_tool__
-                tools.append(LoadedTool(name, tool_name, obj, ctx))
+        # Set plugin context so _client() factories can call secret()
+        token = set_plugin_context(ctx)
+        try:
+            tools = self._collect_tools(name, module, ctx)
+        finally:
+            reset_plugin_context(token)
 
         description = manifest.get("description", "")
-        plugin = LoadedPlugin(name, description, ctx, tools)
+        plugin = LoadedPlugin(
+            name=name,
+            description=description,
+            plugin_dir=plugin_dir,
+            cli_module=manifest.get("cli_module", "cli.py"),
+            scripts=manifest.get("scripts", {}),
+            ctx=ctx,
+            tools=tools,
+        )
         log.info(
             "plugin_loaded",
             plugin=name,
             tools=[t.tool_name for t in tools],
         )
         return plugin
+
+    def _resolve_plugin_for_cli(self, tool: str) -> LoadedPlugin | None:
+        plugin = self.plugins.get(tool)
+        if plugin:
+            return plugin
+
+        # Allow script aliases from [project.scripts] to map back to plugins.
+        for candidate in self.plugins.values():
+            if tool in candidate.scripts:
+                return candidate
+        return None
+
+    def list_cli_tools(self) -> dict[str, dict[str, Any]]:
+        """Return dynamic CLI tool metadata for all loaded plugins."""
+        cli_tools: dict[str, dict[str, Any]] = {}
+        for plugin in self.plugins.values():
+            if not plugin.cli_path.exists():
+                continue
+            aliases = sorted(plugin.scripts.keys())
+            cli_tools[plugin.name] = {
+                "plugin": plugin.name,
+                "description": plugin.description,
+                "cli_path": str(plugin.cli_path),
+                "tool_count": len(plugin.tools),
+                "aliases": aliases,
+            }
+            for alias in aliases:
+                cli_tools[alias] = {
+                    "plugin": plugin.name,
+                    "description": plugin.description,
+                    "cli_path": str(plugin.cli_path),
+                    "tool_count": len(plugin.tools),
+                    "aliases": aliases,
+                }
+        return cli_tools
+
+    def run_cli(self, tool: str, args: list[str]) -> str:
+        """Run a plugin CLI dynamically without static allowlists."""
+        plugin = self._resolve_plugin_for_cli(tool)
+        if plugin is None:
+            available = sorted(self.list_cli_tools().keys())
+            return json.dumps(
+                {
+                    "error": f"Unknown CLI tool '{tool}'",
+                    "available": available,
+                }
+            )
+
+        cli_path = plugin.cli_path
+        if not cli_path.exists():
+            return json.dumps(
+                {
+                    "error": f"CLI not found for plugin '{plugin.name}'",
+                    "expected_path": str(cli_path),
+                }
+            )
+
+        cli_module_name = f"ai_v2.plugins_runtime.{plugin.name}.{cli_path.stem}"
+        cli_spec = importlib.util.spec_from_file_location(cli_module_name, cli_path)
+        if not cli_spec or not cli_spec.loader:
+            return json.dumps(
+                {
+                    "error": f"Unable to load CLI module for plugin '{plugin.name}'",
+                    "cli_path": str(cli_path),
+                }
+            )
+
+        cli_module = importlib.util.module_from_spec(cli_spec)
+        cli_module.__package__ = f"ai_v2.plugins_runtime.{plugin.name}"  # type: ignore[attr-defined]
+        sys.modules[cli_module_name] = cli_module
+
+        original_env: dict[str, str | None] = {}
+        for key, value in plugin.ctx.secrets.items():
+            original_env[key] = os.environ.get(key)
+            os.environ[key] = value
+        try:
+            cli_spec.loader.exec_module(cli_module)
+            app = getattr(cli_module, "app", None)
+            if app is None:
+                return json.dumps(
+                    {
+                        "error": f"CLI app not found for plugin '{plugin.name}'",
+                        "expected_object": "app",
+                    }
+                )
+
+            if hasattr(app, "registered_commands"):
+                from typer.main import get_command
+
+                app = get_command(app)
+
+            runner = CliRunner()
+            result = runner.invoke(app, args, prog_name=plugin.name)
+            output = (result.output or "").strip()
+            if result.exit_code != 0:
+                details: dict[str, Any] = {
+                    "error": f"CLI failed for plugin '{plugin.name}'",
+                    "exit_code": result.exit_code,
+                    "output": output,
+                }
+                if result.exception is not None:
+                    details["exception"] = str(result.exception)
+                return json.dumps(details)
+            return output
+        except Exception as exc:
+            return json.dumps(
+                {
+                    "error": f"CLI raised for plugin '{plugin.name}'",
+                    "detail": str(exc),
+                }
+            )
+        finally:
+            for key, previous in original_env.items():
+                if previous is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = previous
+
+    def plugin_test_matrix(self) -> list[dict[str, Any]]:
+        """Summarize import/discovery/CLI readiness for loaded plugins."""
+        matrix: list[dict[str, Any]] = []
+        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
+            matrix.append(
+                {
+                    "plugin": plugin.name,
+                    "library_import": True,
+                    "discovered_tools": [tool.tool_name for tool in plugin.tools],
+                    "cli_available": plugin.cli_path.exists(),
+                    "cli_path": str(plugin.cli_path),
+                    "aliases": sorted(plugin.scripts.keys()),
+                }
+            )
+        return matrix
+
+    def smoke_test_clis(self, cli_args: list[str] | None = None) -> list[dict[str, Any]]:
+        """Run a CLI smoke test for each loaded plugin that has a cli.py."""
+        args = cli_args or ["--help"]
+        results: list[dict[str, Any]] = []
+        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
+            if not plugin.cli_path.exists():
+                results.append(
+                    {
+                        "plugin": plugin.name,
+                        "status": "missing_cli",
+                        "cli_path": str(plugin.cli_path),
+                    }
+                )
+                continue
+
+            output = self.run_cli(plugin.name, args)
+            try:
+                parsed = json.loads(output)
+                if "error" in parsed:
+                    results.append(
+                        {
+                            "plugin": plugin.name,
+                            "status": "failed",
+                            "details": parsed,
+                        }
+                    )
+                    continue
+            except json.JSONDecodeError:
+                pass
+
+            results.append(
+                {
+                    "plugin": plugin.name,
+                    "status": "ok",
+                    "cli_path": str(plugin.cli_path),
+                }
+            )
+        return results
+
+    @staticmethod
+    def _collect_tools(plugin_name: str, module: Any, ctx: PluginContext) -> list[LoadedTool]:
+        """Collect tools from a plugin module.
+
+        If the module has a _client() factory, call it once to get a cached
+        instance and expose every public method as a tool.  Falls back to
+        @plugin_tool() decorated functions for plugins that need explicit control.
+        """
+        tools: list[LoadedTool] = []
+        seen: set[str] = set()
+
+        factory = getattr(module, "_client", None)
+        if factory and callable(factory):
+            instance = factory()
+            for method_name, descriptor in sorted(
+                vars(type(instance)).items(),
+                key=lambda item: item[0],
+            ):
+                if method_name.startswith("_") or method_name in _LIFECYCLE_METHODS:
+                    continue
+                if isinstance(descriptor, property):
+                    continue
+                if not callable(descriptor):
+                    continue
+                method = getattr(instance, method_name, None)
+                if not inspect.ismethod(method):
+                    continue
+                tools.append(LoadedTool(plugin_name, method_name, method, ctx))
+                seen.add(method_name)
+
+        # Fallback: @plugin_tool() decorated functions
+        for attr_name in dir(module):
+            obj = getattr(module, attr_name)
+            if callable(obj) and hasattr(obj, "__plugin_tool__"):
+                tool_name = obj.__plugin_tool__
+                if tool_name not in seen:
+                    tools.append(LoadedTool(plugin_name, tool_name, obj, ctx))
+                    seen.add(tool_name)
+
+        return tools
 
     def register_mcp_tools(self, mcp: Any) -> int:
         """Register all loaded plugin tools as MCP tools."""
@@ -281,16 +523,21 @@ def _make_wrapper(tool: LoadedTool) -> Callable:
     async def wrapper(**kwargs: Any) -> str:
         token = set_plugin_context(tool.ctx)
         try:
-            result = await tool.fn(**kwargs)
+            if inspect.iscoroutinefunction(tool.fn):
+                result = await tool.fn(**kwargs)
+            else:
+                result = tool.fn(**kwargs)
             if isinstance(result, str):
                 return result
             return json.dumps(result, default=str)
         except Exception as e:
-            return json.dumps({
-                "error": str(e),
-                "plugin": tool.plugin_name,
-                "tool": tool.tool_name,
-            })
+            return json.dumps(
+                {
+                    "error": str(e),
+                    "plugin": tool.plugin_name,
+                    "tool": tool.tool_name,
+                }
+            )
         finally:
             reset_plugin_context(token)
 
@@ -298,7 +545,10 @@ def _make_wrapper(tool: LoadedTool) -> Callable:
     wrapper.__name__ = tool.qualified_name.replace(".", "_")
     wrapper.__doc__ = tool.fn.__doc__ or f"{tool.plugin_name} — {tool.tool_name}"
     wrapper.__signature__ = inspect.signature(tool.fn)  # type: ignore[attr-defined]
-    wrapper.__annotations__ = get_type_hints(tool.fn)
+    try:
+        wrapper.__annotations__ = get_type_hints(tool.fn)
+    except Exception:
+        wrapper.__annotations__ = getattr(tool.fn, "__annotations__", {})
     return wrapper
 
 
@@ -313,7 +563,10 @@ def _register_mcp_tool(mcp: Any, tool: LoadedTool) -> None:
 def _register_rest_endpoint(router: APIRouter, tool: LoadedTool) -> None:
     """Register a single plugin tool as a REST POST endpoint."""
     sig = inspect.signature(tool.fn)
-    hints = get_type_hints(tool.fn)
+    try:
+        hints = get_type_hints(tool.fn)
+    except Exception:
+        hints = getattr(tool.fn, "__annotations__", {})
 
     # Build Pydantic model from function signature
     fields: dict[str, Any] = {}
