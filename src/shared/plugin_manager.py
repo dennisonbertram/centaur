@@ -6,6 +6,7 @@ import importlib.util
 import inspect
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -40,6 +41,44 @@ class LoadedTool:
 
 
 _LIFECYCLE_METHODS = frozenset({"close", "connect", "disconnect", "shutdown"})
+
+# Mapping from Python built-in types to clean names for schema output
+_BUILTIN_TYPE_NAMES: dict[type, str] = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+    dict: "object",
+    type(None): "null",
+}
+
+
+def _friendly_type_name(annotation: Any) -> str:
+    """Convert a Python type annotation to a clean, human-readable string.
+
+    Avoids raw ``<class 'str'>`` output by using simple names for built-in types
+    and ``str()`` for union / generic forms.
+    """
+    if annotation in _BUILTIN_TYPE_NAMES:
+        return _BUILTIN_TYPE_NAMES[annotation]
+    origin = getattr(annotation, "__origin__", None)
+    args = getattr(annotation, "__args__", None)
+    # typing.Optional / Union
+    if (origin is types.UnionType or (origin is not None and str(origin) == "typing.Union")) and args:
+        parts = [_friendly_type_name(a) for a in args]
+        return " | ".join(parts)
+    # list[X], dict[K, V], etc.
+    if origin is not None and args:
+        base = _BUILTIN_TYPE_NAMES.get(origin, getattr(origin, "__name__", str(origin)))
+        inner = ", ".join(_friendly_type_name(a) for a in args)
+        return f"{base}[{inner}]"
+    # Plain class — use __name__ if available
+    name = getattr(annotation, "__name__", None)
+    if name:
+        return name
+    # Fallback
+    return str(annotation)
 
 
 class LoadedPlugin:
@@ -492,6 +531,58 @@ class PluginManager:
 
         return results
 
+    def smoke_test_rest_routes(self) -> list[dict[str, Any]]:
+        """Verify that every plugin tool got a REST route registered."""
+        router = self.create_rest_router()
+        registered: set[str] = set()
+        for route in router.routes:
+            if hasattr(route, "path"):
+                registered.add(route.path)  # type: ignore[union-attr]
+
+        results: list[dict[str, Any]] = []
+        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
+            missing: list[str] = []
+            for tool in plugin.tools:
+                expected = f"/plugins/{plugin.name}/{tool.tool_name}"
+                if expected not in registered:
+                    missing.append(tool.tool_name)
+            results.append(
+                {
+                    "plugin": plugin.name,
+                    "status": "ok" if not missing else "failed",
+                    "registered_tools": len(plugin.tools) - len(missing),
+                    "total_tools": len(plugin.tools),
+                    "missing_routes": missing,
+                }
+            )
+        return results
+
+    def smoke_test_schemas(self) -> list[dict[str, Any]]:
+        """Validate describe_plugin output for every loaded plugin."""
+        bad_pattern = re.compile(r"<class '")
+        results: list[dict[str, Any]] = []
+        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
+            schema = self.describe_plugin(plugin.name)
+            problems: list[str] = []
+            if "error" in schema:
+                problems.append(f"describe_error: {schema['error']}")
+            else:
+                for tool_schema in schema.get("tools", []):
+                    for pname, pinfo in tool_schema.get("parameters", {}).items():
+                        ptype = pinfo.get("type", "")
+                        if bad_pattern.search(str(ptype)):
+                            problems.append(
+                                f"{tool_schema['name']}.{pname}: raw type '{ptype}'"
+                            )
+            results.append(
+                {
+                    "plugin": plugin.name,
+                    "status": "ok" if not problems else "failed",
+                    "problems": problems,
+                }
+            )
+        return results
+
     @staticmethod
     def _collect_tools(plugin_name: str, module: Any, ctx: PluginContext) -> list[LoadedTool]:
         """Collect tools from a plugin module.
@@ -543,14 +634,25 @@ class PluginManager:
             return {"error": f"Plugin '{plugin_name}' not found"}
         tools: list[dict[str, Any]] = []
         for tool in sorted(plugin.tools, key=lambda t: t.tool_name):
-            sig = inspect.signature(tool.fn)
+            try:
+                sig = inspect.signature(tool.fn)
+            except (TypeError, ValueError) as exc:
+                tools.append(
+                    {
+                        "name": tool.tool_name,
+                        "description": (tool.fn.__doc__ or "").strip().split("\n")[0],
+                        "parameters": {},
+                        "signature_error": str(exc),
+                    }
+                )
+                continue
             params: dict[str, Any] = {}
             for pname, param in sig.parameters.items():
                 if pname == "self":
                     continue
                 ptype = "any"
                 if param.annotation is not inspect.Parameter.empty:
-                    ptype = str(param.annotation)
+                    ptype = _friendly_type_name(param.annotation)
                 pinfo: dict[str, Any] = {"type": ptype}
                 if param.default is not inspect.Parameter.empty:
                     pinfo["default"] = param.default

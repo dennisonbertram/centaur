@@ -471,7 +471,7 @@ def plugins_run(tool: str, args: tuple[str, ...]) -> None:
     help="Arguments passed to each plugin CLI for smoke testing.",
 )
 def plugins_test(cli_args: str) -> None:
-    """Run plugin smoke tests across imports, registry, CLIs, and aliases."""
+    """Run plugin smoke tests across imports, registry, CLIs, REST routes, and schemas."""
     app_root = Path(__file__).resolve().parent.parent.parent
     plugins_dir = Path(app_root / "plugins")
 
@@ -482,6 +482,8 @@ def plugins_test(cli_args: str) -> None:
     import_and_discovery = manager.plugin_test_matrix()
     cli_results = manager.smoke_test_clis(shlex.split(cli_args))
     alias_results = manager.smoke_test_aliases(shlex.split(cli_args))
+    rest_results = manager.smoke_test_rest_routes()
+    schema_results = manager.smoke_test_schemas()
 
     failures: list[dict[str, object]] = []
     failures.extend(result for result in registry_results if result.get("status") != "ok")
@@ -491,6 +493,8 @@ def plugins_test(cli_args: str) -> None:
     failures.extend(
         result for result in alias_results if result.get("status") not in {"ok", "missing_aliases"}
     )
+    failures.extend(result for result in rest_results if result.get("status") != "ok")
+    failures.extend(result for result in schema_results if result.get("status") != "ok")
 
     click.echo(
         json.dumps(
@@ -499,6 +503,8 @@ def plugins_test(cli_args: str) -> None:
                 "registry_smoke": registry_results,
                 "cli_smoke": cli_results,
                 "alias_smoke": alias_results,
+                "rest_routes": rest_results,
+                "schema_validation": schema_results,
                 "summary": {
                     "plugins_loaded": len(import_and_discovery),
                     "registry_failures": len(
@@ -517,6 +523,12 @@ def plugins_test(cli_args: str) -> None:
                             for result in alias_results
                             if result.get("status") not in {"ok", "missing_aliases"}
                         ]
+                    ),
+                    "rest_failures": len(
+                        [result for result in rest_results if result.get("status") != "ok"]
+                    ),
+                    "schema_failures": len(
+                        [result for result in schema_results if result.get("status") != "ok"]
                     ),
                 },
             },

@@ -2,6 +2,7 @@
 
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from google import genai
@@ -73,7 +74,7 @@ class Veo3Client:
         aspect_ratio: str = "16:9",
         resolution: str = "720p",
         poll_interval: float = 20.0,
-        progress_callback: callable | None = None,
+        progress_callback: Callable | None = None,
     ) -> Path:
         """Generate a video from a text prompt.
 
@@ -145,7 +146,7 @@ class Veo3Client:
         aspect_ratio: str = "16:9",
         resolution: str = "720p",
         poll_interval: float = 20.0,
-        progress_callback: callable | None = None,
+        progress_callback: Callable | None = None,
     ) -> Path:
         """Generate a video using an image as the first frame.
 
@@ -223,7 +224,7 @@ class Veo3Client:
         output: str | Path,
         model: str = "full",
         poll_interval: float = 20.0,
-        progress_callback: callable | None = None,
+        progress_callback: Callable | None = None,
     ) -> Path:
         """Extend an existing video with additional content.
 
