@@ -24,9 +24,7 @@ from shared.config import Settings
 from shared.db import close_pool, create_pool, fetch
 from shared.models import EmbeddingRecord
 from shared.plugin_manager import PluginManager
-from shared.sandbox.config import SandboxConfig
-from shared.sandbox.docker_builder import build_sandbox_image
-from shared.sandbox.repo_sync import sync_loop, sync_repos
+
 
 _LOG_LEVELS = {
     "critical": 50,
@@ -554,140 +552,7 @@ def serve(host: str, port: int, reload: bool) -> None:
     uvicorn.run("api.app:app", host=host, port=port, reload=reload)
 
 
-# ---------------------------------------------------------------------------
-# Sandbox subgroup
-# ---------------------------------------------------------------------------
 
-
-@cli.group()
-@click.option(
-    "--repos-dir",
-    default="/repos",
-    envvar="SANDBOX_REPOS_DIR",
-    help="Directory to clone repos into.",
-)
-@click.option(
-    "--api-url",
-    default="http://localhost:8000",
-    envvar="SANDBOX_API_BASE_URL",
-    help="API base URL for sandbox containers.",
-)
-@click.pass_context
-def sandbox(ctx: click.Context, repos_dir: str, api_url: str) -> None:
-    """Sandbox — build Docker images preloaded with all Tempo repos."""
-    ctx.ensure_object(dict)
-    ctx.obj["repos_dir"] = repos_dir
-    ctx.obj["config"] = SandboxConfig(api_base_url=api_url)
-
-
-@sandbox.command("sync-repos")
-@click.pass_context
-def sync_repos_cmd(ctx: click.Context) -> None:
-    """Clone or update all configured repos to the local directory."""
-    config = ctx.obj["config"]
-    repos_dir: str = ctx.obj["repos_dir"]
-
-    result = asyncio.run(sync_repos(config, target_dir=repos_dir))
-    click.echo(f"Synced: {result.synced}, Failed: {result.failed}")
-    if result.errors:
-        click.echo("Errors:")
-        for err in result.errors:
-            click.echo(f"  - {err}")
-        sys.exit(1)
-
-
-@sandbox.command("build")
-@click.option("--tag", default=None, help="Image tag (default: latest).")
-@click.pass_context
-def build_cmd(ctx: click.Context, tag: str | None) -> None:
-    """Build Docker image with current repos."""
-    config = ctx.obj["config"]
-    repos_dir: str = ctx.obj["repos_dir"]
-
-    success = build_sandbox_image(config, tag=tag, repos_dir=repos_dir)
-    if success:
-        image = f"{config.sandbox_image_name}:{tag or 'latest'}"
-        click.echo(f"Built image: {image}")
-    else:
-        click.echo("Build failed. Check logs for details.", err=True)
-        sys.exit(1)
-
-
-@sandbox.command("update")
-@click.option("--tag", default=None, help="Image tag (default: latest).")
-@click.pass_context
-def update_cmd(ctx: click.Context, tag: str | None) -> None:
-    """Sync repos and rebuild the Docker image."""
-    config = ctx.obj["config"]
-    repos_dir: str = ctx.obj["repos_dir"]
-
-    click.echo("Step 1/2: Syncing repos...")
-    result = asyncio.run(sync_repos(config, target_dir=repos_dir))
-    click.echo(f"  Synced: {result.synced}, Failed: {result.failed}")
-    if result.errors:
-        click.echo("  Errors during sync:")
-        for err in result.errors:
-            click.echo(f"    - {err}")
-
-    click.echo("Step 2/2: Building image...")
-    success = build_sandbox_image(config, tag=tag, repos_dir=repos_dir)
-    if success:
-        image = f"{config.sandbox_image_name}:{tag or 'latest'}"
-        click.echo(f"Done. Image: {image}")
-    else:
-        click.echo("Build failed.", err=True)
-        sys.exit(1)
-
-
-@sandbox.command("run")
-@click.option("--tag", default="latest", help="Image tag to run.")
-@click.option(
-    "--sync-on-start/--no-sync-on-start",
-    default=False,
-    help="Sync repos when container starts.",
-)
-@click.pass_context
-def run_cmd(ctx: click.Context, tag: str, sync_on_start: bool) -> None:
-    """Run sandbox container interactively."""
-    config = ctx.obj["config"]
-    image = f"{config.sandbox_image_name}:{tag}"
-
-    cmd = [
-        "docker",
-        "run",
-        "--rm",
-        "-it",
-        "-e",
-        f"AI_V2_API_URL={config.api_base_url}",
-    ]
-    if sync_on_start:
-        cmd.extend(["-e", "SYNC_ON_START=true"])
-
-    cmd.append(image)
-
-    click.echo(f"Starting sandbox: {image}")
-    try:
-        subprocess.run(cmd, check=True)
-    except subprocess.CalledProcessError as exc:
-        click.echo(f"Container exited with code {exc.returncode}", err=True)
-        sys.exit(exc.returncode)
-    except FileNotFoundError:
-        click.echo("Error: docker not found. Is Docker installed?", err=True)
-        sys.exit(1)
-
-
-@sandbox.command("cron")
-@click.pass_context
-def cron_cmd(ctx: click.Context) -> None:
-    """Run continuous sync loop (for cron/systemd)."""
-    config = ctx.obj["config"]
-    repos_dir: str = ctx.obj["repos_dir"]
-
-    click.echo(f"Starting sync loop (interval: {config.update_interval_hours}h, dir: {repos_dir})")
-    try:
-        asyncio.run(sync_loop(config, target_dir=repos_dir))
-    except KeyboardInterrupt:
-        click.echo("Sync loop stopped.")
 
 
 if __name__ == "__main__":

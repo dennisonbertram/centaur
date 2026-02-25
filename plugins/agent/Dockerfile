@@ -27,19 +27,44 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
+# Install Amp CLI
+RUN curl -fsSL https://ampcode.com/install.sh | bash
+
 # Repos directory
 RUN mkdir -p /repos
 
 # Copy pre-cloned repos (populated by repo_sync)
 COPY repos/ /repos/
 
-# API client config
+# API config
 ENV AI_V2_API_URL="http://host.docker.internal:8000"
+
+# --- MCP harness configs (no auth — trusted Docker network) ---
+
+# Amp CLI
+RUN mkdir -p /root/.config/amp && echo '{\
+  "amp.mcpServers": {\
+    "tempo-ai": { "url": "http://host.docker.internal:8000/mcp/" }\
+  }\
+}' > /root/.config/amp/settings.json
+
+# Claude Code
+RUN echo '{\
+  "mcpServers": {\
+    "tempo-ai": {\
+      "type": "http",\
+      "url": "http://host.docker.internal:8000/mcp/"\
+    }\
+  }\
+}' > /root/.claude.json
+
+# Codex (stdio only — uses mcp-remote proxy)
+RUN mkdir -p /root/.codex && printf '[mcp_servers.tempo-ai]\ncommand = "npx"\nargs = ["-y", "mcp-remote@latest", "http://host.docker.internal:8000/mcp/"]\n' > /root/.codex/config.toml
 
 # Working directory
 WORKDIR /repos
 
-# Entrypoint for Codex
+# Entrypoint
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]

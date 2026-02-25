@@ -30,6 +30,7 @@ def _image() -> str:
 def _container_env() -> list[str]:
     """Build env vars to forward into the container."""
     keys = [
+        "AMP_API_KEY",
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "GITHUB_TOKEN",

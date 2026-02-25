@@ -1,4 +1,4 @@
-.PHONY: install lint test migrate sync api etl sandbox-build sandbox-update-repos fmt clean
+.PHONY: install lint test migrate sync api etl agent-build fmt clean
 
 install:
 	uv sync
@@ -26,11 +26,8 @@ api:
 etl:
 	uv run ai-v2 continuous
 
-sandbox-build:
-	docker build -t tempo-ai-sandbox:latest sandbox/
-
-sandbox-update-repos:
-	uv run ai-v2 sandbox sync-repos
+agent-build:
+	docker build -t tempo-agent:latest plugins/agent/
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
