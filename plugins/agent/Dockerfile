@@ -39,27 +39,8 @@ COPY repos/ /repos/
 # API config
 ENV AI_V2_API_URL="http://host.docker.internal:8000"
 
-# --- MCP harness configs (no auth — trusted Docker network) ---
-
-# Amp CLI
-RUN mkdir -p /root/.config/amp && echo '{\
-  "amp.mcpServers": {\
-    "tempo-ai": { "url": "http://host.docker.internal:8000/mcp/" }\
-  }\
-}' > /root/.config/amp/settings.json
-
-# Claude Code
-RUN echo '{\
-  "mcpServers": {\
-    "tempo-ai": {\
-      "type": "http",\
-      "url": "http://host.docker.internal:8000/mcp/"\
-    }\
-  }\
-}' > /root/.claude.json
-
-# Codex (stdio only — uses mcp-remote proxy)
-RUN mkdir -p /root/.codex && printf '[mcp_servers.tempo-ai]\ncommand = "npx"\nargs = ["-y", "mcp-remote@latest", "http://host.docker.internal:8000/mcp/"]\n' > /root/.codex/config.toml
+# MCP config dirs (populated by entrypoint from AI_V2_API_KEY env)
+RUN mkdir -p /root/.config/amp /root/.codex
 
 # Working directory
 WORKDIR /repos
