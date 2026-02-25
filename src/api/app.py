@@ -5,11 +5,12 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 
 from api.mcp_server import mcp, set_plugin_manager, set_pool
 from api.routers import health, query, search, secrets
@@ -85,3 +86,28 @@ class _MCPAuthMiddleware:
 
 
 app.mount("/mcp", app=_MCPAuthMiddleware())
+
+
+# ---------------------------------------------------------------------------
+# Reverse proxy: /api/webhooks/* → slackbot on port 3001
+# ---------------------------------------------------------------------------
+_SLACKBOT_URL = os.environ.get("SLACKBOT_URL", "http://localhost:3001")
+
+
+@app.api_route("/api/webhooks/{path:path}", methods=["GET", "POST"])
+async def proxy_webhooks(request: Request, path: str):
+    """Forward Slack webhook requests to the slackbot service."""
+    target = f"{_SLACKBOT_URL}/api/webhooks/{path}"
+    body = await request.body()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.request(
+            method=request.method,
+            url=target,
+            headers={k: v for k, v in request.headers.items() if k.lower() != "host"},
+            content=body,
+        )
+    return StreamingResponse(
+        content=iter([resp.content]),
+        status_code=resp.status_code,
+        headers=dict(resp.headers),
+    )

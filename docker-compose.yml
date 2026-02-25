@@ -54,7 +54,7 @@ services:
     build:
       context: apps/slackbot
     ports:
-      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     env_file: .env
     environment:
       REDIS_URL: redis://redis:6379
