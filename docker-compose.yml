@@ -35,6 +35,8 @@ services:
     environment:
       DATABASE_URL: postgresql://tempo:tempo_dev@postgres:5432/ai_v2
       SLACKBOT_URL: http://slackbot:3001
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
