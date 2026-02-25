@@ -8,7 +8,7 @@ Set these in root `.env` (preferred) or `plugins/websearch/.env`:
 
 - `EXA_API_KEY`
 - `ANTHROPIC_API_KEY`
-- `DEEP_RESEARCH_MODEL` (default: `claude-opus-4-20250514`)
+- `DEEP_RESEARCH_MODEL` (default: `claude-opus-4-6`)
 
 ## Tools
 

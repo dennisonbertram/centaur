@@ -55,7 +55,7 @@ class WebSearchClient:
         self._exa_api_key = exa_api_key or self._optional_secret("EXA_API_KEY")
         self._anthropic_api_key = anthropic_api_key or self._optional_secret("ANTHROPIC_API_KEY")
         self._deep_research_model = deep_research_model or self._optional_secret(
-            "DEEP_RESEARCH_MODEL", "claude-opus-4-20250514"
+            "DEEP_RESEARCH_MODEL", "claude-opus-4-6"
         )
         self._exa_base_url = exa_base_url.rstrip("/")
         self._max_retries = max_retries
