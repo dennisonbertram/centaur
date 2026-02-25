@@ -60,6 +60,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379
       AI_V2_API_URL: http://api:8000
+      AI_V2_API_KEY: ${API_SECRET_KEY}
     depends_on:
       api:
         condition: service_started
