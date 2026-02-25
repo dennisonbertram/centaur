@@ -66,21 +66,33 @@ app.include_router(plugin_manager.create_rest_router())
 _mcp_starlette = mcp.streamable_http_app()
 
 
+_DOCKER_PREFIXES = ("172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.")
+
+
 class _MCPAuthMiddleware:
-    """ASGI middleware that validates Bearer token before forwarding to MCP."""
+    """ASGI middleware that validates Bearer token before forwarding to MCP.
+
+    Requests from Docker bridge networks (172.17-22.*) skip auth.
+    """
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             request = Request(scope, receive)
-            token: str | None = None
-            auth = request.headers.get("authorization", "")
-            if auth.lower().startswith("bearer "):
-                token = auth[7:]
+            client_ip = request.client.host if request.client else ""
+            is_docker = client_ip.startswith(_DOCKER_PREFIXES) or client_ip == "127.0.0.1"
 
-            if not settings.api_secret_key or token != settings.api_secret_key:
-                resp = JSONResponse({"detail": "Invalid or missing Bearer token"}, status_code=401)
-                await resp(scope, receive, send)
-                return
+            if not is_docker:
+                token: str | None = None
+                auth = request.headers.get("authorization", "")
+                if auth.lower().startswith("bearer "):
+                    token = auth[7:]
+
+                if not settings.api_secret_key or token != settings.api_secret_key:
+                    resp = JSONResponse(
+                        {"detail": "Invalid or missing Bearer token"}, status_code=401
+                    )
+                    await resp(scope, receive, send)
+                    return
 
         await _mcp_starlette(scope, receive, send)
 
