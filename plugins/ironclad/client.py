@@ -1,7 +1,6 @@
 """Ironclad API client."""
 
 import os
-import sys
 from typing import Any
 
 import httpx
@@ -36,13 +35,11 @@ class IroncladClient:
         self.client_secret = client_secret or os.environ.get("IRONCLAD_CLIENT_SECRET")
 
         if not self.api_token and not (self.client_id and self.client_secret):
-            print("Error: Authentication required", file=sys.stderr)
-            print(
-                "Set IRONCLAD_API_TOKEN or IRONCLAD_CLIENT_ID + IRONCLAD_CLIENT_SECRET",
-                file=sys.stderr,
+            raise RuntimeError(
+                "Ironclad authentication required.\n"
+                "Set IRONCLAD_API_TOKEN or IRONCLAD_CLIENT_ID + IRONCLAD_CLIENT_SECRET.\n"
+                "Get a token at: Company Settings → API"
             )
-            print("Get a token at: Company Settings → API", file=sys.stderr)
-            sys.exit(1)
 
         self._access_token: str | None = None
         self._client = httpx.Client(timeout=30.0)
@@ -66,14 +63,12 @@ class IroncladClient:
         )
 
         if response.status_code != 200:
-            print(f"Error: OAuth2 token request failed: {response.text}", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError(f"Ironclad OAuth2 token request failed: {response.text}")
 
         data = response.json()
         self._access_token = data.get("access_token")
         if not self._access_token:
-            print("Error: No access_token in OAuth2 response", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError("Ironclad OAuth2 response missing access_token")
 
         return self._access_token
 
@@ -84,13 +79,11 @@ class IroncladClient:
         # SECURITY: Reject any attempt to override the impersonation email via env var.
         env_override = os.environ.get("IRONCLAD_IMPERSONATE_EMAIL")
         if env_override and env_override != _IMPERSONATE_EMAIL:
-            print(
-                f"Error: Impersonating other users is not permitted. "
+            raise RuntimeError(
+                f"Impersonating other users is not permitted. "
                 f"IRONCLAD_IMPERSONATE_EMAIL must not be set (got '{env_override}'). "
-                f"All requests use {_IMPERSONATE_EMAIL}.",
-                file=sys.stderr,
+                f"All requests use {_IMPERSONATE_EMAIL}."
             )
-            sys.exit(1)
 
         token = self._get_access_token()
         headers = {
@@ -105,19 +98,15 @@ class IroncladClient:
         response = self._client.request(method, url, headers=headers, params=params, json=json_data)
 
         if response.status_code == 401:
-            print("Error: Authentication failed - invalid or expired token", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError("Ironclad authentication failed - invalid or expired token")
         elif response.status_code == 403:
-            print("Error: Access denied - insufficient permissions", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError("Ironclad access denied - insufficient permissions")
         elif response.status_code == 404:
             return {}
         elif response.status_code >= 400:
-            print(
-                f"Error: API request failed ({response.status_code}): {response.text}",
-                file=sys.stderr,
+            raise RuntimeError(
+                f"Ironclad API request failed ({response.status_code}): {response.text}"
             )
-            sys.exit(1)
 
         if not response.text:
             return {}

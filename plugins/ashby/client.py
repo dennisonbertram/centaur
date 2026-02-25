@@ -1,7 +1,6 @@
 """Ashby API client."""
 
 import os
-import sys
 from typing import Any
 
 import httpx
@@ -15,10 +14,11 @@ class AshbyClient:
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.environ.get("ASHBY_API_KEY")
         if not self.api_key:
-            print("Error: ASHBY_API_KEY environment variable not set", file=sys.stderr)
-            print("Set it with: export ASHBY_API_KEY='your_key'", file=sys.stderr)
-            print("Create a key at: https://app.ashbyhq.com/admin/api/keys", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError(
+                "ASHBY_API_KEY not set.\n"
+                "Set it with: export ASHBY_API_KEY='your_key'\n"
+                "Create a key at: https://app.ashbyhq.com/admin/api/keys"
+            )
 
         self._client = httpx.Client(
             timeout=30.0,
@@ -34,20 +34,19 @@ class AshbyClient:
         response = self._client.post(f"{BASE_URL}/{endpoint}", json=data or {})
 
         if response.status_code == 401:
-            print("Error: API key is missing or invalid", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError("Ashby API error: API key is missing or invalid")
         elif response.status_code == 403:
-            print("Error: API key lacks required permissions", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError("Ashby API error: API key lacks required permissions")
 
         result = response.json()
 
         if not result.get("success", True):
             errors = result.get("errors", [])
+            msgs = []
             for error in errors:
                 msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-                print(f"Error: {msg}", file=sys.stderr)
-            sys.exit(1)
+                msgs.append(msg)
+            raise RuntimeError(f"Ashby API error: {'; '.join(msgs)}")
 
         return result
 

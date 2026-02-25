@@ -1,7 +1,6 @@
 """DocuSign eSignature API client with JWT authentication."""
 
 import os
-import sys
 import time
 from typing import Any
 
@@ -38,8 +37,7 @@ class DocuSignClient:
                 with open(private_key_path) as f:
                     self.private_key = f.read()
             except FileNotFoundError:
-                print(f"Error: Private key file not found: {private_key_path}", file=sys.stderr)
-                sys.exit(1)
+                raise RuntimeError(f"DocuSign private key file not found: {private_key_path}")
 
         if not all([self.integration_key, self.user_id, self.private_key]):
             missing = []
@@ -92,14 +90,11 @@ class DocuSignClient:
             error_msg = response.text
             if "consent_required" in error_msg:
                 consent_url = f"{self.auth_url}/oauth/auth?response_type=code&scope=signature%20impersonation&client_id={self.integration_key}&redirect_uri=https://www.docusign.com"
-                print(
-                    "Error: User consent required. Visit this URL to grant consent:",
-                    file=sys.stderr,
+                raise RuntimeError(
+                    f"DocuSign user consent required. Visit: {consent_url}"
                 )
-                print(consent_url, file=sys.stderr)
             else:
-                print(f"Error: OAuth token request failed: {error_msg}", file=sys.stderr)
-            sys.exit(1)
+                raise RuntimeError(f"DocuSign OAuth token request failed: {error_msg}")
 
         data = response.json()
         self._access_token = data.get("access_token")
@@ -130,19 +125,15 @@ class DocuSignClient:
         if response.status_code == 401:
             self._access_token = None
             self._token_expires = 0
-            print("Error: Authentication failed - token expired or invalid", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError("DocuSign authentication failed - token expired or invalid")
         elif response.status_code == 403:
-            print("Error: Access denied - insufficient permissions", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError("DocuSign access denied - insufficient permissions")
         elif response.status_code == 404:
             return {}
         elif response.status_code >= 400:
-            print(
-                f"Error: API request failed ({response.status_code}): {response.text}",
-                file=sys.stderr,
+            raise RuntimeError(
+                f"DocuSign API request failed ({response.status_code}): {response.text}"
             )
-            sys.exit(1)
 
         if not response.text:
             return {}
