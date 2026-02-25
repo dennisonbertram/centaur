@@ -18,7 +18,7 @@ from typing import Any, get_type_hints
 
 import structlog
 from click.testing import CliRunner
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Body, Depends
 from pydantic import create_model
 from typer.main import get_command
 
@@ -270,12 +270,24 @@ class PluginManager:
         sys.modules[mod_name] = module
         spec.loader.exec_module(module)
 
+        # Inject secrets into os.environ so _client() factories using
+        # os.getenv() can find them, then restore afterwards.
+        original_env: dict[str, str | None] = {}
+        for key, value in secrets.items():
+            original_env[key] = os.environ.get(key)
+            os.environ[key] = value
+
         # Set plugin context so _client() factories can call secret()
         token = set_plugin_context(ctx)
         try:
             tools = self._collect_tools(name, module, ctx)
         finally:
             reset_plugin_context(token)
+            for key, previous in original_env.items():
+                if previous is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = previous
 
         description = manifest.get("description", "")
         plugin = LoadedPlugin(
@@ -693,6 +705,10 @@ class PluginManager:
             if isinstance(result, str):
                 return result
             return json.dumps(result, default=str)
+        except SystemExit as e:
+            return json.dumps(
+                {"error": f"Plugin called sys.exit({e.code})", "plugin": plugin_name, "tool": tool_name}
+            )
         except Exception as e:
             return json.dumps(
                 {"error": str(e), "plugin": plugin_name, "tool": tool_name}
@@ -746,6 +762,14 @@ def _make_wrapper(tool: LoadedTool) -> Callable:
             if isinstance(result, str):
                 return result
             return json.dumps(result, default=str)
+        except SystemExit as e:
+            return json.dumps(
+                {
+                    "error": f"Plugin called sys.exit({e.code})",
+                    "plugin": tool.plugin_name,
+                    "tool": tool.tool_name,
+                }
+            )
         except Exception as e:
             return json.dumps(
                 {
@@ -798,10 +822,14 @@ def _register_rest_endpoint(router: APIRouter, tool: LoadedTool) -> None:
 
     wrapper = _make_wrapper(tool)
 
-    async def endpoint(body: InputModel) -> dict:  # type: ignore[valid-type]
+    async def endpoint(body=Body(...)) -> dict:  # type: ignore[valid-type]
         result = await wrapper(**body.model_dump())
         return {"plugin": tool.plugin_name, "tool": tool.tool_name, "result": result}
 
+    # Set annotations explicitly with the actual model class to avoid
+    # `from __future__ import annotations` turning it into a string ForwardRef
+    # that can't be resolved (InputModel is a local variable, not a global name).
+    endpoint.__annotations__ = {"body": InputModel, "return": dict}
     endpoint.__name__ = f"{tool.plugin_name}_{tool.tool_name}"
     router.post(
         f"/{tool.plugin_name}/{tool.tool_name}",
