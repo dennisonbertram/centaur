@@ -23,9 +23,23 @@ function createBot() {
     state: process.env.REDIS_URL ? createRedisState() : createMemoryState(),
   });
 
+  function buildSessionContext(threadId: string): string {
+    const now = new Date().toISOString().replace("T", " ").slice(0, 19);
+    return [
+      "# Session Context",
+      "",
+      `- **Date/Time**: ${now} UTC`,
+      `- **Thread ID**: ${threadId}`,
+      "",
+      "---",
+      "",
+    ].join("\n");
+  }
+
   async function handleMessage(
     thread: Parameters<Parameters<typeof bot.onNewMention>[0]>[0],
-    messageText: string
+    messageText: string,
+    isFirstMessage: boolean
   ) {
     const { harness, cleanedText } = extractHarness(messageText);
     const threadKey = thread.id;
@@ -37,8 +51,13 @@ function createBot() {
 
     await thread.startTyping("Running...");
 
+    // Prepend session context on first message
+    const message = isFirstMessage
+      ? buildSessionContext(threadKey) + cleanedText
+      : cleanedText;
+
     // Execute message and get final result
-    const result = await execute(threadKey, cleanedText);
+    const result = await execute(threadKey, message);
 
     await thread.post(result);
   }
@@ -46,13 +65,13 @@ function createBot() {
   // First @mention — subscribe and run
   bot.onNewMention(async (thread, message) => {
     await thread.subscribe();
-    await handleMessage(thread, message.text);
+    await handleMessage(thread, message.text, true);
   });
 
   // Follow-up messages in subscribed threads
   bot.onSubscribedMessage(async (thread, message) => {
     if (!message.isMention) return;
-    await handleMessage(thread, message.text);
+    await handleMessage(thread, message.text, false);
   });
 
   return bot;

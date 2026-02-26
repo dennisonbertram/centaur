@@ -44,8 +44,9 @@ RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex \
     && ln -s /usr/local/bin/amp ~/.amp/bin/amp
 WORKDIR /repos
 
-# Copy pre-cloned repos
+# Copy pre-cloned repos and system prompt
 COPY --chown=agent:agent repos/ /repos/
+COPY --chown=agent:agent SYSTEM_PROMPT.md /repos/AGENTS.md
 
 # Minimal entrypoint — all config passed inline via CLI flags
 COPY --chmod=755 entrypoint.sh /entrypoint.sh
