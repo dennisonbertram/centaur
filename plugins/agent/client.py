@@ -468,6 +468,20 @@ class AgentClient:
             cmd=cmd[:5],
         )
 
+        # Create the turn on the session immediately so SSE can stream it live
+        live_turn: dict[str, Any] = {
+            "turn_id": len(session.get("turns", [])) + 1,
+            "user_message": message,
+            "events": [],
+            "result": "",
+            "started_at": started_ts,
+            "finished_at": None,
+            "exit_code": None,
+            "timed_out": False,
+            "duration_s": 0,
+        }
+        session.setdefault("turns", []).append(live_turn)
+
         # Use low-level exec API for streaming
         api = client.api
         exec_id = api.exec_create(
@@ -498,8 +512,16 @@ class AgentClient:
                 buf += stdout_decoder.decode(stdout_chunk)
                 while "\n" in buf:
                     idx = buf.index("\n")
-                    lines.append(buf[:idx])
+                    line = buf[:idx]
+                    lines.append(line)
                     buf = buf[idx + 1 :]
+                    # Append event to live turn in real-time for SSE
+                    stripped = line.strip()
+                    if stripped:
+                        try:
+                            live_turn["events"].append(json.loads(stripped))
+                        except json.JSONDecodeError:
+                            live_turn["events"].append({"type": "raw", "text": stripped})
             if stderr_chunk:
                 err_buf += stderr_decoder.decode(stderr_chunk)
                 while "\n" in err_buf:
@@ -510,19 +532,13 @@ class AgentClient:
         # Flush remaining buffers
         if buf.strip():
             lines.append(buf)
+            stripped = buf.strip()
+            try:
+                live_turn["events"].append(json.loads(stripped))
+            except json.JSONDecodeError:
+                live_turn["events"].append({"type": "raw", "text": stripped})
         if err_buf.strip():
             stderr_lines.append(err_buf)
-
-        # Capture events for thread viewer
-        turn_events = []
-        for raw_line in lines:
-            stripped = raw_line.strip()
-            if not stripped:
-                continue
-            try:
-                turn_events.append(json.loads(stripped))
-            except json.JSONDecodeError:
-                turn_events.append({"type": "raw", "text": stripped})
 
         # If timed out, kill the exec process
         if timed_out:
@@ -545,20 +561,15 @@ class AgentClient:
         if agent_thread_id:
             session["agent_thread_id"] = agent_thread_id
 
-        # Store turn for thread viewer
-        turn = {
-            "turn_id": len(session.get("turns", [])) + 1,
-            "user_message": message,
-            "events": turn_events,
-            "result": result_text,
-            "started_at": started_ts,
-            "finished_at": time.time(),
-            "exit_code": exit_code,
-            "timed_out": timed_out,
-            "duration_s": round(time.time() - started_ts, 1),
-        }
-        session.setdefault("turns", []).append(turn)
-        _persist_turn(slack_thread_key, turn)
+        # Finalize the live turn
+        live_turn["result"] = result_text
+        live_turn["finished_at"] = time.time()
+        live_turn["exit_code"] = exit_code
+        live_turn["timed_out"] = timed_out
+        live_turn["duration_s"] = round(time.time() - started_ts, 1)
+
+        # Persist to PG in background
+        _persist_turn(slack_thread_key, live_turn)
 
         session["state"] = "idle"
         session["last_activity"] = time.time()
