@@ -5,15 +5,22 @@ claude-code, codex) inside them. Returns the final result text.
 """
 
 import codecs
+import contextlib
 import json
 import os
 import time
 from typing import Any
 
 import docker
+import structlog
 from docker.errors import NotFound
 
+log = structlog.get_logger()
+
 HARNESSES = ("amp", "claude-code", "codex")
+
+# Max seconds to wait for a single exec call before killing it
+EXEC_TIMEOUT = int(os.getenv("AGENT_EXEC_TIMEOUT", "600"))
 
 # In-memory session registry: slack_thread_key → session dict
 _sessions: dict[str, dict[str, Any]] = {}
@@ -35,46 +42,39 @@ def _container_env() -> list[str]:
         "OPENAI_API_KEY",
         "GITHUB_TOKEN",
     ]
-    env: list[str] = []
+    env = [
+        f"AI_V2_API_URL={os.getenv('AI_V2_API_URL', 'http://localhost:8000')}",
+        f"AI_V2_API_KEY={os.getenv('API_SECRET_KEY', '')}",
+    ]
     for k in keys:
         v = os.getenv(k, "")
         if v:
             env.append(f"{k}={v}")
+    # Codex exec uses CODEX_API_KEY (falls back to OPENAI_API_KEY internally,
+    # but setting it explicitly avoids issues with some versions)
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    if openai_key and not os.getenv("CODEX_API_KEY"):
+        env.append(f"CODEX_API_KEY={openai_key}")
     return env
 
 
-def _mcp_config() -> str:
-    """Build inline MCP config JSON for the tempo-ai server."""
-    api_url = os.getenv("AI_V2_API_URL", "http://localhost:8000")
-    api_key = os.getenv("API_SECRET_KEY", "")
-    cfg = {
-        "tempo-ai": {
-            "type": "http",
-            "url": f"{api_url}/mcp/",
-            "headers": {"Authorization": f"Bearer {api_key}"},
-        }
-    }
-    return json.dumps(cfg)
-
-
-def _build_command(
-    harness: str, message: str, thread_id: str | None
-) -> list[str]:
-    mcp_cfg = _mcp_config()
-
+def _build_command(harness: str, message: str, thread_id: str | None) -> list[str]:
     if harness == "claude-code":
         return [
             "claude",
             "--dangerously-skip-permissions",
-            "--output-format", "stream-json",
+            "--output-format",
+            "stream-json",
             "--verbose",
-            "--mcp-config", mcp_cfg,
             *(["--session-id", thread_id] if thread_id else []),
-            "-p", message,
+            "-p",
+            message,
         ]
     if harness == "codex":
         return [
-            "codex", "exec", "--json",
+            "codex",
+            "exec",
+            "--json",
             "--full-auto",
             "--skip-git-repo-check",
             *(["resume", thread_id] if thread_id else []),
@@ -87,13 +87,15 @@ def _build_command(
         "--no-notifications",
         "--dangerously-allow-all",
         "--stream-json",
-        "--mcp-config", mcp_cfg,
         *(["threads", "continue", thread_id] if thread_id else []),
-        "-x", message,
+        "-x",
+        message,
     ]
 
 
-def _extract_result(raw_lines: list[str], harness: str) -> tuple[str, str | None]:
+def _extract_result(
+    raw_lines: list[str], harness: str, stderr_lines: list[str] | None = None
+) -> tuple[str, str | None]:
     """Parse JSON-line output from a harness CLI.
 
     Returns (result_text, agent_thread_id).
@@ -115,11 +117,15 @@ def _extract_result(raw_lines: list[str], harness: str) -> tuple[str, str | None
             etype = event.get("type", "")
             if etype == "thread.started":
                 agent_thread_id = event.get("thread_id")
+            elif etype == "item.completed":
+                item = event.get("item", {})
+                if item.get("type") == "agent_message":
+                    result_text = item.get("text", result_text)
             elif etype == "turn.completed":
-                items = event.get("items", [])
-                msgs = [i for i in items if i.get("type") == "agent_message"]
-                if msgs:
-                    result_text = msgs[-1].get("text", "")
+                # Some codex versions bundle items in turn.completed
+                for item in event.get("items", []):
+                    if item.get("type") == "agent_message":
+                        result_text = item.get("text", result_text)
             elif etype == "error":
                 result_text = f"❌ {event.get('message', 'Unknown error')}"
             continue
@@ -129,13 +135,19 @@ def _extract_result(raw_lines: list[str], harness: str) -> tuple[str, str | None
         if etype == "system" and event.get("subtype") == "init":
             agent_thread_id = event.get("session_id")
         elif etype == "result":
-            result_text = event.get("result", "")
+            result_text = event.get("result", result_text)
         elif etype == "assistant" and event.get("message", {}).get("content"):
             for part in event["message"]["content"]:
                 if part.get("type") == "text" and part.get("text"):
                     result_text = part["text"]
         elif etype == "error":
             result_text = f"❌ {event.get('error', 'Unknown error')}"
+
+    # Fallback: if no structured output found, use last non-empty stderr
+    if not result_text and stderr_lines:
+        tail = [line for line in stderr_lines[-10:] if line.strip()]
+        if tail:
+            result_text = "❌ Agent produced no output. Stderr:\n" + "\n".join(tail)
 
     return result_text, agent_thread_id
 
@@ -233,23 +245,25 @@ class AgentClient:
         """
         session = _sessions.get(slack_thread_key)
         if not session:
-            raise RuntimeError(
-                f"No session for thread '{slack_thread_key}'. Call spawn() first."
-            )
+            raise RuntimeError(f"No session for thread '{slack_thread_key}'. Call spawn() first.")
 
         client = _docker_client()
         try:
             container = client.containers.get(session["container_id"])
         except NotFound:
             del _sessions[slack_thread_key]
-            raise RuntimeError("Container is gone. Call spawn() to create a new one.")
+            raise RuntimeError("Container is gone. Call spawn() to create a new one.") from None
 
-        cmd = _build_command(
-            session["harness"], message, session["agent_thread_id"]
-        )
+        cmd = _build_command(session["harness"], message, session["agent_thread_id"])
 
         session["state"] = "working"
         session["last_activity"] = time.time()
+        log.info(
+            "agent_exec_start",
+            thread=slack_thread_key,
+            harness=session["harness"],
+            cmd=cmd[:5],
+        )
 
         # Use low-level exec API for streaming
         api = client.api
@@ -262,30 +276,70 @@ class AgentClient:
 
         output = api.exec_start(exec_id, stream=True, demux=True)
 
-        # Collect output lines
-        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        # Collect stdout and stderr separately
+        stdout_decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        stderr_decoder = codecs.getincrementaldecoder("utf-8")("replace")
         lines: list[str] = []
+        stderr_lines: list[str] = []
         buf = ""
+        err_buf = ""
+        timed_out = False
+        started = time.monotonic()
 
         for stdout_chunk, stderr_chunk in output:
+            if time.monotonic() - started > EXEC_TIMEOUT:
+                timed_out = True
+                log.warning("agent_exec_timeout", thread=slack_thread_key, timeout=EXEC_TIMEOUT)
+                break
             if stdout_chunk:
-                buf += decoder.decode(stdout_chunk)
+                buf += stdout_decoder.decode(stdout_chunk)
                 while "\n" in buf:
                     idx = buf.index("\n")
                     lines.append(buf[:idx])
-                    buf = buf[idx + 1:]
+                    buf = buf[idx + 1 :]
+            if stderr_chunk:
+                err_buf += stderr_decoder.decode(stderr_chunk)
+                while "\n" in err_buf:
+                    idx = err_buf.index("\n")
+                    stderr_lines.append(err_buf[:idx])
+                    err_buf = err_buf[idx + 1 :]
 
-        # Flush remaining buffer
+        # Flush remaining buffers
         if buf.strip():
             lines.append(buf)
+        if err_buf.strip():
+            stderr_lines.append(err_buf)
 
-        result_text, agent_thread_id = _extract_result(lines, session["harness"])
+        # If timed out, kill the exec process
+        if timed_out:
+            with contextlib.suppress(Exception):
+                container.exec_run(["pkill", "-TERM", "-f", session["harness"]], detach=True)
+
+        # Check exec exit code
+        exit_code = api.exec_inspect(exec_id).get("ExitCode")
+
+        result_text, agent_thread_id = _extract_result(lines, session["harness"], stderr_lines)
+
+        if timed_out and not result_text:
+            result_text = f"❌ Agent timed out after {EXEC_TIMEOUT}s."
+        elif exit_code and exit_code != 0 and not result_text:
+            result_text = f"❌ Agent exited with code {exit_code}."
+            if stderr_lines:
+                tail = "\n".join(stderr_lines[-5:])
+                result_text += f"\n```\n{tail}\n```"
 
         if agent_thread_id:
             session["agent_thread_id"] = agent_thread_id
 
         session["state"] = "idle"
         session["last_activity"] = time.time()
+        log.info(
+            "agent_exec_done",
+            thread=slack_thread_key,
+            exit_code=exit_code,
+            timed_out=timed_out,
+            result_len=len(result_text),
+        )
 
         return {
             "session_id": slack_thread_key,
@@ -306,9 +360,7 @@ class AgentClient:
             }
 
         return {
-            "sessions": [
-                {"session_id": k, **v} for k, v in _sessions.items()
-            ],
+            "sessions": [{"session_id": k, **v} for k, v in _sessions.items()],
             "count": len(_sessions),
         }
 
