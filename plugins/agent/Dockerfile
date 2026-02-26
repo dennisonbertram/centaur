@@ -29,7 +29,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install all harness CLIs
 RUN curl -fsSL https://ampcode.com/install.sh | bash \
-    && ln -s /root/.local/bin/amp /usr/local/bin/amp
+    && cp -L /root/.amp/bin/amp /usr/local/bin/amp
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
 # Non-root user (required by claude-code --dangerously-skip-permissions)
