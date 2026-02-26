@@ -57,46 +57,39 @@ def _mcp_config() -> str:
     return json.dumps(cfg)
 
 
-_MCP_CONFIG_PATH = "/tmp/tempo-mcp.json"
-
-
 def _build_command(
     harness: str, message: str, thread_id: str | None
 ) -> list[str]:
     mcp_cfg = _mcp_config()
 
-    # Write MCP config to a temp file and run the harness in one shot.
-    # Avoids race conditions — config is ready before the CLI starts.
     if harness == "claude-code":
-        inner = (
-            f"claude --dangerously-skip-permissions --output-format stream-json"
-            f" --mcp-config {_MCP_CONFIG_PATH}"
-            + (f" --session-id {thread_id}" if thread_id else "")
-            + f" -p {_shell_quote(message)}"
-        )
-    elif harness == "codex":
-        inner = (
-            f"codex exec --json --full-auto --skip-git-repo-check"
-            + (f" resume {thread_id}" if thread_id else "")
-            + f" {_shell_quote(message)}"
-        )
-    else:
-        inner = (
-            f"amp --no-ide --no-notifications --dangerously-allow-all --stream-json"
-            f" --mcp-config {_MCP_CONFIG_PATH}"
-            + (f" threads continue {thread_id}" if thread_id else "")
-            + f" -x {_shell_quote(message)}"
-        )
-
+        return [
+            "claude",
+            "--dangerously-skip-permissions",
+            "--output-format", "stream-json",
+            "--mcp-config", mcp_cfg,
+            *(["--session-id", thread_id] if thread_id else []),
+            "-p", message,
+        ]
+    if harness == "codex":
+        return [
+            "codex", "exec", "--json",
+            "--full-auto",
+            "--skip-git-repo-check",
+            *(["resume", thread_id] if thread_id else []),
+            message,
+        ]
+    # Default: amp
     return [
-        "bash", "-c",
-        f"cat > {_MCP_CONFIG_PATH} << 'MCPEOF'\n{mcp_cfg}\nMCPEOF\n{inner}",
+        "amp",
+        "--no-ide",
+        "--no-notifications",
+        "--dangerously-allow-all",
+        "--stream-json",
+        "--mcp-config", mcp_cfg,
+        *(["threads", "continue", thread_id] if thread_id else []),
+        "-x", message,
     ]
-
-
-def _shell_quote(s: str) -> str:
-    """Quote a string for safe shell embedding."""
-    return "'" + s.replace("'", "'\\''") + "'"
 
 
 def _extract_result(raw_lines: list[str], harness: str) -> tuple[str, str | None]:
