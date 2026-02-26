@@ -31,7 +31,7 @@ def _docker_client() -> docker.DockerClient:
 
 
 def _image() -> str:
-    return os.getenv("AGENT_IMAGE", "tempo-agent:latest")
+    return os.getenv("AGENT_IMAGE", "agent2:latest")
 
 
 def _container_env() -> list[str]:
