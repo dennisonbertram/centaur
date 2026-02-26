@@ -34,12 +34,8 @@ def _container_env() -> list[str]:
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "GITHUB_TOKEN",
-        "API_SECRET_KEY",
     ]
-    env = [
-        f"AI_V2_API_URL={os.getenv('AI_V2_API_URL', 'http://localhost:8000')}",
-        f"AI_V2_API_KEY={os.getenv('API_SECRET_KEY', '')}",
-    ]
+    env: list[str] = []
     for k in keys:
         v = os.getenv(k, "")
         if v:
@@ -47,20 +43,39 @@ def _container_env() -> list[str]:
     return env
 
 
+def _mcp_config() -> str:
+    """Build inline MCP config JSON for the tempo-ai server."""
+    api_url = os.getenv("AI_V2_API_URL", "http://localhost:8000")
+    api_key = os.getenv("API_SECRET_KEY", "")
+    cfg = {
+        "tempo-ai": {
+            "type": "http",
+            "url": f"{api_url}/mcp/",
+            "headers": {"Authorization": f"Bearer {api_key}"},
+        }
+    }
+    return json.dumps(cfg)
+
+
 def _build_command(
     harness: str, message: str, thread_id: str | None
 ) -> list[str]:
+    mcp_cfg = _mcp_config()
+
     if harness == "claude-code":
         return [
             "claude",
             "--dangerously-skip-permissions",
             "--output-format", "stream-json",
-            *(["--continue", thread_id] if thread_id else []),
+            "--mcp-config", mcp_cfg,
+            *(["--session-id", thread_id] if thread_id else []),
             "-p", message,
         ]
     if harness == "codex":
         return [
             "codex", "exec", "--json",
+            "--full-auto",
+            "--skip-git-repo-check",
             *(["resume", thread_id] if thread_id else []),
             message,
         ]
@@ -71,6 +86,7 @@ def _build_command(
         "--no-notifications",
         "--dangerously-allow-all",
         "--stream-json",
+        "--mcp-config", mcp_cfg,
         *(["threads", "continue", thread_id] if thread_id else []),
         "-x", message,
     ]
@@ -241,9 +257,6 @@ class AgentClient:
             cmd,
             stdout=True,
             stderr=True,
-            environment={
-                "THREAD_ID": session["agent_thread_id"] or "",
-            },
         )["Id"]
 
         output = api.exec_start(exec_id, stream=True, demux=True)

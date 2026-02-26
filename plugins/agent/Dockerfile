@@ -1,4 +1,4 @@
-FROM ubuntu:24.04 AS base
+FROM ubuntu:24.04
 
 # System deps
 RUN apt-get update && apt-get install -y \
@@ -18,35 +18,37 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Node.js (for TS repos)
+# Install Node.js
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust (for Rust repos)
+# Install Rust
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-# Install Amp CLI
-RUN curl -fsSL https://ampcode.com/install.sh | bash
+# Install all harness CLIs
+RUN curl -fsSL https://ampcode.com/install.sh | bash \
+    && chmod a+rx /root/.local/bin/amp
+RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
-# Repos directory
-RUN mkdir -p /repos
+# Non-root user (required by claude-code --dangerously-skip-permissions)
+RUN useradd -m -s /bin/bash agent \
+    && mkdir -p /repos \
+    && chown agent:agent /repos
 
-# Copy pre-cloned repos (populated by repo_sync)
-COPY repos/ /repos/
+# Make root-installed tools accessible to agent user
+ENV PATH="/root/.local/bin:/root/.cargo/bin:${PATH}"
 
-# API config
-ENV AI_V2_API_URL="http://localhost:8000"
-
-# MCP config dirs (populated by entrypoint from AI_V2_API_KEY env)
-RUN mkdir -p /root/.config/amp /root/.codex
-
-# Working directory
+# Pre-create config dirs
+USER agent
+RUN mkdir -p ~/.config/amp ~/.codex
 WORKDIR /repos
 
-# Entrypoint
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Copy pre-cloned repos
+COPY --chown=agent:agent repos/ /repos/
+
+# Minimal entrypoint — all config passed inline via CLI flags
+COPY --chmod=755 entrypoint.sh /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]
