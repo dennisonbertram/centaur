@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
+import secrets as _secrets
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -89,7 +93,9 @@ class _MCPAuthMiddleware:
                 if auth.lower().startswith("bearer "):
                     token = auth[7:]
 
-                if not settings.api_secret_key or token != settings.api_secret_key:
+                if not settings.api_secret_key or not _secrets.compare_digest(
+                    token, settings.api_secret_key
+                ):
                     resp = JSONResponse(
                         {"detail": "Invalid or missing Bearer token"}, status_code=401
                     )
@@ -106,13 +112,41 @@ app.mount("/mcp", app=_MCPAuthMiddleware())
 # Reverse proxy: /api/webhooks/* → slackbot on port 3001
 # ---------------------------------------------------------------------------
 _SLACKBOT_URL = os.environ.get("SLACKBOT_URL", "http://localhost:3001")
+_SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
+_SLACK_TIMESTAMP_MAX_AGE = 5 * 60  # 5 minutes
+
+
+def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool:
+    """Verify a Slack request signature (v0 scheme).
+
+    See https://api.slack.com/authentication/verifying-requests-from-slack
+    """
+    if not _SLACK_SIGNING_SECRET:
+        log.warning("slack_signing_secret_not_set")
+        return False
+    try:
+        if abs(time.time() - int(timestamp)) > _SLACK_TIMESTAMP_MAX_AGE:
+            return False
+    except (ValueError, TypeError):
+        return False
+    sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
+    expected = "v0=" + hmac.new(
+        _SLACK_SIGNING_SECRET.encode(), sig_basestring.encode(), hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)
 
 
 @app.api_route("/api/webhooks/{path:path}", methods=["GET", "POST"])
 async def proxy_webhooks(request: Request, path: str):
     """Forward Slack webhook requests to the slackbot service."""
-    target = f"{_SLACKBOT_URL}/api/webhooks/{path}"
     body = await request.body()
+
+    slack_signature = request.headers.get("x-slack-signature", "")
+    slack_timestamp = request.headers.get("x-slack-request-timestamp", "")
+    if not _verify_slack_signature(body, slack_timestamp, slack_signature):
+        return JSONResponse({"detail": "Invalid Slack signature"}, status_code=401)
+
+    target = f"{_SLACKBOT_URL}/ui/api/webhooks/{path}"
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.request(
             method=request.method,
