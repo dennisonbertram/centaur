@@ -67,6 +67,7 @@ def _build_command(
             "claude",
             "--dangerously-skip-permissions",
             "--output-format", "stream-json",
+            "--verbose",
             "--mcp-config", mcp_cfg,
             *(["--session-id", thread_id] if thread_id else []),
             "-p", message,
