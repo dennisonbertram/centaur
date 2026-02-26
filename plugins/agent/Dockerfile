@@ -29,16 +29,13 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Install all harness CLIs
 RUN curl -fsSL https://ampcode.com/install.sh | bash \
-    && chmod a+rx /root/.local/bin/amp
+    && ln -s /root/.local/bin/amp /usr/local/bin/amp
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
 
 # Non-root user (required by claude-code --dangerously-skip-permissions)
 RUN useradd -m -s /bin/bash agent \
     && mkdir -p /repos \
     && chown agent:agent /repos
-
-# Make root-installed tools accessible to agent user
-ENV PATH="/root/.local/bin:/root/.cargo/bin:${PATH}"
 
 # Pre-create config dirs
 USER agent
