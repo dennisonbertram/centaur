@@ -119,6 +119,19 @@ def _docker_client() -> docker.DockerClient:
     return docker.from_env()
 
 
+def _wait_ready(container: Any, timeout: int = 15) -> None:
+    """Wait for the entrypoint to signal readiness (touch ~/.ready)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        exit_code, _ = container.exec_run(
+            ["test", "-f", "/home/agent/.ready"], demux=False
+        )
+        if exit_code == 0:
+            return
+        time.sleep(0.1)
+    log.warning("container_ready_timeout", timeout=timeout)
+
+
 def _image() -> str:
     return os.getenv("AGENT_IMAGE", "agent2:latest")
 
@@ -316,6 +329,9 @@ class AgentClient:
             },
             name=f"tempo-agent-{slack_thread_key.replace(':', '-')[:40]}",
         )
+
+        # Wait for entrypoint to finish critical setup (config files, worktree)
+        _wait_ready(container)
 
         session = {
             "container_id": container.id,
