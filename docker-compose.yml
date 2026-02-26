@@ -38,7 +38,9 @@ services:
       DATABASE_URL: postgresql://tempo:tempo_dev@postgres:5432/ai_v2
       SLACKBOT_URL: http://slackbot:3001
       OP_VAULT: AI-V2
-      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
+      OP_EMAIL: ${OP_EMAIL:-}
+      OP_SECRET_KEY: ${OP_SECRET_KEY:-}
+      OP_MASTER_PASSWORD: ${OP_MASTER_PASSWORD:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -55,7 +57,9 @@ services:
     environment:
       DATABASE_URL: postgresql://tempo:tempo_dev@postgres:5432/ai_v2
       OP_VAULT: AI-V2
-      OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
+      OP_EMAIL: ${OP_EMAIL:-}
+      OP_SECRET_KEY: ${OP_SECRET_KEY:-}
+      OP_MASTER_PASSWORD: ${OP_MASTER_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy

@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from pathlib import Path
+
 from threading import Lock
 from time import monotonic
 from typing import Any
@@ -45,10 +45,6 @@ def get_plugin_context() -> PluginContext:
 # Vault name to read from — override with OP_VAULT env var.
 _OP_VAULT = os.environ.get("OP_VAULT", "AI-V2")
 
-# Docker secret path — if present, we read the service account token from here
-# instead of relying on an env var or interactive session.
-_OP_SA_TOKEN_PATH = Path("/run/secrets/op_token")
-
 # Cache: key → (value, expiry_monotonic)
 _op_cache: dict[str, tuple[str, float]] = {}
 _op_cache_lock = Lock()
@@ -61,7 +57,8 @@ _op_available: bool | None = None
 def _ensure_op_auth() -> bool:
     """Ensure the 1Password CLI is available and has credentials.
 
-    In containers the service account token is mounted at /run/secrets/op_token.
+    In containers the entrypoint.sh handles signin/signout and exports secrets
+    as env vars before the process starts — op CLI is not needed at runtime.
     Locally, the user should have an active ``op signin`` session.
     Returns True if op CLI is available. Result is cached for the process lifetime.
     """
@@ -72,12 +69,6 @@ def _ensure_op_auth() -> bool:
     if not shutil.which("op"):
         _op_available = False
         return False
-
-    # If a Docker secret is mounted, inject it for the op CLI
-    if _OP_SA_TOKEN_PATH.exists() and not os.environ.get("OP_SERVICE_ACCOUNT_TOKEN"):
-        token = _OP_SA_TOKEN_PATH.read_text().strip()
-        if token:
-            os.environ["OP_SERVICE_ACCOUNT_TOKEN"] = token
 
     _op_available = True
     return True
@@ -128,8 +119,8 @@ def secret(key: str, default: str | None = None) -> str:
 
     - **PluginContext**: Set by PluginManager, populated from .env files (if any).
     - **1Password**: On-demand via ``op read``, cached in-memory with 5min TTL.
-      Requires ``op`` CLI and either an interactive session (local dev) or
-      ``OP_SERVICE_ACCOUNT_TOKEN`` (deploy, via Docker secret at /run/secrets/op_token).
+      Requires ``op`` CLI — locally via interactive session, in containers
+      via entrypoint.sh (signs in, loads secrets as env vars, signs out).
     - **os.environ**: Final fallback for standalone CLI, Docker env, k8s, etc.
     """
     # 1. Check plugin context if available (server mode)

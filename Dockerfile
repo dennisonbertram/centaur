@@ -28,6 +28,11 @@ RUN python -c "import tomllib, pathlib; deps = set(); [deps.update(tomllib.load(
 # Copy migrations
 COPY migrations/ migrations/
 
+# Entrypoint: 1Password bootstrap (signin → load secrets → signout → exec)
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 8000
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["uv", "run", "uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
