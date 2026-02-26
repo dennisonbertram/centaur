@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from typing import Annotated
 
 import asyncpg
@@ -32,7 +33,7 @@ async def verify_api_key(
         if auth.lower().startswith("bearer "):
             token = auth[7:]
 
-    if not token or token != settings.api_secret_key:
+    if not token or not secrets.compare_digest(token, settings.api_secret_key):
         raise HTTPException(status_code=401, detail="Invalid API key")
     return token
 
