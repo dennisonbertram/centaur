@@ -757,6 +757,11 @@ class PluginManager:
                 for name, p in self.plugins.items()
             }
 
+        # Describe endpoint
+        @router.get("/{plugin_name}")
+        async def describe_plugin(plugin_name: str) -> dict:
+            return self.describe_plugin(plugin_name)
+
         return router
 
 

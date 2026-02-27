@@ -26,9 +26,22 @@ Repos: `~/github/{org}/{repo}` | Git pre-configured, `gh` authenticated
 
 Tools: Rust, Node 22, Python 3 (uv), Foundry (forge/cast/anvil), rg, fd, jq, tmux, cmake, protobuf
 
+## API Access
+
+The AI v2 API is available at `$AI_V2_API_URL` (auth: `Authorization: Bearer $AI_V2_API_KEY`). Use `curl` to call it.
+
+**Core endpoints:**
+- `POST /plugins/{plugin}/{tool}` — call any plugin tool (JSON body = tool args)
+- `GET /plugins/{plugin}` — describe a plugin's tools and schemas
+- `GET /plugins` — list all plugins
+- `POST /search` — hybrid semantic + keyword search (`{"query": "...", "limit": 20}`)
+- `POST /query` — read-only SQL on raw_records/embeddings (`{"query": "SELECT ..."}`)
+
+Example: `curl -s -X POST -H "Authorization: Bearer $AI_V2_API_KEY" -H "Content-Type: application/json" -d '{"symbol": "ETH"}' "$AI_V2_API_URL/plugins/coingecko/get_price"`
+
 ## Plugin Routing
 
-60+ MCP tools. Use `describe_plugin` to discover methods, then `call_plugin` to invoke.
+60+ plugins. Use `GET /plugins/{plugin}` to discover methods, then `POST /plugins/{plugin}/{tool}` to invoke.
 
 | Task | Plugin(s) |
 |------|-----------|
@@ -54,7 +67,7 @@ Tools: Rust, Node 22, Python 3 (uv), Foundry (forge/cast/anvil), rg, fd, jq, tmu
 | Twitter/X | `ptwittercli`, `social-monitor` |
 | Productivity | `gsuite`, `linear`, `notion`, `slack`, `granola` |
 | Analytics | `posthog`, `sensortower`, `similarweb` |
-| Internal knowledge base | MCP `search` / `sql_query` directly |
+| Internal knowledge base | `POST /search` or `POST /query` |
 
 ## Finance Domain Knowledge
 
