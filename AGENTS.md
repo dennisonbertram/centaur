@@ -114,16 +114,35 @@ docker ps --filter label=agent2=true
 docker exec <container_id> curl -s -H "Authorization: Bearer $AI_V2_API_KEY" http://api:8000/health
 ```
 
-## Deployment
+## Deployment — CI/CD (preferred)
+
+All deploys happen automatically via GitHub Actions on merge to `main`. **Never SSH to deploy** — just push to main and the self-hosted runner on `206.223.235.69` handles it.
+
+**How it works:**
+- Push to `main` triggers `.github/workflows/deploy.yml`
+- The workflow detects what changed and deploys only affected services:
+
+| Change | Deploy action |
+|--------|--------------|
+| `plugins/**` only | Zero-downtime hot-reload (file watcher auto-detects, no restart) |
+| `src/**` | `docker compose up -d --build api` |
+| `src/etl/` or `src/shared/` | `docker compose up -d --build etl` |
+| `apps/slackbot/**` | `docker compose up -d --build slackbot` |
+| `sandbox/**` | `docker build -t agent2:latest sandbox/` |
+| `Dockerfile`, `pyproject.toml`, `uv.lock`, `docker-compose.yml`, `migrations/` | Rebuild API + ETL |
+
+**Plugin hot-reload:** The API watches the bind-mounted `plugins/` directory via `watchfiles`. When `git pull` updates plugin files, the API auto-reloads within seconds — no container restart, no curl, no manual step.
+
+**Admin endpoint:** `POST /admin/reload-plugins` is available as a manual fallback if the file watcher misses something.
+
+## Debugging (SSH only for logs)
+
+SSH is only for reading logs and inspecting state — never for deploying:
 
 ```bash
-make deploy           # pull + rebuild API + slackbot
-make deploy-agent     # pull + rebuild agent2:latest image
-make deploy-all       # pull + rebuild everything
-
-# Or manually:
 make ssh              # ssh ubuntu@206.223.235.69
-# Remote operations with R=1:
 make ps R=1           # docker compose ps on remote
 make logs-api R=1     # API logs on remote
+make logs-bot R=1     # slackbot logs on remote
+make logs-etl R=1     # ETL logs on remote
 ```
