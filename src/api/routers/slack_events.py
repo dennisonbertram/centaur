@@ -33,8 +33,12 @@ _seen_events: OrderedDict[str, float] = OrderedDict()
 _seen_events_lock = asyncio.Lock()
 _SEEN_EVENT_TTL_SECONDS = 3600.0
 _MAX_SEEN_EVENTS = 4000
+_MAX_SLACK_MESSAGE_CHARS = 3800
 _ENG_FLAG_RE = re.compile(r"(^|\s)--eng(?=\s|$)", re.IGNORECASE)
 _HARNESS_EQ_RE = re.compile(r"\bharness\s*=\s*(amp|claude-code|codex|pi-mono)\b", re.IGNORECASE)
+_ENGINE_FLAG_RE = re.compile(
+    r"(^|\s)--engine\s+(amp|claude-code|codex|pi-mono)(?=\s|$)", re.IGNORECASE
+)
 _MODEL_EQ_RE = re.compile(r"\bmodel\s*=\s*([A-Za-z0-9._-]+)\b", re.IGNORECASE)
 _MODEL_FLAG_RE = re.compile(r"(^|\s)--model\s+([A-Za-z0-9._-]+)(?=\s|$)", re.IGNORECASE)
 _MODEL_FLAG_PATTERNS: list[tuple[re.Pattern[str], str]] = [
@@ -115,6 +119,11 @@ def _parse_engineer_directives(text: str) -> tuple[str, bool, str | None]:
             model_preference = preference
             cleaned = pattern.sub(" ", cleaned)
 
+    engine_flag = _ENGINE_FLAG_RE.search(cleaned)
+    if engine_flag:
+        model_preference = engine_flag.group(2).lower()
+        cleaned = _ENGINE_FLAG_RE.sub(" ", cleaned)
+
     model_eq = _MODEL_EQ_RE.search(cleaned)
     if model_eq:
         model_preference = model_eq.group(1)
@@ -136,11 +145,14 @@ async def _post_thread_message(
     thread_ts: str,
     text: str,
 ) -> None:
+    safe_text = text.strip()
+    if len(safe_text) > _MAX_SLACK_MESSAGE_CHARS:
+        safe_text = safe_text[: _MAX_SLACK_MESSAGE_CHARS - 18].rstrip() + "\n\n... (truncated)"
     headers = {"Authorization": f"Bearer {token}"}
     payload = {
         "channel": channel,
         "thread_ts": thread_ts,
-        "text": text,
+        "text": safe_text,
     }
     async with httpx.AsyncClient(timeout=20.0) as client:
         resp = await client.post(
@@ -326,14 +338,20 @@ async def slack_events(request: Request) -> JSONResponse:
     if not eng_enabled:
         return JSONResponse({"ok": True})
 
-    await _start_engineer_session(
-        settings=settings,
-        bot_token=bot_token,
-        channel=channel,
-        thread_ts=thread_ts,
-        thread_key=thread_key,
-        task_text=task_text,
-        model_preference=model_preference,
-    )
+    async def _start_from_event() -> None:
+        try:
+            await _start_engineer_session(
+                settings=settings,
+                bot_token=bot_token,
+                channel=channel,
+                thread_ts=thread_ts,
+                thread_key=thread_key,
+                task_text=task_text,
+                model_preference=model_preference,
+            )
+        except Exception:
+            log.exception("engineer_start_from_event_failed", thread_key=thread_key)
 
+    start_task = asyncio.create_task(_start_from_event())
+    start_task.add_done_callback(lambda task: task.exception())
     return JSONResponse({"ok": True})

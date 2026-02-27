@@ -413,7 +413,7 @@ def engineer_group() -> None:
 @click.option("--skip-clarify", is_flag=True, help="Skip interactive clarification.")
 @click.option(
     "--engine",
-    type=click.Choice(["amp", "claude-code", "codex"], case_sensitive=False),
+    type=click.Choice(["amp", "claude-code", "codex", "pi-mono"], case_sensitive=False),
     default=None,
     help="Engine preference alias (maps to model selection hints).",
 )
