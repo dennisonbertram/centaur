@@ -9,6 +9,7 @@
 import { execute } from "./harness";
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
+const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "https://svc-ai.paradigm.xyz";
 
 // v1 bot user ID (@ai in #ai-agent)
 const V1_BOT_USER_ID = "U0AARS3FNEL";
@@ -67,7 +68,7 @@ export async function maybeShadow(body: Record<string, unknown>): Promise<void> 
       },
       body: JSON.stringify({
         channel: AI_V2_CHANNEL,
-        text: `🔄 *Shadow* from <@${user}> in <#${AI_AGENT_CHANNEL}>:\n>${cleanedText.split("\n").join("\n>")}`,
+        text: `🔄 *Shadow* from <#${AI_AGENT_CHANNEL}> (<https://paradigm-ops.slack.com/archives/${AI_AGENT_CHANNEL}/p${ts.replace(".", "")}|original>):\n>${cleanedText.split("\n").join("\n>")}`,
         unfurl_links: false,
       }),
     });
@@ -80,10 +81,26 @@ export async function maybeShadow(body: Record<string, unknown>): Promise<void> 
     const shadowTs = postData.ts;
     const shadowThreadKey = `shadow:${AI_AGENT_CHANNEL}:${ts}`;
 
-    // 2. Run the message through the v2 agent
+    // 2. Post thread viewer link
+    const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(shadowThreadKey)}`;
+    await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: AI_V2_CHANNEL,
+        thread_ts: shadowTs,
+        text: `<${viewerUrl}|🔗 Thread Viewer>`,
+        unfurl_links: false,
+      }),
+    });
+
+    // 3. Run the message through the v2 agent
     const result = await execute(shadowThreadKey, cleanedText, "amp");
 
-    // 3. Post the result as a thread reply in #ai-v2
+    // 4. Post the result as a thread reply in #ai-v2
     await fetch("https://slack.com/api/chat.postMessage", {
       method: "POST",
       headers: {
