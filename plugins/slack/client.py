@@ -50,6 +50,17 @@ class SlackClient:
         raise RuntimeError("Max retries exceeded")
 
 
+    def _resolve_channel(self, channel: str) -> str:
+        """Resolve a channel name to its ID using cached channel list."""
+        if channel.startswith("C") or channel.startswith("G"):
+            return channel
+        channels = self.list_bot_channels()
+        name = channel.lstrip("#")
+        for ch in channels:
+            if ch["name"] == name:
+                return ch["id"]
+        raise RuntimeError(f"Channel '{channel}' not found or bot not a member")
+
     def _resolve_mentions(self, text: str, user_cache: dict[str, str]) -> str:
         """Replace <@USER_ID> mentions with @username using cached lookups only."""
 
@@ -366,16 +377,7 @@ class SlackClient:
             List of message dicts
         """
         user_cache = self._get_user_cache()
-
-        channel_id = channel
-        if not channel.startswith("C") and not channel.startswith("G"):
-            channels = self.list_bot_channels()
-            for ch in channels:
-                if ch["name"] == channel or ch["name"] == channel.lstrip("#"):
-                    channel_id = ch["id"]
-                    break
-            else:
-                raise RuntimeError(f"Channel '{channel}' not found or bot not a member")
+        channel_id = self._resolve_channel(channel)
 
         try:
             response = self._client.conversations_history(channel=channel_id, limit=limit)
@@ -508,18 +510,7 @@ class SlackClient:
         Returns:
             List of member dicts with id, name, real_name, email
         """
-        client = self._client
-
-        # Resolve channel name to ID if needed
-        channel_id = channel
-        if not channel.startswith("C") and not channel.startswith("G"):
-            channels = self.list_bot_channels()
-            for ch in channels:
-                if ch["name"] == channel or ch["name"] == channel.lstrip("#"):
-                    channel_id = ch["id"]
-                    break
-            else:
-                raise RuntimeError(f"Channel '{channel}' not found or bot not a member")
+        channel_id = self._resolve_channel(channel)
 
         # Get all member IDs in the channel
         member_ids = []
@@ -540,23 +531,17 @@ class SlackClient:
             if not cursor:
                 break
 
-        # Get user info for each member
-        all_users = self.list_users(limit=1000)
-        user_lookup = {u["id"]: u for u in all_users}
+        # Use bulk user cache instead of fresh API call
+        user_cache = self._get_user_cache()
 
         members = []
         for member_id in member_ids:
-            if member_id in user_lookup:
-                user = user_lookup[member_id]
-                # Skip bots
-                if user.get("is_bot"):
-                    continue
+            name = user_cache.get(member_id)
+            if name:
                 members.append(
                     {
-                        "id": user["id"],
-                        "name": user["name"],
-                        "real_name": user.get("real_name", ""),
-                        "email": user.get("email", ""),
+                        "id": member_id,
+                        "name": name,
                     }
                 )
 
@@ -585,8 +570,6 @@ class SlackClient:
         Returns:
             Email address or None if not found
         """
-        client = self._client
-
         try:
             response = self._client.users_info(user=user_id)
             user = response.get("user", {})
@@ -631,17 +614,7 @@ class SlackClient:
         Returns:
             Dict with channel, ts, permalink
         """
-        client = self._client
-
-        channel_id = channel.lstrip("#")
-        if not channel_id.startswith("C") and not channel_id.startswith("G"):
-            channels = self.list_bot_channels()
-            for ch in channels:
-                if ch["name"] == channel_id:
-                    channel_id = ch["id"]
-                    break
-            else:
-                raise RuntimeError(f"Channel '{channel}' not found or bot not a member")
+        channel_id = self._resolve_channel(channel)
 
         message_text = text
         if not no_attribution:
@@ -671,17 +644,7 @@ class SlackClient:
         thread_ts: str | None = None,
     ) -> dict:
         """Upload a file to a channel."""
-        client = self._client
-
-        channel_id = channel.lstrip("#")
-        if not channel_id.startswith("C") and not channel_id.startswith("G"):
-            channels = self.list_bot_channels()
-            for ch in channels:
-                if ch["name"] == channel_id:
-                    channel_id = ch["id"]
-                    break
-            else:
-                raise RuntimeError(f"Channel '{channel}' not found or bot not a member")
+        channel_id = self._resolve_channel(channel)
 
         try:
             kwargs = {
@@ -853,18 +816,8 @@ class SlackClient:
         Returns:
             Dict with channel info, messages (with replies inline), and stats
         """
-        client = self._client
         user_cache = self._get_user_cache()
-
-        channels = self.list_bot_channels()
-        channel_id = None
-        for ch in channels:
-            if ch["name"] == channel_name.lstrip("#"):
-                channel_id = ch["id"]
-                break
-
-        if not channel_id:
-            raise RuntimeError(f"Channel '{channel_name}' not found or bot not a member")
+        channel_id = self._resolve_channel(channel_name)
 
         all_messages = []
         cursor = None
