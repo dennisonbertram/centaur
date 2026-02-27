@@ -95,6 +95,9 @@ function createBot() {
     const requestId = crypto.randomUUID().slice(0, 8);
     const threadKey = thread.id;
     const previous = threadModes.get(threadKey);
+    const files: FileAttachment[] = (attachments || [])
+      .filter((a): a is { url: string; name: string } => !!a.url && !!a.name)
+      .map((a) => ({ url: a.url, name: a.name }));
 
     const mode: AgentMode = isFirstMessage
       ? parsed.mode
@@ -130,7 +133,12 @@ function createBot() {
 
       if (isFirstMessage) {
         await thread.startTyping("Starting engineer flow...");
-        const result = await startEngineerFlow(threadKey, parsed.cleanedText, modelPreference);
+        const result = await startEngineerFlow(
+          threadKey,
+          parsed.cleanedText,
+          modelPreference,
+          files.length > 0 ? files : undefined
+        );
         const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(threadKey)}`;
         const preferenceLine = modelPreference
           ? `\nModel preference: \`${modelPreference}\``
@@ -147,7 +155,11 @@ function createBot() {
         return;
       }
 
-      const reply = await replyEngineerFlow(threadKey, parsed.cleanedText);
+      const reply = await replyEngineerFlow(
+        threadKey,
+        parsed.cleanedText,
+        files.length > 0 ? files : undefined
+      );
       if (reply.status === "no_active_session") {
         await thread.post(
           renderSlackMessage(
@@ -160,9 +172,6 @@ function createBot() {
 
     setThreadMode(threadKey, { mode: "default", modelPreference: null });
     const harness = parsed.harness ?? "amp";
-    const files: FileAttachment[] = (attachments || [])
-      .filter((a): a is { url: string; name: string } => !!a.url && !!a.name)
-      .map((a) => ({ url: a.url, name: a.name }));
 
     await thread.startTyping("Spawning agent...");
 

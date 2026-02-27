@@ -36,6 +36,7 @@ async function agentCall(
 
 export type Harness = "amp" | "claude-code" | "codex" | "pi-mono";
 export type AgentMode = "default" | "eng";
+export type FileAttachment = { url: string; name: string };
 
 export type RunOptions = {
   mode: AgentMode;
@@ -150,7 +151,6 @@ export async function spawn(
   };
 }
 
-export type FileAttachment = { url: string; name: string };
 export async function execute(
   threadKey: string,
   message: string,
@@ -209,7 +209,8 @@ function splitThreadKey(threadKey: string): { channel: string; threadTs: string 
 export async function startEngineerFlow(
   threadKey: string,
   task: string,
-  modelPreference?: string | null
+  modelPreference?: string | null,
+  attachments?: FileAttachment[]
 ): Promise<{ status: string; runId?: string }> {
   const { channel, threadTs } = splitThreadKey(threadKey);
   const result = await apiCall("/slack/start", {
@@ -218,6 +219,7 @@ export async function startEngineerFlow(
     thread_ts: threadTs,
     task,
     model_preference: modelPreference ?? null,
+    ...(attachments && attachments.length > 0 ? { attachments } : {}),
   });
   return {
     status: (result.status as string) || "started",
@@ -227,11 +229,13 @@ export async function startEngineerFlow(
 
 export async function replyEngineerFlow(
   threadKey: string,
-  reply: string
+  reply: string,
+  attachments?: FileAttachment[]
 ): Promise<{ status: string }> {
   const result = await apiCall("/slack/reply", {
     thread_key: threadKey,
     reply,
+    ...(attachments && attachments.length > 0 ? { attachments } : {}),
   });
   return { status: (result.status as string) || "accepted" };
 }

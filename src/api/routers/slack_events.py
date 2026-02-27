@@ -52,6 +52,50 @@ _MODEL_FLAG_PATTERNS: list[tuple[re.Pattern[str], str]] = [
 _session_start_locks: dict[str, asyncio.Lock] = {}
 
 
+def _normalize_attachments(items: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    if not items:
+        return []
+    normalized: list[dict[str, str]] = []
+    for item in items:
+        name = str(item.get("name", "")).strip()
+        url = str(item.get("url", "")).strip()
+        if not name or not url:
+            continue
+        normalized.append({"name": name, "url": url})
+    return normalized
+
+
+def _attachments_from_event(event: dict) -> list[dict[str, str]]:
+    files = event.get("files", [])
+    if not isinstance(files, list):
+        return []
+    parsed: list[dict[str, str]] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("title") or "attachment").strip()
+        url = str(
+            item.get("url_private_download")
+            or item.get("url_private")
+            or item.get("permalink")
+            or ""
+        ).strip()
+        if not name or not url:
+            continue
+        parsed.append({"name": name, "url": url})
+    return parsed
+
+
+def _append_attachments(text: str, attachments: list[dict[str, str]] | None) -> str:
+    items = _normalize_attachments(attachments)
+    if not items:
+        return text
+    lines = ["Attachments:"]
+    for item in items:
+        lines.append(f"- {item['name']}: {item['url']}")
+    return f"{text}\n\n" + "\n".join(lines)
+
+
 def _get_start_lock(thread_key: str) -> asyncio.Lock:
     return _session_start_locks.setdefault(thread_key, asyncio.Lock())
 
@@ -237,11 +281,13 @@ class EngineerStartRequest(BaseModel):
     thread_ts: str
     task: str
     model_preference: str | None = None
+    attachments: list[dict[str, str]] | None = None
 
 
 class EngineerReplyRequest(BaseModel):
     thread_key: str
     reply: str
+    attachments: list[dict[str, str]] | None = None
 
 
 @router.post("/start", dependencies=[Depends(verify_api_key)])
@@ -251,7 +297,7 @@ async def start_engineer(payload: EngineerStartRequest) -> JSONResponse:
     if not bot_token:
         raise HTTPException(status_code=500, detail="Slack bot token is not configured")
 
-    task_text = payload.task.strip()
+    task_text = _append_attachments(payload.task.strip(), payload.attachments)
     if not task_text:
         raise HTTPException(status_code=400, detail="Task must not be empty")
 
@@ -274,7 +320,7 @@ async def start_engineer(payload: EngineerStartRequest) -> JSONResponse:
 @router.post("/reply", dependencies=[Depends(verify_api_key)])
 async def reply_engineer(payload: EngineerReplyRequest) -> JSONResponse:
     thread_key = payload.thread_key.strip()
-    reply_text = payload.reply.strip()
+    reply_text = _append_attachments(payload.reply.strip(), payload.attachments)
     if not thread_key:
         raise HTTPException(status_code=400, detail="thread_key is required")
     if not reply_text:
@@ -323,6 +369,7 @@ async def slack_events(request: Request) -> JSONResponse:
 
     thread_ts = str(event.get("thread_ts") or event.get("ts") or "")
     task_text, eng_enabled, model_preference = _parse_engineer_directives(str(event.get("text", "")))
+    task_text = _append_attachments(task_text, _attachments_from_event(event))
     if not thread_ts or not task_text:
         return JSONResponse({"ok": True})
 
