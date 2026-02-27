@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -51,7 +52,9 @@ async def spawn(req: SpawnRequest) -> dict[str, Any]:
 async def execute(req: ExecuteRequest) -> dict[str, Any]:
     """Execute a message in a sandbox. Auto-spawns if needed."""
     agent = get_agent()
-    return agent.execute(req.slack_thread_key, req.message, req.harness, req.repo, req.request_id)
+    return await asyncio.to_thread(
+        agent.execute, req.slack_thread_key, req.message, req.harness, req.repo, req.request_id,
+    )
 
 
 @router.post("/stop")
