@@ -247,6 +247,28 @@ class SlackClient:
         return messages
 
 
+    _MAX_SEARCH_CHANNELS = 50  # Max channels to search when no filter specified
+
+    def _rank_channels_for_query(
+        self, channels: list[dict], query_terms: list[str]
+    ) -> list[dict]:
+        """Rank channels by relevance to query terms. Most relevant first."""
+        scored = []
+        for ch in channels:
+            score = 0.0
+            name_lower = ch["name"].lower()
+            searchable = f"{name_lower} {ch.get('purpose', '')} {ch.get('topic', '')}".lower()
+            for term in query_terms:
+                if term in name_lower:
+                    score += 5.0
+                elif term in searchable:
+                    score += 2.0
+            # Boost by member count (more members = more likely relevant)
+            score += min(ch.get("member_count", 0) / 50, 3.0)
+            scored.append((score, ch))
+        scored.sort(key=lambda x: -x[0])
+        return [ch for _, ch in scored]
+
     def _score_match(self, query_terms: list[str], text: str) -> float:
         """Score how well text matches query terms. Higher = better match."""
         text_lower = text.lower()
@@ -297,9 +319,17 @@ class SlackClient:
         client = self._client
 
         bot_channels = self.list_bot_channels()
+
+        # Parse query terms early — needed for channel ranking
+        query_terms = [t.strip().lower() for t in query.split() if t.strip()]
+
         if channels:
             channel_names = {c.lstrip("#").lower() for c in channels}
             bot_channels = [c for c in bot_channels if c["name"].lower() in channel_names]
+        else:
+            # Rank by query relevance + activity and cap to avoid 200+ API calls
+            bot_channels = self._rank_channels_for_query(bot_channels, query_terms)
+            bot_channels = bot_channels[: self._MAX_SEARCH_CHANNELS]
 
         if not bot_channels:
             return []
@@ -307,7 +337,12 @@ class SlackClient:
         # Use cached user lookup
         user_cache = self._get_user_cache()
 
-        # Fetch messages from all channels in parallel
+        # Scale messages_per_channel inversely with channel count for broad searches
+        effective_limit = messages_per_channel
+        if len(bot_channels) > 30 and messages_per_channel > 100:
+            effective_limit = 100
+
+        # Fetch messages from channels in parallel
         all_messages = []
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = {
@@ -316,7 +351,7 @@ class SlackClient:
                     client,
                     ch["id"],
                     ch["name"],
-                    messages_per_channel,
+                    effective_limit,
                     user_cache,
                 ): ch
                 for ch in bot_channels
@@ -328,10 +363,6 @@ class SlackClient:
                     all_messages.extend(messages)
                 except Exception:
                     pass
-
-        # Parse query into terms for smarter matching
-        query_lower = query.lower()
-        query_terms = [t.strip() for t in query_lower.split() if t.strip()]
 
         # Score and filter messages
         scored_results = []
