@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import re
+import shutil
 import time
 from collections import OrderedDict
 
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 from starlette.responses import JSONResponse
 
 from api.deps import verify_api_key
+from shared.engineer.models import Phase
 from shared.engineer.orchestrator import EngineerOrchestrator
 from shared.engineer.session import (
     create_session,
@@ -50,6 +52,16 @@ _MODEL_FLAG_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"(^|\s)--pi-mono(?=\s|$)", re.IGNORECASE), "pi-mono"),
 ]
 _session_start_locks: dict[str, asyncio.Lock] = {}
+_PHASE_LABELS: dict[Phase, str] = {
+    Phase.RESEARCH: "research",
+    Phase.PLAN: "plan",
+    Phase.CLARIFY: "clarification",
+    Phase.IMPLEMENT: "implementation",
+    Phase.REVIEW: "review",
+    Phase.PUBLISH: "publish",
+    Phase.DONE: "done",
+    Phase.FAILED: "failed",
+}
 
 
 def _normalize_attachments(items: list[dict[str, str]] | None) -> list[dict[str, str]]:
@@ -221,6 +233,62 @@ def _route_reply_to_session(thread_key: str, reply_text: str) -> str:
     return "accepted"
 
 
+def _first_text_block(payload: dict) -> str:
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return ""
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            text = str(block.get("text", "")).strip()
+            if text:
+                return text
+    return ""
+
+
+def _format_event_update(event: dict) -> str | None:
+    event_type = str(event.get("type", "")).strip()
+    if not event_type:
+        return None
+
+    if event_type == "error":
+        return f"❌ {event.get('error') or event.get('message') or 'unknown error'}"
+
+    if event_type == "thread.started":
+        thread_id = str(event.get("thread_id", "")).strip()
+        return f"🧵 Agent thread started: `{thread_id}`" if thread_id else "🧵 Agent thread started"
+
+    if event_type == "system" and event.get("subtype") == "init":
+        session_id = str(event.get("session_id", "")).strip()
+        return f"✅ Session initialized: `{session_id}`" if session_id else "✅ Session initialized"
+
+    if event_type == "assistant":
+        text = _first_text_block(event)
+        if text:
+            return f"💬 {text[:500]}"
+        return None
+
+    if event_type == "item.completed":
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") == "agent_message":
+            text = str(item.get("text", "")).strip()
+            if text:
+                return f"💬 {text[:500]}"
+        return None
+
+    if event_type == "result":
+        result_text = str(event.get("result", "")).strip()
+        if result_text:
+            return f"📌 {result_text[:500]}"
+        return None
+
+    return None
+
+
 async def _start_engineer_session(
     *,
     settings: EngineerSettings,
@@ -252,16 +320,59 @@ async def _start_engineer_session(
 
         async def _run() -> None:
             try:
+                if shutil.which("git") is None:
+                    await _send("Engineer failed preflight: `git` is not available in the API container.")
+                    remove_session(thread_key)
+                    return
+                if not settings.github_token:
+                    await _send(
+                        "Engineer failed preflight: `GITHUB_TOKEN` is missing, so PR creation cannot run."
+                    )
+                    remove_session(thread_key)
+                    return
                 preference_msg = f" (model preference: {model_preference})" if model_preference else ""
                 await _send(f"Engineer started{preference_msg}: `{task_text}`")
                 orchestrator = EngineerOrchestrator(
                     settings=settings,
                     model_preference=model_preference,
                 )
-                result = await orchestrator.run(session, post_message=_send)
+                last_event_preview = ""
+                last_event_at = 0.0
+
+                async def _on_phase(phase: Phase, label: str) -> None:
+                    phase_name = _PHASE_LABELS.get(phase, phase.value)
+                    suffix = f" — {label}" if label else ""
+                    await _send(f"⏱️ Phase: *{phase_name}*{suffix}")
+
+                async def _on_event(event: dict[str, object]) -> None:
+                    nonlocal last_event_preview, last_event_at
+                    preview = _format_event_update(event)
+                    if not preview:
+                        return
+                    now = time.monotonic()
+                    # Avoid flooding Slack with repetitive stream chunks.
+                    if preview == last_event_preview and now - last_event_at < 8.0:
+                        return
+                    if now - last_event_at < 2.0:
+                        return
+                    last_event_preview = preview
+                    last_event_at = now
+                    await _send(preview)
+
+                result = await orchestrator.run(
+                    session,
+                    post_message=_send,
+                    on_phase=_on_phase,
+                    on_event=_on_event,
+                )
 
                 if result.success and result.pr_url:
                     await _send(f"Engineer complete! PR: {result.pr_url}")
+                elif result.success:
+                    await _send(
+                        "Engineer completed but no PR URL was produced. "
+                        "The run may have failed during push/PR creation."
+                    )
                 elif not result.success:
                     await _send(f"Engineer failed: {result.error or 'unknown error'}")
             except Exception:
