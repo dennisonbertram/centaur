@@ -20,10 +20,18 @@ async def get_embedding_service(
     return EmbeddingService(pool=pool)
 
 
+_DOCKER_PREFIXES = ("172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.")
+
+
 async def verify_api_key(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> str:
+    # Skip auth for requests from Docker bridge networks (agent containers)
+    client_ip = request.client.host if request.client else ""
+    if client_ip.startswith(_DOCKER_PREFIXES):
+        return "docker-bypass"
+
     if not settings.api_secret_key:
         raise HTTPException(status_code=500, detail="API key not configured")
 
