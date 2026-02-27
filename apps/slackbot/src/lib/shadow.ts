@@ -1,0 +1,116 @@
+/**
+ * Shadow requests from #ai-agent (v1) to #ai-v2 (v2).
+ *
+ * When someone @mentions the v1 bot in #ai-agent, we replay the same
+ * message through our v2 agent and post the result in #ai-v2 so we
+ * can compare quality side-by-side.
+ */
+
+import { execute } from "./harness";
+
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
+
+// v1 bot user ID (@ai in #ai-agent)
+const V1_BOT_USER_ID = "U0AARS3FNEL";
+
+// Channel IDs
+const AI_AGENT_CHANNEL = "C0A82R7S80N"; // #ai-agent
+const AI_V2_CHANNEL = "C0AJ07U8Z1N"; // #ai-v2
+
+/**
+ * Check a raw Slack event payload and shadow v1 bot mentions
+ * from #ai-agent into #ai-v2.
+ */
+export async function maybeShadow(body: Record<string, unknown>): Promise<void> {
+  if (body.type !== "event_callback") return;
+
+  const event = body.event as Record<string, unknown> | undefined;
+  if (!event) return;
+
+  // Only handle messages (not subtypes like bot_message, message_changed, etc.)
+  if (event.type !== "message" && event.type !== "app_mention") return;
+  if (event.subtype) return;
+  if (event.bot_id) return;
+
+  // Only from #ai-agent
+  if (event.channel !== AI_AGENT_CHANNEL) return;
+
+  const text = (event.text as string) || "";
+
+  // Must mention the v1 bot
+  if (!text.includes(`<@${V1_BOT_USER_ID}>`)) return;
+
+  const user = (event.user as string) || "unknown";
+  const ts = (event.ts as string) || "";
+
+  // Strip the v1 bot mention to get the actual query
+  const cleanedText = text.replace(new RegExp(`<@${V1_BOT_USER_ID}>`, "g"), "").trim();
+  if (!cleanedText) return;
+
+  console.log(
+    JSON.stringify({
+      event: "shadow_detected",
+      user,
+      channel: AI_AGENT_CHANNEL,
+      ts,
+      text_length: cleanedText.length,
+    })
+  );
+
+  try {
+    // 1. Post the shadow message to #ai-v2
+    const postRes = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: AI_V2_CHANNEL,
+        text: `🔄 *Shadow* from <@${user}> in <#${AI_AGENT_CHANNEL}>:\n>${cleanedText.split("\n").join("\n>")}`,
+        unfurl_links: false,
+      }),
+    });
+    const postData = (await postRes.json()) as { ok: boolean; ts?: string };
+    if (!postData.ok || !postData.ts) {
+      console.log(JSON.stringify({ event: "shadow_post_failed", data: postData }));
+      return;
+    }
+
+    const shadowTs = postData.ts;
+    const shadowThreadKey = `shadow:${AI_AGENT_CHANNEL}:${ts}`;
+
+    // 2. Run the message through the v2 agent
+    const result = await execute(shadowThreadKey, cleanedText, "amp");
+
+    // 3. Post the result as a thread reply in #ai-v2
+    await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: AI_V2_CHANNEL,
+        thread_ts: shadowTs,
+        text: result,
+        unfurl_links: false,
+      }),
+    });
+
+    console.log(
+      JSON.stringify({
+        event: "shadow_complete",
+        thread_key: shadowThreadKey,
+        result_length: result.length,
+      })
+    );
+  } catch (err) {
+    console.log(
+      JSON.stringify({
+        event: "shadow_error",
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
+  }
+}
