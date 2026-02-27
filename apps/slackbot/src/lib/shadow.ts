@@ -21,6 +21,9 @@ const V1_BOT_USER_ID = "U0AARS3FNEL";
 const AI_AGENT_CHANNEL = "C0A82R7S80N"; // #ai-agent
 const AI_V2_CHANNEL = "C0AJ07U8Z1N"; // #ai-v2
 
+// Track origin parent ts → shadow thread ts in #ai-v2 so replies land in the same thread
+const shadowThreadMap = new Map<string, string>();
+
 /**
  * Run a single shadow: post to #ai-v2, execute via v2 agent, post result.
  * Returns the shadow thread key, or null on failure.
@@ -29,49 +32,75 @@ async function runShadow(
   cleanedText: string,
   originTs: string,
   files?: FileAttachment[],
+  originThreadTs?: string,
 ): Promise<string | null> {
-  // 1. Post the shadow message to #ai-v2
-  const postRes = await fetch("https://slack.com/api/chat.postMessage", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      channel: AI_V2_CHANNEL,
-      text: `🔄 *Shadow* from <#${AI_AGENT_CHANNEL}> (<https://paradigm-ops.slack.com/archives/${AI_AGENT_CHANNEL}/p${originTs.replace(".", "")}|original>):\n>${cleanedText.split("\n").join("\n>")}`,
-      unfurl_links: false,
-    }),
-  });
-  const postData = (await postRes.json()) as { ok: boolean; ts?: string };
-  if (!postData.ok || !postData.ts) {
-    console.log(JSON.stringify({ event: "shadow_post_failed", data: postData }));
-    return null;
+  // If this is a thread reply, reuse the existing shadow thread
+  const parentTs = originThreadTs || originTs;
+  const existingShadowTs = originThreadTs ? shadowThreadMap.get(originThreadTs) : undefined;
+  const shadowThreadKey = `shadow:${AI_AGENT_CHANNEL}:${parentTs}`;
+
+  let shadowTs: string;
+
+  if (existingShadowTs) {
+    // Continue existing shadow thread — post follow-up quote
+    await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: AI_V2_CHANNEL,
+        thread_ts: existingShadowTs,
+        text: `📝 *Follow-up* (<https://paradigm-ops.slack.com/archives/${AI_AGENT_CHANNEL}/p${originTs.replace(".", "")}|original>):\n>${cleanedText.split("\n").join("\n>")}`,
+        unfurl_links: false,
+      }),
+    });
+    shadowTs = existingShadowTs;
+  } else {
+    // New shadow thread
+    const postRes = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: AI_V2_CHANNEL,
+        text: `🔄 *Shadow* from <#${AI_AGENT_CHANNEL}> (<https://paradigm-ops.slack.com/archives/${AI_AGENT_CHANNEL}/p${parentTs.replace(".", "")}|original>):\n>${cleanedText.split("\n").join("\n>")}`,
+        unfurl_links: false,
+      }),
+    });
+    const postData = (await postRes.json()) as { ok: boolean; ts?: string };
+    if (!postData.ok || !postData.ts) {
+      console.log(JSON.stringify({ event: "shadow_post_failed", data: postData }));
+      return null;
+    }
+
+    shadowTs = postData.ts;
+    shadowThreadMap.set(parentTs, shadowTs);
+
+    // Post thread viewer link
+    const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(shadowThreadKey)}`;
+    await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        channel: AI_V2_CHANNEL,
+        thread_ts: shadowTs,
+        text: `<${viewerUrl}|🔗 Thread Viewer>`,
+        unfurl_links: false,
+      }),
+    });
   }
 
-  const shadowTs = postData.ts;
-  const shadowThreadKey = `shadow:${AI_AGENT_CHANNEL}:${originTs}`;
-
-  // 2. Post thread viewer link
-  const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(shadowThreadKey)}`;
-  await fetch("https://slack.com/api/chat.postMessage", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      channel: AI_V2_CHANNEL,
-      thread_ts: shadowTs,
-      text: `<${viewerUrl}|🔗 Thread Viewer>`,
-      unfurl_links: false,
-    }),
-  });
-
-  // 3. Run the message through the v2 agent
+  // Run the message through the v2 agent (same thread key = same session)
   const result = await execute(shadowThreadKey, cleanedText, "amp", undefined, files);
 
-  // 4. Post the result as a thread reply in #ai-v2
+  // Post the result as a thread reply in #ai-v2
   await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
@@ -90,6 +119,7 @@ async function runShadow(
     JSON.stringify({
       event: "shadow_complete",
       thread_key: shadowThreadKey,
+      is_continuation: !!existingShadowTs,
       result_length: result.length,
     })
   );
@@ -121,6 +151,7 @@ export async function maybeShadow(body: Record<string, unknown>): Promise<void> 
   if (!text.includes(`<@${V1_BOT_USER_ID}>`)) return;
 
   const ts = (event.ts as string) || "";
+  const threadTs = (event.thread_ts as string) || undefined;
 
   // Strip the v1 bot mention to get the actual query
   const cleanedText = text.replace(new RegExp(`<@${V1_BOT_USER_ID}>`, "g"), "").trim();
@@ -137,13 +168,14 @@ export async function maybeShadow(body: Record<string, unknown>): Promise<void> 
       event: "shadow_detected",
       channel: AI_AGENT_CHANNEL,
       ts,
+      thread_ts: threadTs,
       text_length: cleanedText.length,
       file_count: files.length,
     })
   );
 
   try {
-    await runShadow(cleanedText, ts, files.length > 0 ? files : undefined);
+    await runShadow(cleanedText, ts, files.length > 0 ? files : undefined, threadTs);
   } catch (err) {
     console.log(
       JSON.stringify({
