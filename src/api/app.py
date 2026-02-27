@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import hmac
 import os
 import secrets as _secrets
@@ -228,6 +229,14 @@ async def proxy_webhooks(request: Request, path: str):
     slack_timestamp = request.headers.get("x-slack-request-timestamp", "")
     if not _verify_slack_signature(body, slack_timestamp, slack_signature):
         return JSONResponse({"detail": "Invalid Slack signature"}, status_code=401)
+
+    # Handle Slack URL verification challenge directly
+    try:
+        payload = json.loads(body)
+        if payload.get("type") == "url_verification":
+            return JSONResponse({"challenge": payload["challenge"]})
+    except (json.JSONDecodeError, KeyError):
+        pass
 
     target = f"{_SLACKBOT_URL}/api/webhooks/{path}"
     async with httpx.AsyncClient(timeout=30.0) as client:
