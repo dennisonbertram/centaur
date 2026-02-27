@@ -12,7 +12,7 @@ import { Chat, parseMarkdown, type Root } from "chat";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { createRedisState } from "@chat-adapter/state-redis";
 import { createMemoryState } from "@chat-adapter/state-memory";
-import { extractHarness, spawn, execute } from "./harness";
+import { extractHarness, execute } from "./harness";
 
 const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "https://svc-ai.paradigm.xyz";
 
@@ -91,22 +91,18 @@ function createBot() {
       ? buildSessionContext(threadKey) + cleanedText
       : cleanedText;
 
-    // On first message, spawn + post viewer link in parallel with execute start
-    if (isFirstMessage) {
-      const tSpawn = performance.now();
-      await spawn(threadKey, harness, undefined, requestId);
-      timings.spawn_ms = Math.round(performance.now() - tSpawn);
+    // Fire execute immediately — it auto-spawns if needed.
+    // Run typing indicator + viewer link in parallel (don't block execute).
+    const tExec = performance.now();
+    const execPromise = execute(threadKey, message, harness, requestId);
 
-      // Fire viewer link post in background — don't block execute
+    if (isFirstMessage) {
       const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(threadKey)}`;
       thread.post(renderSlackMessage(`[🔗 Thread Viewer](${viewerUrl})`)).catch(() => {});
     }
+    thread.startTyping("Running...").catch(() => {});
 
-    await thread.startTyping("Running...");
-
-    // Execute message in the container
-    const tExec = performance.now();
-    const result = await execute(threadKey, message, harness, requestId);
+    const result = await execPromise;
     timings.execute_ms = Math.round(performance.now() - tExec);
 
     const tPost = performance.now();
@@ -128,7 +124,7 @@ function createBot() {
 
   // First @mention — subscribe and run
   bot.onNewMention(async (thread, message) => {
-    await thread.subscribe();
+    thread.subscribe().catch(() => {});
     await handleMessage(thread, message.text, true);
   });
 
