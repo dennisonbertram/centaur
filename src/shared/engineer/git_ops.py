@@ -10,6 +10,10 @@ class GitOperationError(RuntimeError):
     pass
 
 
+_ENGINEER_GIT_USER_NAME = "Paradigm Code"
+_ENGINEER_GIT_USER_EMAIL = "svc_ai@paradigm.xyz"
+
+
 def slugify(value: str, *, max_len: int = 48) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", value.strip().lower()).strip("-")
     return (slug or "task")[:max_len]
@@ -60,17 +64,13 @@ async def create_worktree(
     if worktree.exists():
         shutil.rmtree(worktree, ignore_errors=True)
 
-    repo_url = (
-        f"https://x-access-token:{github_token}@github.com/{github_owner}/{github_repo}.git"
-    )
+    repo_url = f"https://x-access-token:{github_token}@github.com/{github_owner}/{github_repo}.git"
     code, _, err = await _run(
         ["git", "clone", "--branch", base_ref, "--single-branch", repo_url, str(worktree)],
         cwd=root,
     )
     if code != 0:
-        raise GitOperationError(
-            f"Failed to clone workspace: {_sanitize_secret(err, github_token)}"
-        )
+        raise GitOperationError(f"Failed to clone workspace: {_sanitize_secret(err, github_token)}")
 
     code, _, err = await _run(["git", "checkout", "-b", branch_name], cwd=worktree)
     if code != 0:
@@ -103,6 +103,20 @@ async def commit_all(worktree: Path, message: str) -> None:
         raise GitOperationError(f"git add failed: {err}")
 
     code, _, err = await _run(["git", "commit", "-m", message], cwd=worktree)
+    if code != 0 and "Author identity unknown" in err:
+        cfg_code, _, cfg_err = await _run(
+            ["git", "config", "user.name", _ENGINEER_GIT_USER_NAME],
+            cwd=worktree,
+        )
+        if cfg_code != 0:
+            raise GitOperationError(f"git config user.name failed: {cfg_err}")
+        cfg_code, _, cfg_err = await _run(
+            ["git", "config", "user.email", _ENGINEER_GIT_USER_EMAIL],
+            cwd=worktree,
+        )
+        if cfg_code != 0:
+            raise GitOperationError(f"git config user.email failed: {cfg_err}")
+        code, _, err = await _run(["git", "commit", "-m", message], cwd=worktree)
     if code != 0:
         raise GitOperationError(f"git commit failed: {err}")
 
