@@ -26,7 +26,7 @@ class EngineerSettings(BaseSettings):
 
     branch_prefix: str = "agent"
     max_iterations: int = 6
-    max_turns_per_phase: int = 40
+    max_turns_per_phase: int = 60
     max_tool_calls_total: int = 200
     max_wall_time_seconds: int = 1800
     max_consecutive_tool_failures: int = 5
@@ -35,6 +35,18 @@ class EngineerSettings(BaseSettings):
     tool_call_timeout_seconds: int = 180
     research_parallel_branches_min: int = 3
     research_parallel_branches_max: int = 5
+    research_max_turns: int = 80
+    adaptive_turn_budgets_enabled: bool = True
+    turn_budget_score_full_scale: int = 8
+    turn_budget_research_floor: int = 30
+    turn_budget_research_cap: int = 100
+    turn_budget_plan_floor: int = 3
+    turn_budget_plan_cap: int = 8
+    turn_budget_review_floor: int = 8
+    turn_budget_review_cap: int = 24
+    turn_budget_implement_floor: int = 40
+    turn_budget_implement_cap: int = 120
+    turn_budget_fail_soft: bool = True
     plan_parallel_branches_min: int = 2
     plan_parallel_branches_max: int = 4
     parallel_min_completed_before_early_stop: int = 2

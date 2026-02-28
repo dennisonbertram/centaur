@@ -381,17 +381,27 @@ async def _start_engineer_session(
                     on_phase=_on_phase,
                     on_event=bridge.on_event,
                 )
+                if not orchestrator.dry_run and result.success and not result.pr_url:
+                    raise RuntimeError(
+                        f"Invariant violation: non-dry run ended without PR URL (success={result.success})"
+                    )
                 bridge.finalize(result)
 
                 if result.success and result.pr_url:
                     await _send(f"Engineer complete! PR: {result.pr_url}")
-                elif result.success:
-                    await _send(
-                        "Engineer completed but no PR URL was produced. "
-                        "The run may have failed during push/PR creation."
-                    )
                 elif not result.success:
                     await _send(f"Engineer failed: {result.error or 'unknown error'}")
+            except asyncio.CancelledError:
+                bridge.finalize(
+                    EngineerResult(
+                        run_id=session.run_id,
+                        success=False,
+                        status="failed",
+                        error="cancelled",
+                    )
+                )
+                await _send("Engineer cancelled.")
+                raise
             except Exception:
                 log.exception("engineer_task_crashed", thread_key=thread_key)
                 bridge.finalize(
@@ -406,6 +416,7 @@ async def _start_engineer_session(
             finally:
                 bridge.cleanup()
                 remove_session(thread_key)
+                _session_start_locks.pop(thread_key, None)
 
         task = asyncio.create_task(_run())
         register_task(thread_key, task)

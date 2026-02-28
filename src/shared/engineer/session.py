@@ -38,6 +38,10 @@ class EngineerSession:
     research_branch_count: int = 0
     plan_branch_count: int = 0
     early_stop_count: int = 0
+    complexity_score: float = 0.0
+    turn_budgets: dict[str, int] = field(default_factory=dict)
+    phase_turns_used: dict[str, int] = field(default_factory=dict)
+    phase_budget_exceeded: dict[str, bool] = field(default_factory=dict)
     thread_name: str | None = None
     harness_thread_id: str | None = None
     branch_name: str | None = None

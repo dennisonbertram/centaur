@@ -14,7 +14,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
 from starlette.responses import StreamingResponse
 
-from api.agent import _sessions
+from api.agent import get_session_state
 from api.deps import get_pool, verify_ui_or_api_key
 
 router = APIRouter(
@@ -163,7 +163,7 @@ async def get_thread(
     pool: Annotated[asyncpg.Pool, Depends(get_pool)],
 ) -> dict[str, Any]:
     """Get full thread detail. Prefers live in-memory data, falls back to PG."""
-    session = _sessions.get(key)
+    session = get_session_state(key)
     if session:
         return _build_live_detail(key, session)
     return await _fetch_pg_detail(pool, key)
@@ -179,7 +179,7 @@ async def stream_thread(
 
     async def generate():
         # If not in memory, send PG snapshot immediately and close
-        session = _sessions.get(key)
+        session = get_session_state(key)
         if not session:
             try:
                 detail = await _fetch_pg_detail(pool, key)
@@ -189,23 +189,30 @@ async def stream_thread(
             return
 
         last_event_count = -1
+        last_turn_count = -1
         last_state = ""
         idle_ticks = 0
 
         while True:
-            session = _sessions.get(key)
+            session = get_session_state(key)
             if not session:
                 break
 
             total_events = sum(
                 len(t.get("events", [])) for t in session.get("turns", [])
             )
+            turn_count = len(session.get("turns", []))
             state = session.get("state", "")
 
-            if total_events != last_event_count or state != last_state:
+            if (
+                total_events != last_event_count
+                or turn_count != last_turn_count
+                or state != last_state
+            ):
                 detail = _build_live_detail(key, session)
                 yield f"data: {json.dumps(detail, default=str)}\n\n"
                 last_event_count = total_events
+                last_turn_count = turn_count
                 last_state = state
                 idle_ticks = 0
             else:

@@ -140,10 +140,14 @@ class EngineerOrchestrator:
         return max(lower, min(value, upper))
 
     @staticmethod
-    def _task_complexity_score(task: str) -> int:
+    def _task_complexity_score(
+        task: str, research_brief: str | None = None, plan: str | None = None
+    ) -> int:
         score = 0
         task_lower = task.lower()
-        if len(task) > 120:
+        if len(task) > 300:
+            score += 2
+        elif len(task) > 120:
             score += 1
         complexity_markers = (
             "refactor",
@@ -155,9 +159,45 @@ class EngineerOrchestrator:
             "api",
             "database",
             "slack",
+            "integration",
+            "auth",
         )
         score += sum(1 for marker in complexity_markers if marker in task_lower)
+        if research_brief:
+            research_lower = research_brief.lower()
+            if research_brief.count("## ") >= 4:
+                score += 1
+            if any(token in research_lower for token in ("complex", "cross-cutting", "multiple systems")):
+                score += 1
+        if plan:
+            plan_lower = plan.lower()
+            bullets = plan.count("\n- ") + plan.count("\n1.")
+            if bullets >= 5:
+                score += 1
+            if any(token in plan_lower for token in ("phased", "incremental", "rollout")):
+                score += 1
         return score
+
+    def _compute_turn_budgets(self, complexity_score: float) -> dict[str, int]:
+        if not self.settings.adaptive_turn_budgets_enabled:
+            fixed = self.settings.max_turns_per_phase
+            return {"research": fixed, "plan": 4, "implement": fixed, "review": 12}
+
+        scale = max(1, self.settings.turn_budget_score_full_scale)
+        ratio = min(max(complexity_score, 0.0) / float(scale), 1.0)
+
+        def _interp(floor: int, cap: int) -> int:
+            return self._clamp(round(floor + (cap - floor) * ratio), floor, cap)
+
+        research_cap = min(self.settings.turn_budget_research_cap, self.settings.research_max_turns)
+        return {
+            "research": _interp(self.settings.turn_budget_research_floor, research_cap),
+            "plan": _interp(self.settings.turn_budget_plan_floor, self.settings.turn_budget_plan_cap),
+            "implement": _interp(
+                self.settings.turn_budget_implement_floor, self.settings.turn_budget_implement_cap
+            ),
+            "review": _interp(self.settings.turn_budget_review_floor, self.settings.turn_budget_review_cap),
+        }
 
     def _research_branch_count(self, task: str) -> int:
         complexity = self._task_complexity_score(task)
@@ -208,7 +248,8 @@ class EngineerOrchestrator:
             "## Testing Strategy",
             "## Risks",
         )
-        return all(section in text for section in expected)
+        present = sum(1 for section in expected if section in text)
+        return present >= 3
 
     @staticmethod
     def _is_structured_plan(text: str) -> bool:
@@ -310,6 +351,9 @@ class EngineerOrchestrator:
             if thread_name:
                 session.thread_name = thread_name
 
+            session.complexity_score = float(self._task_complexity_score(session.task))
+            session.turn_budgets = self._compute_turn_budgets(session.complexity_score)
+
             branch = (
                 f"{self.settings.branch_prefix}/{session.run_id[:8]}"
                 f"/{slugify(session.task, max_len=32)}"
@@ -363,6 +407,7 @@ class EngineerOrchestrator:
                     tool_call_timeout_seconds=self.settings.tool_call_timeout_seconds,
                     request_timeout_seconds=self.settings.anthropic_request_timeout_seconds,
                     on_event=emit,
+                    fail_soft_on_budget=self.settings.turn_budget_fail_soft,
                 )
 
             session.phase = Phase.RESEARCH
@@ -373,17 +418,25 @@ class EngineerOrchestrator:
             await send(
                 f"Researching the codebase with {session.research_branch_count} parallel branches..."
             )
+            await send(
+                "Adaptive turn budgets: "
+                f"research={session.turn_budgets['research']}, "
+                f"plan={session.turn_budgets['plan']}, "
+                f"implement={session.turn_budgets['implement']}, "
+                f"review={session.turn_budgets['review']}"
+            )
 
             async def _run_research_branch(index: int) -> AgentLoopResult:
                 return await _run_phase_loop(
                     system_prompt=researcher_prompt(repo_guidance),
                     user_prompt=(
                         f"Task: {session.task}{self._preference_hint(session)}\n\n"
-                        f"Branch focus: {self._research_focus(index)}"
+                        f"BRANCH FOCUS (prioritize in your analysis): {self._research_focus(index)}\n\n"
+                        "When you have enough evidence for required headings, output and stop."
                     ),
                     tools=RESEARCH_TOOLS,
                     execute_tool=executor.execute,
-                    guard_state=self._phase_guard(),
+                    guard_state=self._phase_guard(max_turns=session.turn_budgets["research"]),
                 )
 
             research = await self._run_parallel_candidates(
@@ -394,7 +447,15 @@ class EngineerOrchestrator:
                 score=self._score_research,
                 session=session,
             )
+            session.phase_turns_used["research"] = research.turns
+            session.phase_budget_exceeded["research"] = (
+                research.stop_reason == "turn_budget_exceeded"
+            )
             session.research_brief = research.text or f"Implement task: {session.task}"
+            session.complexity_score = float(
+                self._task_complexity_score(session.task, session.research_brief)
+            )
+            session.turn_budgets = self._compute_turn_budgets(session.complexity_score)
             await send(
                 f"Research complete ({research.turns} turns, {research.tool_calls} tool calls)"
             )
@@ -412,11 +473,12 @@ class EngineerOrchestrator:
                     user_prompt=(
                         f"Task: {session.task}\n\n"
                         f"Research findings:\n{session.research_brief}\n\n"
-                        f"Branch focus: {self._plan_focus(index)}"
+                        f"BRANCH FOCUS: {self._plan_focus(index)}\n\n"
+                        "Output format: include exactly ## Approach, ## Plan, ## Verification."
                     ),
                     tools=[],
                     execute_tool=None,
-                    guard_state=self._phase_guard(max_turns=4),
+                    guard_state=self._phase_guard(max_turns=session.turn_budgets["plan"]),
                 )
 
             plan_result = await self._run_parallel_candidates(
@@ -427,7 +489,13 @@ class EngineerOrchestrator:
                 score=self._score_plan,
                 session=session,
             )
+            session.phase_turns_used["plan"] = plan_result.turns
+            session.phase_budget_exceeded["plan"] = plan_result.stop_reason == "turn_budget_exceeded"
             session.plan = plan_result.text or ""
+            session.complexity_score = float(
+                self._task_complexity_score(session.task, session.research_brief, session.plan)
+            )
+            session.turn_budgets = self._compute_turn_budgets(session.complexity_score)
             await send("Plan ready.")
 
             if self.skip_clarify:
@@ -455,15 +523,20 @@ class EngineerOrchestrator:
                     f"Implementing (iteration {session.iteration}/{self.settings.max_iterations})..."
                 )
 
-                _ = await _run_phase_loop(
+                implement_result = await _run_phase_loop(
                     system_prompt=engineer_prompt(
                         repo_guidance, session.spec, session.plan, feedback
                     ),
                     user_prompt=f"Implement: {session.task}{self._preference_hint(session)}",
                     tools=ENGINEER_TOOLS,
                     execute_tool=executor.execute,
-                    guard_state=self._phase_guard(),
+                    guard_state=self._phase_guard(max_turns=session.turn_budgets["implement"]),
                 )
+                session.phase_turns_used["implement"] = (
+                    session.phase_turns_used.get("implement", 0) + implement_result.turns
+                )
+                if implement_result.stop_reason == "turn_budget_exceeded":
+                    session.phase_budget_exceeded["implement"] = True
 
                 await send("Running validation...")
                 report = await run_validation(session.worktree)
@@ -497,8 +570,13 @@ class EngineerOrchestrator:
                     ),
                     tools=RESEARCH_TOOLS,
                     execute_tool=executor.execute,
-                    guard_state=self._phase_guard(max_turns=12),
+                    guard_state=self._phase_guard(max_turns=session.turn_budgets["review"]),
                 )
+                session.phase_turns_used["review"] = (
+                    session.phase_turns_used.get("review", 0) + review.turns
+                )
+                if review.stop_reason == "turn_budget_exceeded":
+                    session.phase_budget_exceeded["review"] = True
 
                 review_text = review.text.strip()
                 if review_text.upper().startswith("APPROVED"):
@@ -508,26 +586,10 @@ class EngineerOrchestrator:
                 session.phase = Phase.IMPLEMENT
                 await send(f"Review: CHANGES_REQUESTED\n{review_text[:500]}")
             else:
-                session.phase = Phase.FAILED
-                session.error = "Review loop did not reach approval"
-                return EngineerResult(
-                    run_id=session.run_id,
-                    success=False,
-                    status="failed",
-                    branch_name=session.branch_name,
-                    error=session.error,
-                )
+                raise RuntimeError("Review loop did not reach approval")
 
             if not await has_changes(session.worktree):
-                session.phase = Phase.FAILED
-                session.error = "No changes to commit"
-                return EngineerResult(
-                    run_id=session.run_id,
-                    success=False,
-                    status="failed",
-                    branch_name=session.branch_name,
-                    error=session.error,
-                )
+                raise RuntimeError("No changes to commit")
 
             session.phase = Phase.PUBLISH
             await notify_phase(Phase.PUBLISH, "")
@@ -568,6 +630,8 @@ class EngineerOrchestrator:
                     f"Iterations: {session.iteration}\n"
                 ),
             )
+            if not pr_url.strip():
+                raise RuntimeError("PR creation returned empty URL")
 
             session.pr_url = pr_url
             session.phase = Phase.DONE

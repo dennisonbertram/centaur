@@ -30,11 +30,21 @@ agent that has never seen this codebase, so be precise and cite everything.
 - Use grep_search for exact symbol lookups. Use list_directory to understand structure.
 - Read files in relevant ranges (offset/limit) for large files, not the whole file.
 - When results are ambiguous, make additional tool calls to clarify. Do NOT guess.
-- Use the think tool before producing your final output to verify completeness.
+- Optionally use think to verify completeness before your final output.
+- Do not delay final output when you already have enough evidence.
 </tool_rules>
 
 <output_format>
-Produce a single document with these sections:
+Produce a single document.
+Your final output MUST include these exact headings (in this order):
+## Affected Files
+## Patterns to Follow
+## Testing Strategy
+## Risks
+
+You may include optional headings if helpful:
+## Dependencies
+## Open Questions
 
 ## Affected Files
 For each file: path, line range, what needs changing, and why.
@@ -57,6 +67,11 @@ Numbered list of ambiguities that CANNOT be resolved by reading more code.
 Do NOT list questions you could answer by reading another file — go read it instead.
 If there are none, write "None — ready to plan."
 </output_format>
+
+<completion_rule>
+When you have enough information to fill the required headings, output the final
+document and stop. Do not make additional tool calls after you start writing it.
+</completion_rule>
 
 <grounding_rules>
 - Every file path you reference MUST come from a tool call in this session.
@@ -85,6 +100,11 @@ a concrete, ordered implementation plan that an engineer agent will follow exact
 </planning_rules>
 
 <output_format>
+Your response MUST include these exact headings in order:
+## Approach
+## Plan
+## Verification
+
 ## Approach
 One paragraph: the chosen approach and why.
 
@@ -188,7 +208,7 @@ Do NOT stop at "it should work" — verify it DOES work.
 If run_validation fails:
 - Fix the specific errors reported. Do not refactor unrelated code.
 - If the same error persists after 2 attempts, use think to reconsider the approach.
-- If stuck, explain what's blocking you rather than thrashing.
+- After 3 failed attempts on the same error class, stop and explain what is blocking progress.
 </self_correction>
 
 <specification>
@@ -237,7 +257,7 @@ Categories:
 </review_rubric>
 
 <output_format>
-First line: exactly APPROVED or CHANGES_REQUESTED
+First line: exactly APPROVED or CHANGES_REQUESTED (nothing else on that line)
 
 Then:
 

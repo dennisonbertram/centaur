@@ -142,6 +142,7 @@ async def run_agent_loop(
     tool_call_timeout_seconds: int = 180,
     request_timeout_seconds: int = 240,
     on_event: EventCallback | None = None,
+    fail_soft_on_budget: bool = False,
 ) -> AgentLoopResult:
     try:
         from anthropic import AsyncAnthropic
@@ -155,6 +156,7 @@ async def run_agent_loop(
     client = AsyncAnthropic(api_key=api_key)
     messages: list[dict[str, Any]] = [{"role": "user", "content": user_prompt}]
     last_stop_reason = "unknown"
+    last_text = ""
 
     create_kwargs: dict[str, Any] = {
         "model": model,
@@ -176,6 +178,13 @@ async def run_agent_loop(
         try:
             guard_state.check_turn()
         except GuardrailStopError as exc:
+            if fail_soft_on_budget and "max turns" in str(exc).lower():
+                return AgentLoopResult(
+                    text=last_text,
+                    turns=guard_state.turns,
+                    tool_calls=guard_state.tool_calls,
+                    stop_reason="turn_budget_exceeded",
+                )
             raise AgentLoopError(str(exc)) from exc
 
         try:
@@ -194,6 +203,9 @@ async def run_agent_loop(
         last_stop_reason = str(getattr(response, "stop_reason", "unknown"))
         content_blocks = list(getattr(response, "content", []))
         tool_calls = extract_tool_uses(content_blocks)
+        candidate_text = _extract_text(content_blocks)
+        if candidate_text:
+            last_text = candidate_text
 
         assistant_blocks = to_assistant_blocks(content_blocks)
         await emit(
@@ -230,6 +242,13 @@ async def run_agent_loop(
                             )
                         )
             except GuardrailStopError as exc:
+                if fail_soft_on_budget and "max turns" in str(exc).lower():
+                    return AgentLoopResult(
+                        text=last_text,
+                        turns=guard_state.turns,
+                        tool_calls=guard_state.tool_calls,
+                        stop_reason="turn_budget_exceeded",
+                    )
                 raise AgentLoopError(str(exc)) from exc
 
             result_blocks = build_tool_result_blocks(list(tool_results))
@@ -237,7 +256,7 @@ async def run_agent_loop(
             messages.append({"role": "user", "content": result_blocks})
             continue
 
-        text = _extract_text(content_blocks)
+        text = candidate_text
         return AgentLoopResult(
             text=text,
             turns=guard_state.turns,
