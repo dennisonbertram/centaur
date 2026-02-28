@@ -1,5 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "streamdown/styles.css";
+
+@source "../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -118,17 +121,9 @@ textarea {
     padding: 0.75rem;
   }
 
-  .prose-console :where([data-rehype-pretty-code-fragment]) {
-    margin: 0.35rem 0;
-  }
-
   .prose-console :where(pre code) {
     background: transparent;
     border-radius: 0;
     padding: 0;
-  }
-
-  .prose-console :where(pre [data-line]) {
-    display: block;
   }
 }

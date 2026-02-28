@@ -70,13 +70,7 @@ function renderStep(step: Step, key: string): React.ReactNode {
           Result
         </div>
         <div className="relative">
-          <MarkdownView text={step.text} />
-          {step.streaming ? (
-            <span
-              aria-hidden
-              className="inline-block ml-0.5 h-4 w-0.5 align-middle bg-primary animate-pulse"
-            />
-          ) : null}
+          <MarkdownView text={step.text} isStreaming={step.streaming} />
         </div>
       </div>
     );
