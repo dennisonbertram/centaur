@@ -6,9 +6,14 @@ async function agentCall(
   args: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   const t0 = performance.now();
-  const timeoutMs = endpoint === "execute" ? 660_000 : 30_000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Only apply a client-side timeout for short control-plane calls (spawn,
+  // interrupt, etc.).  Execute calls run as long as the backend needs — the
+  // backend already enforces its own EXEC_TIMEOUT.
+  const useTimeout = endpoint !== "execute";
+  const controller = useTimeout ? new AbortController() : undefined;
+  const timer = useTimeout
+    ? setTimeout(() => controller!.abort(), 30_000)
+    : undefined;
   try {
     const res = await fetch(`${API_URL}/agent/${endpoint}`, {
       method: "POST",
@@ -17,7 +22,7 @@ async function agentCall(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(args),
-      signal: controller.signal,
+      ...(controller ? { signal: controller.signal } : {}),
     });
 
     if (!res.ok) {
@@ -38,7 +43,7 @@ async function agentCall(
     );
     return data;
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -312,4 +317,117 @@ export async function replyEngineerFlow(
     ...(attachments && attachments.length > 0 ? { attachments } : {}),
   });
   return { status: (result.status as string) || "accepted" };
+}
+
+/**
+ * Subscribe to the backend SSE stream for a thread and call `onStatus`
+ * with human-readable progress descriptions as events arrive.
+ * Returns a cleanup function that tears down the connection.
+ */
+export function watchProgress(
+  threadKey: string,
+  onStatus: (status: string) => void,
+): () => void {
+  const controller = new AbortController();
+  const normalizedKey = normalizeThreadKey(threadKey);
+  const url = `${API_URL}/api/threads/stream-ui?key=${encodeURIComponent(normalizedKey)}&live_only=1`;
+
+  (async () => {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          Accept: "text/event-stream",
+          Authorization: `Bearer ${API_KEY}`,
+        },
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) return;
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      while (!controller.signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        while (buf.includes("\n\n")) {
+          const boundary = buf.indexOf("\n\n");
+          const raw = buf.slice(0, boundary);
+          buf = buf.slice(boundary + 2);
+
+          const dataLines = raw
+            .split("\n")
+            .filter((l) => l.startsWith("data:"))
+            .map((l) => l.slice(5).trim());
+          if (dataLines.length === 0) continue;
+          const payload = dataLines.join("\n");
+          if (payload === "[DONE]") return;
+
+          try {
+            const evt = JSON.parse(payload);
+            const status = describeEvent(evt);
+            if (status) onStatus(status);
+          } catch {
+            // ignore malformed chunks
+          }
+        }
+      }
+    } catch {
+      // Connection closed or aborted — expected on cleanup.
+    }
+  })();
+
+  return () => controller.abort();
+}
+
+function describeEvent(evt: Record<string, unknown>): string | null {
+  const type = typeof evt.type === "string" ? evt.type : "";
+
+  if (type === "assistant") {
+    const message = evt.message as Record<string, unknown> | undefined;
+    const content = Array.isArray(message?.content) ? message!.content : [];
+    for (const block of content) {
+      if (block?.type === "tool_use") {
+        const name = typeof block.name === "string" ? block.name : "tool";
+        return `Running tool: ${name}`;
+      }
+    }
+    return "Generating response...";
+  }
+
+  if (type === "tool") {
+    return null; // tool results are noisy; keep showing the tool name
+  }
+
+  if (type === "reasoning") {
+    return "Thinking...";
+  }
+
+  if (type === "command_execution") {
+    const cmd = typeof evt.command === "string" ? evt.command : "";
+    if (cmd) {
+      const short = cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd;
+      return `Running: ${short}`;
+    }
+    return "Running command...";
+  }
+
+  if (type === "status") {
+    const stage = typeof evt.stage === "string" ? evt.stage : "";
+    if (stage === "container.creating") return "Creating container...";
+    if (stage === "container.ready") return "Container ready";
+    if (stage === "files.downloading") return "Downloading files...";
+    if (stage === "exec.start") return "Agent starting...";
+    return null;
+  }
+
+  if (type === "data-agent-status") {
+    const data = evt.data as Record<string, unknown> | undefined;
+    const text = typeof data?.text === "string" ? data.text : "";
+    if (text) return text;
+  }
+
+  return null;
 }

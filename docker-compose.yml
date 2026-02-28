@@ -29,8 +29,6 @@ services:
 
   api:
     build: .
-    ports:
-      - "127.0.0.1:8000:8000"
     env_file:
       - path: .env
         required: false
@@ -70,8 +68,6 @@ services:
   slackbot:
     build:
       context: apps/slackbot
-    ports:
-      - "127.0.0.1:3001:3001"
     env_file:
       - path: .env
         required: false
@@ -86,6 +82,71 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  auth:
+    build: services/auth
+    environment:
+      UI_PASSWORD: ${UI_PASSWORD:-}
+      API_SECRET_KEY: ${API_SECRET_KEY:-}
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./monitoring/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - auth
+      - api
+      - slackbot
+      - grafana
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SERVER_ROOT_URL: http://localhost:8000/grafana
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_HEADER_NAME: X-Forwarded-User
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheusdata:/prometheus
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:latest
+    volumes:
+      - ./monitoring/loki.yml:/etc/loki/local-config.yaml:ro
+      - lokidata:/loki
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:latest
+    volumes:
+      - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:
+  grafanadata:
+  prometheusdata:
+  lokidata:

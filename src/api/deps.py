@@ -20,18 +20,10 @@ async def get_embedding_service(
     return EmbeddingService(pool=pool)
 
 
-_DOCKER_PREFIXES = ("172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.")
-
-
 async def verify_api_key(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> str:
-    # Skip auth for requests from Docker bridge networks (agent containers)
-    client_ip = request.client.host if request.client else ""
-    if client_ip.startswith(_DOCKER_PREFIXES):
-        return "docker-bypass"
-
     if not settings.api_secret_key:
         raise HTTPException(status_code=500, detail="API key not configured")
 
@@ -50,13 +42,14 @@ async def verify_ui_or_api_key(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> str:
-    """Accept either a valid UI session cookie or an API key."""
-    from api.routers.ui import _check_auth
+    """Accept either nginx-forwarded auth (X-Forwarded-User) or an API key.
 
-    # Only honor UI cookie auth when UI password protection is enabled.
-    # If UI password is disabled, require API key for backend API routes.
-    if settings.ui_password and _check_auth(request):
-        return "cookie"
+    When the request comes through nginx with a valid session cookie, nginx
+    sets ``X-Forwarded-User`` via ``auth_request``.  To swap to Okta / SSO,
+    replace the auth service container — this code stays the same.
+    """
+    if request.headers.get("x-forwarded-user"):
+        return "nginx"
     return await verify_api_key(request, x_api_key)
 
 

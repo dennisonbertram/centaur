@@ -17,11 +17,11 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from api.agent import session_items_snapshot, signal_shutdown
 from api.mcp_server import mcp, set_pool, set_tool_manager
-from api.routers import admin, health, query, search, secrets, slack_events, threads, ui
+from api.routers import admin, health, query, search, secrets, slack_events, threads
 from api.routers import agent as agent_router_mod
 from shared.config import settings
 from shared.db import close_pool, create_pool
@@ -136,7 +136,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -149,7 +149,6 @@ app.include_router(threads.router)
 app.include_router(agent_router_mod.router)
 app.include_router(admin.router)
 app.include_router(slack_events.router)
-app.include_router(ui.router)
 
 # Load tools before creating MCP starlette app
 _app_root = Path(__file__).resolve().parent.parent.parent
@@ -164,35 +163,25 @@ app.include_router(tool_manager.create_rest_router())
 _mcp_starlette = mcp.streamable_http_app()
 
 
-_DOCKER_PREFIXES = ("172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.")
-
-
 class _MCPAuthMiddleware:
-    """ASGI middleware that validates Bearer token before forwarding to MCP.
-
-    Requests from Docker bridge networks (172.17-22.*) skip auth.
-    """
+    """ASGI middleware that validates Bearer token before forwarding to MCP."""
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             request = Request(scope, receive)
-            client_ip = request.client.host if request.client else ""
-            is_docker = client_ip.startswith(_DOCKER_PREFIXES)
+            token: str | None = None
+            auth = request.headers.get("authorization", "")
+            if auth.lower().startswith("bearer "):
+                token = auth[7:]
 
-            if not is_docker:
-                token: str | None = None
-                auth = request.headers.get("authorization", "")
-                if auth.lower().startswith("bearer "):
-                    token = auth[7:]
-
-                if not settings.api_secret_key or not _secrets.compare_digest(
-                    token, settings.api_secret_key
-                ):
-                    resp = JSONResponse(
-                        {"detail": "Invalid or missing Bearer token"}, status_code=401
-                    )
-                    await resp(scope, receive, send)
-                    return
+            if not settings.api_secret_key or not token or not _secrets.compare_digest(
+                token, settings.api_secret_key
+            ):
+                resp = JSONResponse(
+                    {"detail": "Invalid or missing Bearer token"}, status_code=401
+                )
+                await resp(scope, receive, send)
+                return
 
         await _mcp_starlette(scope, receive, send)
 
@@ -261,51 +250,3 @@ async def proxy_webhooks(request: Request, path: str):
     )
 
 
-# ---------------------------------------------------------------------------
-# Catch-all: proxy everything else to the slackbot Next.js UI
-# ---------------------------------------------------------------------------
-# Must be registered LAST so it doesn't swallow API/MCP routes.
-
-@app.get("/")
-async def root_redirect(request: Request):
-    """Redirect / to /threads."""
-    from api.routers.ui import _check_auth
-
-    if not _check_auth(request):
-        return RedirectResponse("/login", status_code=302)
-    return RedirectResponse("/threads", status_code=302)
-
-
-@app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
-async def proxy_ui_catchall(request: Request, path: str):
-    """Reverse proxy to the slackbot Next.js app with password protection."""
-    from api.routers.ui import _check_auth
-
-    if not path.startswith("_next/") and not _check_auth(request):
-        return RedirectResponse("/login", status_code=302)
-
-    target = f"{_SLACKBOT_URL}/{path}"
-    qs = str(request.query_params)
-    if qs:
-        target += f"?{qs}"
-
-    body = await request.body()
-    skip = {"host", "connection", "transfer-encoding", "content-length"}
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.request(
-            method=request.method,
-            url=target,
-            headers=headers,
-            content=body if body else None,
-        )
-
-    skip_resp = {"transfer-encoding", "connection", "content-encoding", "content-length"}
-    resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in skip_resp}
-
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        headers=resp_headers,
-    )

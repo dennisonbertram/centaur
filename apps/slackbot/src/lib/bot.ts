@@ -11,6 +11,7 @@ import {
   replyEngineerFlow,
   spawn,
   startEngineerFlow,
+  watchProgress,
   type AgentMode,
   type BudgetMode,
   type FileAttachment,
@@ -524,28 +525,36 @@ function createBot() {
         ? buildSessionContext(threadKey) + instruction
         : instruction;
 
+      const stopProgress = watchProgress(threadKey, (status) => {
+        thread.startTyping(status).catch(() => {});
+      });
+
       let result = "";
-      const maxAttempts = 6;
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        try {
-          result = await execute(
-            threadKey,
-            message,
-            harness,
-            requestId,
-            files.length > 0 ? files : undefined,
-            userId,
-            "slack",
-          );
-          break;
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error);
-          const shouldRetry = isBusyRunError(detail) && attempt < maxAttempts;
-          if (!shouldRetry) {
-            throw error;
+      try {
+        const maxAttempts = 6;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          try {
+            result = await execute(
+              threadKey,
+              message,
+              harness,
+              requestId,
+              files.length > 0 ? files : undefined,
+              userId,
+              "slack",
+            );
+            break;
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            const shouldRetry = isBusyRunError(detail) && attempt < maxAttempts;
+            if (!shouldRetry) {
+              throw error;
+            }
+            await sleep(Math.min(500 * Math.pow(2, attempt - 1), 5000));
           }
-          await sleep(Math.min(500 * Math.pow(2, attempt - 1), 5000));
         }
+      } finally {
+        stopProgress();
       }
       setContextWatermark(threadKey, nextWatermark);
 

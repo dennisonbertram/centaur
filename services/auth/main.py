@@ -1,4 +1,15 @@
-"""UI proxy — serves the thread viewer from the slackbot Next.js app behind a password."""
+"""Standalone auth service for nginx auth_request.
+
+Handles password-based session authentication.  Replace this container with
+oauth2-proxy (or any OIDC provider) when upgrading to Okta / SSO.
+
+Endpoints
+---------
+GET  /login       — render login form
+POST /login       — validate password, set session cookie
+GET  /logout      — clear session cookie
+GET  /auth/check  — 200 if valid session, 401 otherwise (nginx auth_request)
+"""
 
 from __future__ import annotations
 
@@ -6,39 +17,44 @@ import hashlib
 import hmac
 import os
 import secrets
+import sys
 
-import httpx
-import structlog
-from fastapi import APIRouter, Request
+from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
+from starlette.routing import Route
 
-from shared.config import settings
-
-log = structlog.get_logger()
-
-router = APIRouter(tags=["ui"])
-
-_SLACKBOT_URL = os.environ.get("SLACKBOT_URL", "http://localhost:3001")
+_PASSWORD = os.environ.get("UI_PASSWORD", "")
+_SECRET_KEY = os.environ.get("API_SECRET_KEY", "")
 _COOKIE_NAME = "tempo_ui_session"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
+_COOKIE_SECURE = os.environ.get("AUTH_COOKIE_INSECURE", "") != "1"
+
+if not _SECRET_KEY and _PASSWORD:
+    print("FATAL: API_SECRET_KEY is required when UI_PASSWORD is set", file=sys.stderr)
+    sys.exit(1)
 
 
 def _make_token() -> str:
-    """Create a session token from the UI password."""
-    key = (settings.api_secret_key or "tempo-ui-key").encode()
-    return hmac.new(key, settings.ui_password.encode(), hashlib.sha256).hexdigest()
+    if not _PASSWORD:
+        return ""
+    return hmac.new(
+        _SECRET_KEY.encode(), _PASSWORD.encode(), hashlib.sha256
+    ).hexdigest()
 
 
 def _check_auth(request: Request) -> bool:
-    """Check if the request has a valid session cookie."""
-    if not settings.ui_password:
-        return True  # No password configured, allow all
+    if not _PASSWORD:
+        return True
     token = request.cookies.get(_COOKIE_NAME, "")
     if not token:
         return False
     return secrets.compare_digest(token, _make_token())
 
 
+# ---------------------------------------------------------------------------
+# Login page HTML (self-contained, no external assets)
+# ---------------------------------------------------------------------------
 _LOGIN_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -144,9 +160,7 @@ _LOGIN_HTML = """<!DOCTYPE html>
 </html>"""
 
 
-@router.get("/login")
-async def login_page(request: Request):
-    """Serve the login form."""
+async def login_page(request: Request) -> Response:
     if _check_auth(request):
         return RedirectResponse("/threads", status_code=302)
     error = request.query_params.get("error", "")
@@ -154,16 +168,14 @@ async def login_page(request: Request):
     return HTMLResponse(_LOGIN_HTML % {"error_html": error_html})
 
 
-@router.post("/login")
-async def login_submit(request: Request):
-    """Validate password and set session cookie."""
+async def login_submit(request: Request) -> Response:
     form = await request.form()
     password = str(form.get("password", ""))
 
-    if not settings.ui_password:
+    if not _PASSWORD:
         return RedirectResponse("/threads", status_code=302)
 
-    if not secrets.compare_digest(password, settings.ui_password):
+    if not secrets.compare_digest(password, _PASSWORD):
         return RedirectResponse("/login?error=1", status_code=303)
 
     response = RedirectResponse("/threads", status_code=303)
@@ -172,15 +184,30 @@ async def login_submit(request: Request):
         _make_token(),
         max_age=_COOKIE_MAX_AGE,
         httponly=True,
-        secure=True,
+        secure=_COOKIE_SECURE,
         samesite="lax",
     )
     return response
 
 
-@router.get("/logout")
-async def logout():
-    """Clear session cookie."""
+async def logout(request: Request) -> Response:
     response = RedirectResponse("/login", status_code=302)
     response.delete_cookie(_COOKIE_NAME)
     return response
+
+
+async def auth_check(request: Request) -> Response:
+    """Return 200 + X-Auth-User header if authenticated, 401 otherwise."""
+    if _check_auth(request):
+        return Response(status_code=200, headers={"X-Auth-User": "authenticated"})
+    return Response(status_code=401)
+
+
+routes = [
+    Route("/login", login_page, methods=["GET"]),
+    Route("/login", login_submit, methods=["POST"]),
+    Route("/logout", logout, methods=["GET"]),
+    Route("/auth/check", auth_check, methods=["GET"]),
+]
+
+app = Starlette(routes=routes)
