@@ -188,9 +188,27 @@ function createBot() {
     const harness = parsed.harness ?? "amp";
     const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(threadKey)}`;
 
+    // Post thread viewer link instantly, start native typing indicator
+    const statusMsg = await thread.post(
+      renderSlackMessage(`[🔗 Thread Viewer](${viewerUrl})`)
+    );
     await thread.startTyping("Thinking...");
 
     let activeTools: string[] = [];
+    let editQueued = false;
+
+    function queueEdit() {
+      if (editQueued) return;
+      editQueued = true;
+      setTimeout(() => {
+        editQueued = false;
+        const toolLines = activeTools.map((t) => `  🔧 ${t}`).join("\n");
+        const text = toolLines
+          ? `${toolLines}\n\n[🔗 Thread Viewer](${viewerUrl})`
+          : `[🔗 Thread Viewer](${viewerUrl})`;
+        statusMsg.edit(renderSlackMessage(text)).catch(() => {});
+      }, 300);
+    }
 
     const message = isFirstMessage
       ? buildSessionContext(threadKey) + parsed.cleanedText
@@ -210,6 +228,7 @@ function createBot() {
             if (activeTools.length > 5) activeTools.shift();
             const status = activeTools.map((t) => `🔧 ${t}`).join("  ");
             thread.startTyping(status).catch(() => {});
+            queueEdit();
           }
         }
         if (event.type === "tool_result" || event.type === "tool_output") {
@@ -219,15 +238,17 @@ function createBot() {
             ? activeTools.map((t) => `🔧 ${t}`).join("  ")
             : "Thinking...";
           thread.startTyping(status).catch(() => {});
+          queueEdit();
         }
       },
     );
 
-    // Post final result — auto-clears typing indicator
+    // Edit status message with final result — thread.post would auto-clear typing
+    // but we edit-in-place to avoid a second message
     const finalText = isFirstMessage
       ? `${result}\n\n[🔗 Thread Viewer](${viewerUrl})`
       : result;
-    await thread.post(renderSlackMessage(finalText));
+    await statusMsg.edit(renderSlackMessage(finalText));
   }
 
   bot.onNewMention(async (thread, message) => {
