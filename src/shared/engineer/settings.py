@@ -40,7 +40,7 @@ class EngineerSettings(BaseSettings):
     parallel_min_completed_before_early_stop: int = 2
     branch_timeout_seconds: int = 360
 
-    command_allowlist: str = "uv,ruff,pytest,mypy,python,python3,rg,ls,pwd"
+    command_allowlist: str = "uv,ruff,pytest,mypy,python,python3,rg,fd,tree,ls,pwd,jq,yq,timeout"
     protected_write_paths: str = ".github/workflows,.env,.env.example"
     cleanup_worktree: bool = True
 

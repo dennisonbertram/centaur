@@ -1,6 +1,10 @@
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends git curl unzip && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl unzip \
+    ripgrep fd-find jq yq tree gettext-base \
+    && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install 1Password CLI (multi-arch)
 ARG TARGETARCH
