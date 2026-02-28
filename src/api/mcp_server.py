@@ -52,7 +52,9 @@ def _get_pool() -> asyncpg.Pool:
 def _to_toon(data: Any) -> str:
     """Encode data as TOON for token-efficient LLM responses."""
     try:
-        return toon_encode(_flatten_for_tabular(data))
+        toon = toon_encode(_flatten_for_tabular(data))
+        compact_json = json.dumps(data, separators=(",", ":"), default=str)
+        return toon if len(toon) <= len(compact_json) else compact_json
     except Exception:
         return json.dumps(data, default=str)
 
