@@ -4,13 +4,13 @@ import { createSlackAdapter } from "@chat-adapter/slack";
 import { createRedisState } from "@chat-adapter/state-redis";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import {
-  execute,
+  executeStream,
   extractRunOptions,
   replyEngineerFlow,
-  spawn,
   startEngineerFlow,
   type AgentMode,
   type FileAttachment,
+  type ProgressEvent,
 } from "./harness";
 
 const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "https://svc-ai.paradigm.xyz";
@@ -49,7 +49,7 @@ function createBot() {
     process.env.SLACK_BOT_TOKEN && process.env.SLACK_SIGNING_SECRET;
 
   const bot = new Chat({
-    userName: "tempo-ai",
+    userName: "ai",
     adapters: hasSlackCreds ? { slack: createSlackAdapter() } : {},
     state: process.env.REDIS_URL ? createRedisState() : createMemoryState(),
   });
@@ -173,30 +173,60 @@ function createBot() {
     setThreadMode(threadKey, { mode: "default", modelPreference: null });
     const harness = parsed.harness ?? "amp";
 
-    await thread.startTyping("Spawning agent...");
+    // Post initial status message with thread viewer link immediately
+    const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(threadKey)}`;
+    const statusMsg = await thread.post(
+      renderSlackMessage(`⏳ Starting...\n\n[🔗 Thread Viewer](${viewerUrl})`)
+    );
 
-    await spawn(threadKey, harness, undefined, requestId);
+    // Throttle status edits to avoid Slack rate limits
+    let lastEditTime = 0;
+    let lastStatusText = "";
+    const MIN_EDIT_INTERVAL_MS = 1500;
 
-    await thread.startTyping("Running...");
+    function progressToText(event: ProgressEvent): string | null {
+      if (event.type === "status") {
+        switch (event.stage) {
+          case "container.creating": return "⏳ Creating container...";
+          case "container.ready": return "⚡ Container ready";
+          case "files.downloading": return "📎 Downloading files...";
+          case "exec.start": return `⚡ Running ${event.harness || harness}...`;
+          default: return null;
+        }
+      }
+      // Agent tool calls (amp emits these as JSON events)
+      if (event.type === "tool_use" || event.type === "tool_call") {
+        const name = (event.name || event.tool || "") as string;
+        if (name) return `🔧 ${name}...`;
+      }
+      return null;
+    }
 
     const message = isFirstMessage
       ? buildSessionContext(threadKey) + parsed.cleanedText
       : parsed.cleanedText;
-    const result = await execute(
+
+    const result = await executeStream(
       threadKey,
       message,
       harness,
       requestId,
-      files.length > 0 ? files : undefined
+      files.length > 0 ? files : undefined,
+      (event) => {
+        const text = progressToText(event);
+        if (!text || text === lastStatusText) return;
+        const now = Date.now();
+        if (now - lastEditTime < MIN_EDIT_INTERVAL_MS) return;
+        lastEditTime = now;
+        lastStatusText = text;
+        statusMsg
+          .edit(renderSlackMessage(`${text}\n\n[🔗 Thread Viewer](${viewerUrl})`))
+          .catch(() => {});
+      },
     );
 
-    let finalMessage = result;
-    if (isFirstMessage) {
-      const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(threadKey)}`;
-      finalMessage += `\n\n[🔗 Thread Viewer](${viewerUrl})`;
-    }
-
-    await thread.post(renderSlackMessage(finalMessage));
+    // Post the final result as a new message
+    await thread.post(renderSlackMessage(result));
   }
 
   bot.onNewMention(async (thread, message) => {

@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import queue
+import threading
 from typing import Any
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.agent import get_agent
@@ -63,6 +67,49 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
         agent.execute, req.slack_thread_key, req.message, req.harness, req.repo, req.request_id,
         files,
     )
+
+
+@router.post("/execute_stream")
+async def execute_stream(req: ExecuteRequest) -> StreamingResponse:
+    """Execute a message, streaming progress events via SSE."""
+    agent = get_agent()
+    q: queue.Queue[dict | None] = queue.Queue()
+
+    def run() -> None:
+        try:
+            files = [{"url": f.url, "name": f.name} for f in req.files] if req.files else None
+            agent.execute(
+                req.slack_thread_key,
+                req.message,
+                req.harness,
+                req.repo,
+                req.request_id,
+                files,
+                emit=q.put,
+            )
+        except Exception as e:
+            q.put({"type": "error", "message": str(e)})
+        finally:
+            q.put(None)
+
+    threading.Thread(target=run, daemon=True).start()
+
+    async def event_generator():
+        while True:
+            try:
+                item = await asyncio.wait_for(
+                    asyncio.to_thread(q.get, timeout=30), timeout=35
+                )
+            except (asyncio.TimeoutError, Exception):
+                yield ": keep-alive\n\n"
+                continue
+
+            if item is None:
+                break
+
+            yield f"data: {json.dumps(item, default=str)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post("/stop")

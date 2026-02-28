@@ -168,6 +168,83 @@ export async function execute(
   return (result.result as string) || "No response from agent.";
 }
 
+export type ProgressEvent = {
+  type: string;
+  stage?: string;
+  harness?: string;
+  result?: string;
+  message?: string;
+  [key: string]: unknown;
+};
+
+export async function executeStream(
+  threadKey: string,
+  message: string,
+  harness: Harness = "amp",
+  requestId?: string,
+  files?: FileAttachment[],
+  onEvent?: (event: ProgressEvent) => void,
+): Promise<string> {
+  const res = await fetch(`${API_URL}/agent/execute_stream`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      slack_thread_key: threadKey,
+      message,
+      harness,
+      ...(requestId ? { request_id: requestId } : {}),
+      ...(files && files.length > 0 ? { files } : {}),
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`agent/execute_stream failed (${res.status}): ${text}`);
+  }
+
+  let finalResult = "No response from agent.";
+  const reader = res.body?.getReader();
+  if (!reader) return finalResult;
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE frames
+    while (buffer.includes("\n\n")) {
+      const idx = buffer.indexOf("\n\n");
+      const frame = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+
+      for (const line of frame.split("\n")) {
+        if (line.startsWith("data: ")) {
+          try {
+            const event: ProgressEvent = JSON.parse(line.slice(6));
+            if (event.type === "final") {
+              finalResult = (event.result as string) || finalResult;
+            } else if (event.type === "error") {
+              finalResult = `❌ ${event.message || "Unknown error"}`;
+            }
+            onEvent?.(event);
+          } catch {
+            // skip malformed JSON
+          }
+        }
+      }
+    }
+  }
+
+  return finalResult;
+}
+
 export async function stop(threadKey: string): Promise<void> {
   await agentCall("stop", { slack_thread_key: threadKey });
 }
