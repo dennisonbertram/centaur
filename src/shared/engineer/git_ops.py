@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shutil
 from pathlib import Path
 
 
@@ -29,17 +30,54 @@ async def _run(argv: list[str], cwd: Path) -> tuple[int, str, str]:
     )
 
 
-async def create_worktree(repo_root: Path, branch_name: str, base_ref: str) -> Path:
+def _sanitize_secret(text: str, secret: str) -> str:
+    if not secret:
+        return text
+    return text.replace(secret, "***")
+
+
+async def create_worktree(
+    repo_root: Path,
+    branch_name: str,
+    base_ref: str,
+    *,
+    github_owner: str,
+    github_repo: str,
+    github_token: str,
+) -> Path:
+    """Create an isolated engineer workspace via fresh clone.
+
+    We intentionally avoid `git worktree add` because API containers can run
+    without a `.git` checkout. Cloning with a token-authenticated URL makes the
+    push/PR path deterministic in containerized environments.
+    """
+    if not github_token:
+        raise GitOperationError("Missing GITHUB_TOKEN for engineer git workspace setup")
+
     root = repo_root.parent / ".engineer-worktrees"
     root.mkdir(parents=True, exist_ok=True)
     worktree = root / branch_name.replace("/", "-")
+    if worktree.exists():
+        shutil.rmtree(worktree, ignore_errors=True)
 
+    repo_url = (
+        f"https://x-access-token:{github_token}@github.com/{github_owner}/{github_repo}.git"
+    )
     code, _, err = await _run(
-        ["git", "worktree", "add", "-b", branch_name, str(worktree), base_ref],
-        cwd=repo_root,
+        ["git", "clone", "--branch", base_ref, "--single-branch", repo_url, str(worktree)],
+        cwd=root,
     )
     if code != 0:
-        raise GitOperationError(f"Failed to create worktree: {err}")
+        raise GitOperationError(
+            f"Failed to clone workspace: {_sanitize_secret(err, github_token)}"
+        )
+
+    code, _, err = await _run(["git", "checkout", "-b", branch_name], cwd=worktree)
+    if code != 0:
+        raise GitOperationError(
+            f"Failed to create engineer branch: {_sanitize_secret(err, github_token)}"
+        )
+
     return worktree
 
 
@@ -76,4 +114,5 @@ async def push_branch(worktree: Path, branch_name: str) -> None:
 
 
 async def cleanup_worktree(repo_root: Path, worktree: Path) -> None:
-    await _run(["git", "worktree", "remove", "--force", str(worktree)], cwd=repo_root)
+    _ = repo_root
+    shutil.rmtree(worktree, ignore_errors=True)

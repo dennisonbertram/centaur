@@ -64,6 +64,10 @@ _PHASE_LABELS: dict[Phase, str] = {
 }
 
 
+def _build_slack_thread_key(channel: str, thread_ts: str) -> str:
+    return f"slack:{channel}:{thread_ts}"
+
+
 def _normalize_attachments(items: list[dict[str, str]] | None) -> list[dict[str, str]]:
     if not items:
         return []
@@ -330,6 +334,12 @@ async def _start_engineer_session(
                     )
                     remove_session(thread_key)
                     return
+                if not settings.anthropic_api_key:
+                    await _send(
+                        "Engineer failed preflight: `ANTHROPIC_API_KEY` is missing."
+                    )
+                    remove_session(thread_key)
+                    return
                 preference_msg = f" (model preference: {model_preference})" if model_preference else ""
                 await _send(f"Engineer started{preference_msg}: `{task_text}`")
                 orchestrator = EngineerOrchestrator(
@@ -412,15 +422,17 @@ async def start_engineer(payload: EngineerStartRequest) -> JSONResponse:
     if not task_text:
         raise HTTPException(status_code=400, detail="Task must not be empty")
 
-    thread_key = payload.thread_key.strip() or f"{payload.channel}:{payload.thread_ts}"
-    if ":" not in thread_key:
-        thread_key = f"{payload.channel}:{payload.thread_ts}"
+    thread_key = payload.thread_key.strip() or _build_slack_thread_key(payload.channel, payload.thread_ts)
+    channel = payload.channel.strip()
+    thread_ts = payload.thread_ts.strip()
+    if not channel or not thread_ts:
+        raise HTTPException(status_code=400, detail="channel and thread_ts are required")
 
     result = await _start_engineer_session(
         settings=settings,
         bot_token=bot_token,
-        channel=payload.channel,
-        thread_ts=payload.thread_ts,
+        channel=channel,
+        thread_ts=thread_ts,
         thread_key=thread_key,
         task_text=task_text,
         model_preference=payload.model_preference,
@@ -488,7 +500,7 @@ async def slack_events(request: Request) -> JSONResponse:
     if not bot_token:
         raise HTTPException(status_code=500, detail="Slack bot token is not configured")
 
-    thread_key = f"{channel}:{thread_ts}"
+    thread_key = _build_slack_thread_key(channel, thread_ts)
 
     if _route_reply_to_session(thread_key, task_text) == "accepted":
         return JSONResponse({"ok": True})

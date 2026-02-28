@@ -309,7 +309,12 @@ class EngineerOrchestrator:
             )
             session.branch_name = branch
             session.worktree = await create_worktree(
-                self.repo_root, branch, self.settings.github_base_branch
+                self.repo_root,
+                branch,
+                self.settings.github_base_branch,
+                github_owner=self.settings.github_repo_owner,
+                github_repo=self.settings.github_repo_name,
+                github_token=self.settings.github_token,
             )
             executor = ToolExecutor(
                 session.worktree,

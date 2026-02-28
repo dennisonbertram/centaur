@@ -132,39 +132,53 @@ function createBot() {
       setThreadMode(threadKey, { mode: "eng", modelPreference });
 
       if (isFirstMessage) {
-        await thread.startTyping("Starting engineer flow...");
-        const result = await startEngineerFlow(
-          threadKey,
-          parsed.cleanedText,
-          modelPreference,
-          files.length > 0 ? files : undefined
-        );
-        const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(threadKey)}`;
-        const preferenceLine = modelPreference
-          ? `\nModel preference: \`${modelPreference}\``
-          : "";
-        const statusLine =
-          result.status === "already_running"
-            ? "Engineer flow is already running for this thread."
-            : "Engineer flow started.";
-        await thread.post(
-          renderSlackMessage(
-            `${statusLine}${preferenceLine}\n\n[🔗 Thread Viewer](${viewerUrl})`
-          )
-        );
+        try {
+          await thread.startTyping("Starting engineer flow...");
+          const result = await startEngineerFlow(
+            threadKey,
+            parsed.cleanedText,
+            modelPreference,
+            files.length > 0 ? files : undefined
+          );
+          const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(threadKey)}`;
+          const preferenceLine = modelPreference
+            ? `\nModel preference: \`${modelPreference}\``
+            : "";
+          const statusLine =
+            result.status === "already_running"
+              ? "Engineer flow is already running for this thread."
+              : "Engineer flow started.";
+          await thread.post(
+            renderSlackMessage(
+              `${statusLine}${preferenceLine}\n\n[🔗 Thread Viewer](${viewerUrl})`
+            )
+          );
+        } catch (error) {
+          const msg = error instanceof Error ? error.message : "unknown error";
+          await thread.post(
+            renderSlackMessage(`Failed to start engineer flow: ${msg}`)
+          );
+        }
         return;
       }
 
-      const reply = await replyEngineerFlow(
-        threadKey,
-        parsed.cleanedText,
-        files.length > 0 ? files : undefined
-      );
-      if (reply.status === "no_active_session") {
+      try {
+        const reply = await replyEngineerFlow(
+          threadKey,
+          parsed.cleanedText,
+          files.length > 0 ? files : undefined
+        );
+        if (reply.status === "no_active_session") {
+          await thread.post(
+            renderSlackMessage(
+              "No active engineer session for this thread. Start a new run with `--eng`."
+            )
+          );
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : "unknown error";
         await thread.post(
-          renderSlackMessage(
-            "No active engineer session for this thread. Start a new run with `--eng`."
-          )
+          renderSlackMessage(`Failed to send engineer reply: ${msg}`)
         );
       }
       return;

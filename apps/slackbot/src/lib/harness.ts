@@ -273,14 +273,25 @@ async function apiCall(
 }
 
 function splitThreadKey(threadKey: string): { channel: string; threadTs: string } {
-  const idx = threadKey.indexOf(":");
-  if (idx <= 0 || idx >= threadKey.length - 1) {
-    throw new Error(`Invalid thread key: ${threadKey}`);
+  const parts = threadKey.split(":");
+
+  // Current Slack adapter format: slack:<channel_id>:<thread_ts>.
+  if (parts.length === 3 && parts[0] === "slack" && parts[1] && parts[2]) {
+    return {
+      channel: parts[1],
+      threadTs: parts[2],
+    };
   }
-  return {
-    channel: threadKey.slice(0, idx),
-    threadTs: threadKey.slice(idx + 1),
-  };
+
+  // Keep support for plain "<channel_id>:<thread_ts>" keys.
+  if (parts.length === 2 && parts[0] && parts[1]) {
+    return {
+      channel: parts[0],
+      threadTs: parts[1],
+    };
+  }
+
+  throw new Error(`Invalid thread key: ${threadKey}`);
 }
 
 export async function startEngineerFlow(

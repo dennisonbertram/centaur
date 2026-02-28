@@ -69,4 +69,27 @@ fi
 # Clear sensitive bootstrap vars so they don't leak to the app
 unset OP_MASTER_PASSWORD OP_SECRET_KEY
 
+# ---------------------------------------------------------------------------
+# Canonical env aliases
+# Keep app code stable on canonical names while allowing legacy/box-specific
+# variable names from .env or 1Password item titles.
+# ---------------------------------------------------------------------------
+if [[ -z "${SLACK_BOT_TOKEN:-}" && -n "${SLACK_TOKEN:-}" ]]; then
+    export SLACK_BOT_TOKEN="${SLACK_TOKEN}"
+fi
+if [[ -z "${GITHUB_TOKEN:-}" && -n "${GH_TOKEN:-}" ]]; then
+    export GITHUB_TOKEN="${GH_TOKEN}"
+fi
+if [[ -z "${GITHUB_TOKEN:-}" && -n "${GITHUB_PAT:-}" ]]; then
+    export GITHUB_TOKEN="${GITHUB_PAT}"
+fi
+if [[ -z "${ANTHROPIC_API_KEY:-}" && -n "${ANTHROPIC_KEY:-}" ]]; then
+    export ANTHROPIC_API_KEY="${ANTHROPIC_KEY}"
+fi
+if [[ -z "${ANTHROPIC_API_KEY:-}" && -n "${CLAUDE_API_KEY:-}" ]]; then
+    export ANTHROPIC_API_KEY="${CLAUDE_API_KEY}"
+fi
+
+echo "[entrypoint] env presence: SLACK_BOT_TOKEN=$([[ -n \"${SLACK_BOT_TOKEN:-}\" ]] && echo set || echo missing), GITHUB_TOKEN=$([[ -n \"${GITHUB_TOKEN:-}\" ]] && echo set || echo missing), ANTHROPIC_API_KEY=$([[ -n \"${ANTHROPIC_API_KEY:-}\" ]] && echo set || echo missing)"
+
 exec "$@"
