@@ -13,23 +13,23 @@ console = Console()
 def fetch_timeline(twitter_handle: str, limit: int = 20) -> list[dict]:
     try:
         result = subprocess.run(
-            ["ptwittercli", "timeline", twitter_handle, "--json", "-n", str(limit)],
+            ["twitter", "timeline", twitter_handle, "--json", "-n", str(limit)],
             capture_output=True,
             text=True,
             timeout=60,
         )
         if result.returncode != 0:
-            logger.warning("ptwittercli failed for @%s: %s", twitter_handle, result.stderr.strip())
+            logger.warning("twitter cli failed for @%s: %s", twitter_handle, result.stderr.strip())
             return []
         return json.loads(result.stdout)
     except subprocess.TimeoutExpired:
-        logger.warning("ptwittercli timed out for @%s", twitter_handle)
+        logger.warning("twitter cli timed out for @%s", twitter_handle)
         return []
     except json.JSONDecodeError:
-        logger.warning("Failed to parse ptwittercli output for @%s", twitter_handle)
+        logger.warning("Failed to parse twitter cli output for @%s", twitter_handle)
         return []
     except FileNotFoundError:
-        logger.warning("ptwittercli not found in PATH")
+        logger.warning("twitter cli not found in PATH")
         return []
 
 

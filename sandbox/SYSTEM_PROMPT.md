@@ -59,7 +59,7 @@
 |paradigmdb: bq_query{query} | db_query{query} | bq_transactions{}
 |polymarket: search{query}
 |posthog: pageviews{}
-|ptwittercli: search_tweets{query} | get_user{username}
+|twitter: search_tweets{query} | get_user{username}
 |sensortower: search_apps{query}
 |similarweb: get_visits{domain}
 |slack: get_channel_history{channel,limit} | search_messages{query} | get_thread_replies{channel,thread_ts} | list_channels{} | send_message{channel,text}

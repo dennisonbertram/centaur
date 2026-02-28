@@ -1,5 +1,5 @@
 [project]
-name = "ptwittercli"
+name = "twitter"
 description = "Paradigm Twitter CLI for user profiles, followers, tweets, and search"
 version = "0.1.0"
 requires-python = ">=3.11"

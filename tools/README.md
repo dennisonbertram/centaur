@@ -89,7 +89,7 @@ Use `secret("KEY")` to access. Never use `os.environ` — tool secrets are scope
 | polymarket | Polymarket prediction markets | (none — public API) |
 | posthog | PostHog product analytics, HogQL | POSTHOG_API_KEY, POSTHOG_PROJECT_ID |
 | profslice | Firefox Profiler data extraction | (none) |
-| ptwittercli | Twitter — user profiles, followers, tweets, search | SYNOPTIC_API_KEY |
+| twitter | Twitter — user profiles, followers, tweets, search | SYNOPTIC_API_KEY |
 | pylon | Pylon support — issues, accounts, contacts | PYLON_API_KEY |
 | reth | Reth execution timings and performance metrics | (none) |
 | reth-log-analyzer | Parse reth logs and generate performance graphs | (none) |

@@ -13,7 +13,7 @@ from shared.cli_tables import Table
 
 from .client import _client
 
-app = typer.Typer(name="ptwittercli", help="Paradigm Twitter CLI")
+app = typer.Typer(name="twitter", help="Paradigm Twitter CLI")
 console = Console()
 
 
