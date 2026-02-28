@@ -221,24 +221,34 @@ function createBot() {
       requestId,
       files.length > 0 ? files : undefined,
       (event) => {
-        if (event.type === "tool_use" || event.type === "tool_call") {
-          const name = (event.name || event.tool || "") as string;
-          if (name && !activeTools.includes(name)) {
-            activeTools.push(name);
-            if (activeTools.length > 5) activeTools.shift();
-            const status = activeTools.map((t) => `🔧 ${t}`).join("  ");
-            thread.startTyping(status).catch(() => {});
-            queueEdit();
+        // Amp streams assistant events with tool_use in message.content[]
+        if (event.type === "assistant") {
+          const content = (event.message as unknown as Record<string, unknown>)?.content;
+          if (Array.isArray(content)) {
+            for (const part of content) {
+              if (part?.type === "tool_use" && part?.name) {
+                const name = part.name as string;
+                if (!activeTools.includes(name)) {
+                  activeTools.push(name);
+                  if (activeTools.length > 5) activeTools.shift();
+                }
+              }
+            }
+            if (activeTools.length > 0) {
+              const status = activeTools.map((t) => `🔧 ${t}`).join("  ");
+              thread.startTyping(status).catch(() => {});
+              queueEdit();
+            }
           }
         }
-        if (event.type === "tool_result" || event.type === "tool_output") {
-          const name = (event.name || event.tool || "") as string;
-          activeTools = activeTools.filter((t) => t !== name);
-          const status = activeTools.length > 0
-            ? activeTools.map((t) => `🔧 ${t}`).join("  ")
-            : "Thinking...";
-          thread.startTyping(status).catch(() => {});
-          queueEdit();
+        // Tool results come as "user" events — clear all active tools
+        if (event.type === "user") {
+          const content = (event.message as unknown as Record<string, unknown>)?.content;
+          if (Array.isArray(content) && content.some((p: Record<string, unknown>) => p?.type === "tool_result")) {
+            activeTools = [];
+            thread.startTyping("Thinking...").catch(() => {});
+            queueEdit();
+          }
         }
       },
     );
