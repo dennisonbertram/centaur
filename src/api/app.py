@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import hmac
+import json
 import os
 import secrets as _secrets
 import sys
@@ -19,9 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 
-from api.mcp_server import mcp, set_tool_manager, set_pool
-from api.routers import admin, agent as agent_router_mod
-from api.routers import health, query, search, secrets, slack_events, threads, ui
+from api.agent import session_items_snapshot, signal_shutdown
+from api.mcp_server import mcp, set_pool, set_tool_manager
+from api.routers import admin, health, query, search, secrets, slack_events, threads, ui
+from api.routers import agent as agent_router_mod
 from shared.config import settings
 from shared.db import close_pool, create_pool
 from shared.tool_manager import ToolManager
@@ -116,6 +117,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             yield
         finally:
             watcher_task.cancel()
+    signal_shutdown()
+    for _ in range(20):
+        active = [s for _, s in session_items_snapshot() if s.get("state") == "working"]
+        if not active:
+            break
+        await asyncio.sleep(0.5)
     await close_pool(pool)
     log.info("database pool closed")
 

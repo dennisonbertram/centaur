@@ -10,7 +10,7 @@
  */
 
 import { createClient, type RedisClientType } from "redis";
-import { execute, type FileAttachment } from "./harness";
+import { execute, interrupt, type FileAttachment } from "./harness";
 import { truncateSlackText } from "./slack-text";
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
@@ -175,8 +175,26 @@ async function runShadow(
     });
   }
 
-  // Run the message through the v2 agent (same thread key = same session)
-  const result = await execute(shadowThreadKey, cleanedText, "amp", undefined, files);
+  // Interrupt any prior execution and retry with backoff
+  try {
+    await interrupt(shadowThreadKey);
+  } catch {
+    // No active session to interrupt — fine
+  }
+
+  let result = "";
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      result = await execute(shadowThreadKey, cleanedText, "amp", undefined, files);
+      break;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const isBusy = detail.toLowerCase().includes("already in progress");
+      if (!isBusy || attempt >= maxAttempts) throw error;
+      await sleep(Math.min(500 * Math.pow(2, attempt - 1), 5000));
+    }
+  }
 
   // Post the result as a thread reply in #ai-v2
   await postSlackMessage({

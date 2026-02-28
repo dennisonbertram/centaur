@@ -6,32 +6,40 @@ async function agentCall(
   args: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   const t0 = performance.now();
-  const res = await fetch(`${API_URL}/agent/${endpoint}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(args),
-  });
+  const timeoutMs = endpoint === "execute" ? 660_000 : 30_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${API_URL}/agent/${endpoint}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(args),
+      signal: controller.signal,
+    });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`agent/${endpoint} failed (${res.status}): ${text}`);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`agent/${endpoint} failed (${res.status}): ${text}`);
+    }
+
+    const data = await res.json();
+    const elapsed = Math.round(performance.now() - t0);
+    console.log(
+      JSON.stringify({
+        event: "api_call",
+        endpoint: `agent/${endpoint}`,
+        request_id: args.request_id ?? null,
+        thread: args.slack_thread_key ?? null,
+        elapsed_ms: elapsed,
+      })
+    );
+    return data;
+  } finally {
+    clearTimeout(timer);
   }
-
-  const data = await res.json();
-  const elapsed = Math.round(performance.now() - t0);
-  console.log(
-    JSON.stringify({
-      event: "api_call",
-      endpoint: `agent/${endpoint}`,
-      request_id: args.request_id ?? null,
-      thread: args.slack_thread_key ?? null,
-      elapsed_ms: elapsed,
-    })
-  );
-  return data;
 }
 
 export type Harness = "amp" | "claude-code" | "codex" | "pi-mono";
@@ -227,19 +235,26 @@ async function apiCall(
   path: string,
   payload: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`${API_URL}${path}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`api ${path} failed (${res.status}): ${text}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`api ${path} failed (${res.status}): ${text}`);
+    }
+    return (await res.json()) as Record<string, unknown>;
+  } finally {
+    clearTimeout(timer);
   }
-  return (await res.json()) as Record<string, unknown>;
 }
 
 function splitThreadKey(threadKey: string): { channel: string; threadTs: string } {

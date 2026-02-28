@@ -525,7 +525,7 @@ function createBot() {
         : instruction;
 
       let result = "";
-      const maxAttempts = 4;
+      const maxAttempts = 6;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         try {
           result = await execute(
@@ -544,7 +544,7 @@ function createBot() {
           if (!shouldRetry) {
             throw error;
           }
-          await sleep(350 * attempt);
+          await sleep(Math.min(500 * Math.pow(2, attempt - 1), 5000));
         }
       }
       setContextWatermark(threadKey, nextWatermark);
