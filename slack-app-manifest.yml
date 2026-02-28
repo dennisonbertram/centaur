@@ -30,6 +30,7 @@ oauth_config:
       - search:read.users
       - users:read
       - users:read.email
+      - assistant:write
 
 settings:
   event_subscriptions:

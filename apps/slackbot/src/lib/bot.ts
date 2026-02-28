@@ -172,44 +172,11 @@ function createBot() {
 
     setThreadMode(threadKey, { mode: "default", modelPreference: null });
     const harness = parsed.harness ?? "amp";
-
-    // Post initial status message with thread viewer link immediately
     const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(threadKey)}`;
-    const statusMsg = await thread.post(
-      renderSlackMessage(`⏳ Starting...\n\n[🔗 Thread Viewer](${viewerUrl})`)
-    );
 
-    // Thinking animation: "Thinking." → "Thinking.." → "Thinking..."
-    let dotCount = 1;
-    let thinkingStarted = false;
+    await thread.startTyping("Thinking...");
+
     let activeTools: string[] = [];
-    let editQueued = false;
-
-    function buildStatusText(): string {
-      const dots = ".".repeat(dotCount);
-      const lines = [`Thinking${dots}`];
-      for (const tool of activeTools) {
-        lines.push(`  🔧 ${tool}`);
-      }
-      return lines.join("\n");
-    }
-
-    function queueEdit() {
-      if (editQueued) return;
-      editQueued = true;
-      setTimeout(() => {
-        editQueued = false;
-        const text = `${buildStatusText()}\n\n[🔗 Thread Viewer](${viewerUrl})`;
-        statusMsg.edit(renderSlackMessage(text)).catch(() => {});
-      }, 200);
-    }
-
-    // Rotate dots every 1s once thinking starts
-    const dotTimer = setInterval(() => {
-      if (!thinkingStarted) return;
-      dotCount = (dotCount % 3) + 1;
-      queueEdit();
-    }, 1000);
 
     const message = isFirstMessage
       ? buildSessionContext(threadKey) + parsed.cleanedText
@@ -222,36 +189,31 @@ function createBot() {
       requestId,
       files.length > 0 ? files : undefined,
       (event) => {
-        if (event.type === "status" && event.stage === "exec.start") {
-          thinkingStarted = true;
-          queueEdit();
-          return;
-        }
-        // Track active tools / subagents
         if (event.type === "tool_use" || event.type === "tool_call") {
           const name = (event.name || event.tool || "") as string;
           if (name && !activeTools.includes(name)) {
             activeTools.push(name);
             if (activeTools.length > 5) activeTools.shift();
-            queueEdit();
+            const status = activeTools.map((t) => `🔧 ${t}`).join("  ");
+            thread.startTyping(status).catch(() => {});
           }
         }
-        // Tool finished — remove from active list
         if (event.type === "tool_result" || event.type === "tool_output") {
           const name = (event.name || event.tool || "") as string;
           activeTools = activeTools.filter((t) => t !== name);
-          queueEdit();
+          const status = activeTools.length > 0
+            ? activeTools.map((t) => `🔧 ${t}`).join("  ")
+            : "Thinking...";
+          thread.startTyping(status).catch(() => {});
         }
       },
     );
 
-    clearInterval(dotTimer);
-
-    // Edit the status message in-place with the final result
+    // Post final result — auto-clears typing indicator
     const finalText = isFirstMessage
       ? `${result}\n\n[🔗 Thread Viewer](${viewerUrl})`
       : result;
-    await statusMsg.edit(renderSlackMessage(finalText));
+    await thread.post(renderSlackMessage(finalText));
   }
 
   bot.onNewMention(async (thread, message) => {
