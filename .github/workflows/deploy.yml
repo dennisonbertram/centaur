@@ -46,7 +46,7 @@ jobs:
           echo "$DIFF" | grep -qE '^(src/etl/|src/shared/)' && echo "etl=true" >> "$GITHUB_OUTPUT" || true
           echo "$DIFF" | grep -qE '^(Dockerfile|pyproject.toml|uv.lock|docker-compose.yml|migrations/)' && echo "infra=true" >> "$GITHUB_OUTPUT" || true
 
-      # Plugin-only change → zero-downtime reload (no container restart)
+      # Tool-only change → zero-downtime reload (no container restart)
       - name: Reload tools
         if: steps.changes.outputs.tools == 'true' && steps.changes.outputs.api != 'true' && steps.changes.outputs.infra != 'true'
         run: |
@@ -54,32 +54,48 @@ jobs:
           curl -sf -X POST http://localhost:8000/admin/reload-tools \
             -H "Authorization: Bearer $API_SECRET_KEY"
 
-      # API core or infra change → rebuild container
-      - name: Deploy API
+      # API+ETL share the same Dockerfile — build once, deploy both in parallel
+      - name: Deploy API + ETL
         if: steps.changes.outputs.api == 'true' || steps.changes.outputs.infra == 'true'
-        run: docker compose up -d --build api
+        run: docker compose up -d --build api etl
 
-      # ETL change → rebuild container
-      - name: Deploy ETL
-        if: steps.changes.outputs.etl == 'true' || steps.changes.outputs.infra == 'true'
+      # ETL-only change (src/etl or src/shared but not src/api) — still same image
+      - name: Deploy ETL only
+        if: steps.changes.outputs.etl == 'true' && steps.changes.outputs.api != 'true' && steps.changes.outputs.infra != 'true'
         run: docker compose up -d --build etl
 
-      # Slackbot change → independent rebuild
-      - name: Deploy slackbot
-        if: steps.changes.outputs.slackbot == 'true'
-        run: docker compose up -d --build slackbot
+      # Slackbot + sandbox are independent — build in parallel
+      - name: Deploy slackbot + sandbox
+        run: |
+          PIDS=()
+          if [ "${{ steps.changes.outputs.slackbot }}" = "true" ]; then
+            docker compose up -d --build slackbot &
+            PIDS+=($!)
+          fi
+          if [ "${{ steps.changes.outputs.sandbox }}" = "true" ]; then
+            docker build -t agent2:latest sandbox/ &
+            PIDS+=($!)
+          fi
+          FAIL=0
+          for pid in "${PIDS[@]}"; do
+            wait "$pid" || FAIL=1
+          done
+          exit $FAIL
+        if: steps.changes.outputs.slackbot == 'true' || steps.changes.outputs.sandbox == 'true'
 
-      # Agent sandbox change → rebuild image
-      - name: Build agent image
-        if: steps.changes.outputs.sandbox == 'true'
-        run: docker build -t agent2:latest sandbox/
-
-      # Health check
+      # Health check — poll instead of blind sleep
       - name: Health check
         if: steps.changes.outputs.api == 'true' || steps.changes.outputs.tools == 'true' || steps.changes.outputs.infra == 'true'
         run: |
-          sleep 10
-          curl -sf http://localhost:8000/health || exit 1
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Health check passed after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Health check failed after 30s"
+          exit 1
 
       # Notify #ai-v2 with LLM summary of what changed
       - name: Notify Slack
