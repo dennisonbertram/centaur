@@ -21,6 +21,7 @@ from typing import Any, get_type_hints
 import structlog
 from click.testing import CliRunner
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import PlainTextResponse
 from toon_format import encode as toon_encode
 from typer.main import get_command
 
@@ -757,9 +758,11 @@ class ToolManager:
             return pm.describe_tool(tool_name)
 
         @router.post("/{tool_name}/{method_name}")
-        async def call_tool(tool_name: str, method_name: str, request: Request) -> dict:
+        async def call_tool(tool_name: str, method_name: str, request: Request):
             body = await request.json() if await request.body() else {}
             result = await pm.call_tool(tool_name, method_name, body)
+            if "text/plain" in request.headers.get("accept", ""):
+                return PlainTextResponse(result)
             return {"tool": tool_name, "method": method_name, "result": result}
 
         return router

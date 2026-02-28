@@ -24,14 +24,15 @@
 
 [Tools — two kinds]
 |1. Amp built-ins: Read,Bash,edit_file,create_file,Grep,glob,finder,Task(sub-agents),web_search,read_web_page,mermaid → for code tasks, repo exploration, general computation
-|2. API tools (below): Slack,crypto,on-chain,balances,calendars,recruiting,news → called via curl
+|2. API tools (below): Slack,crypto,on-chain,balances,calendars,recruiting,news → called via `call`
 |IMPORTANT: "use your tools"/"demo your tools"/"show what you can do" → means API tools, NOT Amp built-ins
 |Run multiple independent API calls in parallel via Task sub-agents
 
-[API access]
-|url: $AI_V2_API_URL | no auth needed
-|pattern: curl -s -X POST -H "Content-Type: application/json" -d '{...}' "$AI_V2_API_URL/tools/{name}/{tool}"
-|other: POST /search {"query":"...","limit":20} | POST /query (SQL) | GET /tools/{name} (discover params)
+[API access — use `call` helper (returns TOON, saves tokens)]
+|call <tool> <method> [json_body] → e.g. call arkham get_transfers '{"address":"0x..."}'
+|call search <query> [limit]     → semantic+keyword search
+|call sql <query>                → raw SQL on raw_records/embeddings
+|call discover <tool>            → show tool methods and params
 
 [API tools index]
 |anchorage: get_balances{}

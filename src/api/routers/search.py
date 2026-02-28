@@ -4,8 +4,10 @@ import re
 from typing import Annotated
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
+from toon_format import encode as toon_encode
 
 from api.deps import EmbeddingService, get_embedding_service, get_pool, verify_api_key
 
@@ -39,10 +41,11 @@ class SqlQueryRequest(BaseModel):
 
 @router.post("")
 async def search(
+    request: Request,
     body: SearchRequest,
     pool: Annotated[asyncpg.Pool, Depends(get_pool)],
     embedding_svc: Annotated[EmbeddingService, Depends(get_embedding_service)],
-) -> list[SearchResult]:
+):
     """Hybrid semantic + keyword search via pgvector + tsvector on embeddings table."""
     embedding = await embedding_svc.embed(body.query)
     embedding_literal = "[" + ",".join(str(v) for v in embedding) + "]"
@@ -96,7 +99,7 @@ async def search(
     async with pool.acquire() as conn:
         rows = await conn.fetch(sql, *args)
 
-    return [
+    results = [
         SearchResult(
             score=float(r["score"]),
             source=r["source"],
@@ -107,13 +110,17 @@ async def search(
         )
         for r in rows
     ]
+    if "text/plain" in request.headers.get("accept", ""):
+        return PlainTextResponse(toon_encode([r.model_dump() for r in results]))
+    return results
 
 
 @router.post("/sql")
 async def sql_query(
+    request: Request,
     body: SqlQueryRequest,
     pool: Annotated[asyncpg.Pool, Depends(get_pool)],
-) -> list[dict]:
+):
     """Run a read-only SQL query against raw_records or embeddings."""
     if DISALLOWED_SQL.search(body.query):
         raise HTTPException(status_code=400, detail="Only read-only queries are allowed")
@@ -124,7 +131,10 @@ async def sql_query(
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-    return [dict(r) for r in rows]
+    results = [dict(r) for r in rows]
+    if "text/plain" in request.headers.get("accept", ""):
+        return PlainTextResponse(toon_encode(results))
+    return results
 
 
 @router.get("/sources")

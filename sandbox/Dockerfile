@@ -57,8 +57,9 @@ RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace 
     && git config --global push.autoSetupRemote true \
     && git config --global --add safe.directory '*'
 
-# ── Entrypoint (changes rarely) ─────────────────────────────────────────────
+# ── Entrypoint + helpers (changes rarely) ───────────────────────────────────
 COPY --chmod=755 entrypoint.sh /entrypoint.sh
+COPY --chmod=755 call.sh /usr/local/bin/call
 
 # ── Pi-mono extensions (TODO: wire up pi-plugins/ from repo root) ─────────
 # COPY --chown=agent:agent pi-plugins/system-prompt.ts /home/agent/.pi/agent/extensions/system-prompt.ts
