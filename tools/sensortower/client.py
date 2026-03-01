@@ -154,19 +154,18 @@ class SensorTowerClient:
         if date:
             params["date"] = self._format_date(date)
 
-        endpoint = f"/v1/{os_type}/category/category_rankings"
+        endpoint = f"/v1/{os_type}/ranking"
         return self._request(endpoint, params=params)
 
     def get_publisher(self, publisher_id: str, platform: str = "ios") -> dict:
         """Get publisher information.
 
         Args:
-            publisher_id: Publisher ID
+            publisher_id: Unified publisher ID (24-char hex)
             platform: 'ios' or 'android'
         """
-        os_type = self._os_to_platform(platform)
-        endpoint = f"/v1/{os_type}/publisher/{publisher_id}"
-        return self._request(endpoint)
+        endpoint = "/v1/unified/publishers/apps"
+        return self._request(endpoint, params={"unified_id": publisher_id})
 
     def get_publisher_apps(
         self,
@@ -176,12 +175,11 @@ class SensorTowerClient:
         """Get apps by publisher.
 
         Args:
-            publisher_id: Publisher ID
+            publisher_id: Unified publisher ID (24-char hex)
             platform: 'ios' or 'android'
         """
-        os_type = self._os_to_platform(platform)
-        endpoint = f"/v1/{os_type}/publisher/{publisher_id}/apps"
-        return self._request(endpoint)
+        endpoint = "/v1/unified/publishers/apps"
+        return self._request(endpoint, params={"unified_id": publisher_id})
 
     def search_apps(
         self,
@@ -201,7 +199,8 @@ class SensorTowerClient:
             "term": query,
             "limit": min(limit, 100),
         }
-        endpoint = f"/v1/{os_type}/search"
+        endpoint = f"/v1/{os_type}/search_entities"
+        params["entity_type"] = "app"
         return self._request(endpoint, params=params)
 
     def get_app_info(self, app_id: str, platform: str = "ios") -> dict:
