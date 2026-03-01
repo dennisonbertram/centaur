@@ -248,13 +248,6 @@ async def reload_secrets() -> dict:
 @app.get("/secrets/{key}")
 async def get_secret(key: str) -> dict:
     value = _cache.get(key)
-    if value is not None:
-        return {"value": value}
-
-    # Cache miss — force a refresh and retry once
-    log.info("cache miss for '%s', triggering refresh", key)
-    await _load_all()
-    value = _cache.get(key)
     if value is None:
         raise HTTPException(status_code=404, detail="not found")
     return {"value": value}
