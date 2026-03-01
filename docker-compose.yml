@@ -39,6 +39,27 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  secrets-proxy:
+    build: secrets-proxy
+    environment:
+      SECRET_MANAGER_URL: http://secrets:8100
+    networks:
+      - default
+      - secrets_net
+      - agent_net
+    volumes:
+      - mitm-certs:/certs
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8081/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      secrets:
+        condition: service_healthy
+    restart: unless-stopped
+
   api:
     build: .
     env_file:
@@ -49,12 +70,17 @@ services:
       SLACKBOT_URL: http://slackbot:3001
       AI_V2_LOG_LEVEL: info
       SECRET_MANAGER_URL: http://secrets:8100
+      MITM_HOST: secrets-proxy
+      AGENT_NETWORK: ai_v2_agent_net
+      MITM_CERTS_VOLUME: mitm-certs
     networks:
       - default
       - secrets_net
+      - agent_net
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./tools:/app/tools
+      - mitm-certs:/mitm-certs:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 10s
@@ -66,6 +92,8 @@ services:
         condition: service_healthy
       secrets:
         condition: service_started
+      secrets-proxy:
+        condition: service_healthy
     restart: unless-stopped
 
   etl:
@@ -172,6 +200,10 @@ volumes:
   grafanadata:
   prometheusdata:
   lokidata:
+  mitm-certs:
+    name: mitm-certs
 
 networks:
   secrets_net:
+  agent_net:
+    internal: true
