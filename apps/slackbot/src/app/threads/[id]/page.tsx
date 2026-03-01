@@ -1,17 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
-import {
-  ArrowLeft,
-  CircleStop,
-  Info,
-  LoaderCircle,
-  RefreshCw,
-  Timer,
-} from "lucide-react";
+import { useParams } from "next/navigation";
+import { CircleStop, Info, LoaderCircle, Menu, RefreshCw, Timer } from "lucide-react";
 import { ActivityFeed } from "@/components/thread/activity-feed";
+import { useThreadLayout } from "@/components/thread/thread-layout";
 import { ParticipantAvatars } from "@/components/thread/participant-avatars";
 import { PhaseProgress } from "@/components/thread/phase-progress";
 import { ReplyInput } from "@/components/thread/reply-input";
@@ -26,7 +19,7 @@ import { BASE } from "@/lib/constants";
 
 export default function ThreadDetailPage() {
   const params = useParams();
-  const router = useRouter();
+  const { openMobileSidebar } = useThreadLayout();
   const threadKey = decodeURIComponent(params.id as string);
   const {
     thread,
@@ -88,16 +81,6 @@ export default function ThreadDetailPage() {
         e.target instanceof HTMLElement &&
         e.target.closest("input, textarea, select, [contenteditable='true']");
 
-      if (e.key === "Escape") {
-        if (targetIsInput) {
-          (e.target as HTMLElement | null)?.blur?.();
-          return;
-        }
-        e.preventDefault();
-        router.push("/threads");
-        return;
-      }
-
       if (targetIsInput) return;
 
       if (e.key.toLowerCase() === "r") {
@@ -116,7 +99,7 @@ export default function ThreadDetailPage() {
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [canInterrupt, fetchThread, interruptRun, router]);
+  }, [canInterrupt, fetchThread, interruptRun]);
 
   useEffect(() => {
     if (!thread) return;
@@ -137,24 +120,16 @@ export default function ThreadDetailPage() {
 
   if (error && !thread) {
     return (
-      <div className="h-[calc(100vh-41px)] flex items-center justify-center bg-background">
+      <div className="flex h-full min-h-0 items-center justify-center bg-background">
         <div className="text-center">
-          <p className="text-destructive text-sm mb-4">{error}</p>
-          <div className="flex items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={fetchThread}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer bg-transparent border border-border rounded-sm px-3 py-1"
-            >
-              Retry
-            </button>
-            <Link
-              href="/threads"
-              className="text-muted-foreground text-xs hover:text-foreground transition-colors rounded-sm"
-            >
-              Back to threads
-            </Link>
-          </div>
+          <p className="mb-4 text-sm text-destructive">{error}</p>
+          <button
+            type="button"
+            onClick={fetchThread}
+            className="cursor-pointer rounded-sm border border-border bg-transparent px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
@@ -162,44 +137,51 @@ export default function ThreadDetailPage() {
 
   if (!thread) {
     return (
-      <div className="h-[calc(100vh-41px)] flex items-center justify-center bg-background">
+      <div className="flex h-full min-h-0 items-center justify-center bg-background">
         <div className="text-center">
-          <p className="text-muted-foreground text-sm inline-flex items-center gap-2">
+          <p className="inline-flex items-center gap-2 text-sm text-muted-foreground">
             <LoaderCircle className="size-4 animate-spin text-primary" />
             Connecting…
           </p>
-          <p className="text-muted-foreground text-xs font-mono mt-2">{threadName(threadKey)}</p>
+          <p className="mt-2 text-xs font-mono text-muted-foreground">{threadName(threadKey)}</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-[calc(100vh-41px)] flex flex-col bg-background overflow-hidden">
-      {/* Compact fixed header */}
+    <div className="flex h-full min-h-0 flex-col bg-background">
       <div className="shrink-0 border-b border-border bg-background">
-        <div className="max-w-[960px] mx-auto px-5 py-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <Link
-              href="/threads"
-              aria-label="Back to threads"
-              className="text-muted-foreground text-xs hover:text-foreground transition-colors mr-1 rounded-sm"
+        <div className="mx-auto w-full max-w-[980px] px-4 py-3 sm:px-5">
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={openMobileSidebar}
+              aria-label="Open thread list"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-sm border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:hidden"
             >
-              <ArrowLeft className="size-4" />
-            </Link>
+              <Menu className="size-4" />
+            </button>
             <HarnessBadge harness={thread.harness} />
-            <StateDot state={thread.state} />
-            <span className="text-xs text-muted-foreground">{thread.state}</span>
-            <span className="text-[11px] text-foreground font-medium truncate min-w-0">
-              {humanName}
+            <span className="min-w-0 truncate text-[12px] font-medium text-foreground">{humanName}</span>
+            <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              <StateDot state={thread.state} />
+              {thread.state}
             </span>
+          </div>
+
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-muted-foreground">
             <ParticipantAvatars participants={thread.participants} size={20} />
-            <span className="text-[11px] text-muted-foreground">
+            <span>
               {thread.turns.length} turn{thread.turns.length === 1 ? "" : "s"}
+            </span>
+            <span className="inline-flex items-center gap-1">
+              <Timer className="size-3.5" />
+              {liveElapsed}
             </span>
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="text-[11px] text-muted-foreground font-mono">{tokenTicker}</span>
+                <span className="hidden cursor-help font-mono md:inline">{tokenTicker}</span>
               </TooltipTrigger>
               <TooltipContent>
                 <div className="space-y-0.5 text-xs">
@@ -211,18 +193,11 @@ export default function ThreadDetailPage() {
                 </div>
               </TooltipContent>
             </Tooltip>
-            <span className="ml-auto text-[11px] text-muted-foreground inline-flex items-center gap-1">
-              <Timer className="size-3.5" />
-              {liveElapsed}
-            </span>
-            <span className="text-[10px] text-muted-foreground font-mono hidden sm:inline" title="Press Esc to go back">
-              esc
-            </span>
             <Popover>
               <PopoverTrigger asChild>
                 <button
                   type="button"
-                  className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                  className="cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
                   aria-label="Show thread metadata"
                 >
                   <Info className="size-3.5" />
@@ -231,9 +206,9 @@ export default function ThreadDetailPage() {
               <PopoverContent className="w-[320px]">
                 <div className="space-y-2 text-xs">
                   <div className="font-semibold text-foreground">Debug IDs</div>
-                  <div className="font-mono text-muted-foreground break-all">{thread.slack_thread_key}</div>
+                  <div className="break-all font-mono text-muted-foreground">{thread.slack_thread_key}</div>
                   {thread.agent_thread_id ? (
-                    <div className="font-mono text-muted-foreground break-all">{thread.agent_thread_id}</div>
+                    <div className="break-all font-mono text-muted-foreground">{thread.agent_thread_id}</div>
                   ) : null}
                 </div>
               </PopoverContent>
@@ -243,7 +218,7 @@ export default function ThreadDetailPage() {
                 type="button"
                 onClick={interruptRun}
                 disabled={isInterrupting}
-                className="inline-flex items-center gap-1 text-[11px] text-destructive hover:opacity-80 disabled:opacity-60 transition-colors cursor-pointer bg-transparent border-none p-0 rounded-sm"
+                className="inline-flex cursor-pointer items-center gap-1 rounded-sm border-none bg-transparent p-0 text-[11px] text-destructive transition-colors hover:opacity-80 disabled:opacity-60"
               >
                 <CircleStop className={isInterrupting ? "size-3.5 animate-pulse" : "size-3.5"} />
                 {isInterrupting ? "Stopping…" : "Stop"}
@@ -252,21 +227,21 @@ export default function ThreadDetailPage() {
             <button
               type="button"
               onClick={fetchThread}
-              className="text-muted-foreground text-[11px] hover:text-foreground transition-colors cursor-pointer bg-transparent border-none p-0 rounded-sm inline-flex items-center gap-1"
+              className="inline-flex cursor-pointer items-center gap-1 rounded-sm border-none bg-transparent p-0 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
             >
               <RefreshCw className="size-3.5" />
               Refresh
             </button>
           </div>
+
           {(() => {
-            const showReconnect =
-              isReconnecting && thread.state !== "error";
+            const showReconnect = isReconnecting && thread.state !== "error";
             const showError =
               !!error &&
               !(thread.state === "error" && error.startsWith("Stream disconnected."));
             return showError || !!interruptError || showReconnect;
           })() && (
-            <div className="mt-2 text-[11px] text-amber-300 inline-flex items-center gap-1.5">
+            <div className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-amber-300">
               <RefreshCw className={isReconnecting ? "size-3.5 animate-spin" : "size-3.5"} />
               {interruptError ??
                 (thread.state === "error" && error?.startsWith("Stream disconnected.")
@@ -276,16 +251,13 @@ export default function ThreadDetailPage() {
             </div>
           )}
           {chatStatus === "submitted" || chatStatus === "streaming" ? (
-            <div className="mt-1 text-[11px] text-muted-foreground inline-flex items-center gap-1.5">
+            <div className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <LoaderCircle className="size-3.5 animate-spin text-primary" />
               Live UI stream connected
             </div>
           ) : null}
-          {agentStatus ? (
-            <div className="mt-1 text-[11px] text-muted-foreground">{agentStatus}</div>
-          ) : null}
+          {agentStatus ? <div className="mt-1 text-[11px] text-muted-foreground">{agentStatus}</div> : null}
 
-          {/* Phase progress (engineer only) */}
           {isEngineer && phases.length > 0 && (
             <div className="mt-2">
               <PhaseProgress phases={phases} />
@@ -294,13 +266,11 @@ export default function ThreadDetailPage() {
         </div>
       </div>
 
-      {/* Console stream -- this is the only scrollable area */}
-      <div className="flex-1 min-h-0 max-w-[960px] mx-auto w-full flex flex-col">
+      <div className="mx-auto flex min-h-0 w-full max-w-[980px] flex-1 flex-col">
         <ActivityFeed steps={liveSteps} state={thread.state} />
 
-        {/* Reply input (engineer waiting state) */}
         {isEngineer && isWaiting && (
-          <div className="shrink-0 px-5 pb-3">
+          <div className="shrink-0 px-4 pb-3 sm:px-5">
             <ReplyInput threadKey={thread.slack_thread_key} onSend={sendReply} />
           </div>
         )}

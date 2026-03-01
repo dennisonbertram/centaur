@@ -84,6 +84,20 @@ textarea {
   }
 }
 
+.thread-shell-sidebar {
+  width: 320px;
+  transition: width 180ms ease;
+}
+
+html.threads-sidebar-collapsed .thread-shell-sidebar {
+  width: 48px;
+}
+
+.thread-sidebar-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 88px;
+}
+
 @layer base {
   * {
     border-color: var(--border);
@@ -92,6 +106,12 @@ textarea {
   body {
     background: var(--background);
     color: var(--foreground);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-shell-sidebar {
+    transition: none;
   }
 }
 
