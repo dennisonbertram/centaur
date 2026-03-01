@@ -97,18 +97,23 @@ jobs:
           exit $FAIL
         if: steps.changes.outputs.slackbot == 'true' || steps.changes.outputs.sandbox == 'true'
 
+      # Restart nginx to re-resolve upstream DNS after container rebuilds
+      - name: Restart nginx
+        if: steps.changes.outputs.api == 'true' || steps.changes.outputs.infra == 'true'
+        run: docker compose restart nginx
+
       # Health check — poll instead of blind sleep
       - name: Health check
         if: steps.changes.outputs.api == 'true' || steps.changes.outputs.tools == 'true' || steps.changes.outputs.infra == 'true'
         run: |
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
               echo "Health check passed after ${i}s"
               exit 0
             fi
             sleep 1
           done
-          echo "Health check failed after 30s"
+          echo "Health check failed after 60s"
           exit 1
 
       # Notify #ai-v2 with LLM summary of what changed
