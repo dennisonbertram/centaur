@@ -175,4 +175,3 @@ volumes:
 
 networks:
   secrets_net:
-    internal: true
