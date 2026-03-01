@@ -29,14 +29,51 @@
 |installed: Rust,Node22,Python3(uv),Foundry(forge/cast/anvil),rg,fd,jq,tmux,cmake,protobuf,docker(CLI only)
 |docker: socket mounted — use `docker ps`, `docker logs <container>`, `docker run`, etc. Full Docker access to inspect and manage services.
 
-[Tools — two kinds]
+[Tools — three kinds]
 |1. Amp built-ins: Read,Bash,edit_file,create_file,Grep,glob,finder,Task(sub-agents),web_search,read_web_page,mermaid → for code tasks, repo exploration, general computation
 |2. API tools (below): Slack,crypto,on-chain,balances,calendars,recruiting,news → called via `call`
+|3. Browser tool: `browser <command> [args]` → browser/computer use (navigate, click, screenshot, etc.)
 |IMPORTANT: "use your tools"/"demo your tools"/"show what you can do" → means API tools, NOT Amp built-ins
 |Run multiple independent API calls in parallel via Task sub-agents
 
-[Media uploads — Slack]
-|When uploading charts, images, or files to the current Slack thread:
+[Browser — computer use]
+|`browser` is a CLI for controlling a headless Chromium with stealth/anti-bot patches.
+|Use it to: test web apps, verify UI, fill forms, take screenshots, debug with console/network logs.
+|The browser runs inside this container — it can access localhost dev servers.
+|Anti-bot: navigator.webdriver patched, realistic UA + plugins, WebGL spoofed — built in.
+|
+|Commands:
+|  browser navigate <url>              → open a URL (starts browser on first call)
+|  browser screenshot [filename]       → take a screenshot → /tmp/browser-screenshots/
+|  browser click <selector>            → click an element (CSS selector)
+|  browser type <selector> <text>      → type into an input
+|  browser scroll [down|up] [pixels]   → scroll the page
+|  browser text [selector]             → get text content
+|  browser console [n]                 → last n console log entries
+|  browser network [n]                 → last n network requests
+|  browser evaluate <javascript>       → run JS in the page
+|  browser wait <selector> [timeout]   → wait for element
+|  browser hover / select / back / forward / reload / close
+|
+|Cookie profiles (multi-account):
+|  browser use-profile <name>          → set active profile (loads cookies for subsequent cmds)
+|  browser save-cookies <name>         → save current cookies to named profile (persisted to DB)
+|  browser load-cookies <name>         → load saved cookies into current session
+|
+|Workflow — authenticated browsing:
+|  1. `browser use-profile twitter-paradigm` → load saved cookies
+|  2. `browser navigate https://x.com` → already logged in
+|  3. `browser screenshot` → verify
+|  To create a profile: log in manually, then `browser save-cookies my-profile`
+|
+|API alternative: `call browser navigate '{"url":"...","profile":"twitter-paradigm"}'`
+|API-only: save_cookies, load_cookies, import_cookies, list_profiles, delete_profile
+
+[Slack messaging — CRITICAL]
+|Your stdout IS the reply to the user. The harness posts it to Slack for you.
+|NEVER call `call slack send_message` to reply in the active thread — this causes double-posts.
+|Only use `send_message` to cross-post to OTHER channels (e.g. notifying #eng-ai about something).
+|For file uploads to the current thread, use `slack-upload`:
 |  `slack-upload /path/to/file.png "Description of what this shows"`
 |This posts the file with your description as a SINGLE message.
 |Do NOT send a separate text message describing the chart AND then upload — one message only.
@@ -78,6 +115,7 @@
 |similarweb: get_visits{domain}
 |slack: get_channel_history{channel,limit} | search_messages{query} | get_thread_replies{channel,thread_ts} | list_channels{} | send_message{channel,text}
 |unit410: get_balances{}
+|browser: navigate{url,profile} | screenshot{} | click{selector} | type{selector,text} | text{} | console{} | network{} | evaluate{javascript} | save_cookies{profile} | load_cookies{profile} | import_cookies{cookies_json,profile} | list_profiles{} | close{}
 |unlisted: GET /tools/{name} to discover
 
 [Finance domain]
