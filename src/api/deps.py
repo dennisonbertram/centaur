@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import secrets
 from typing import Annotated
 
@@ -9,7 +10,15 @@ from openai import AsyncOpenAI
 
 from shared.config import settings
 
-_DOCKER_PREFIXES = ("172.", "192.168.", "10.", "127.")
+# Only localhost is trusted without an API key (e.g. health checks).
+# All other callers — including sandbox containers on agent_net — must
+# present a valid API key.  The previous "all private IPs" bypass was
+# too broad and allowed sandboxes to hit admin/secrets endpoints.
+_TRUSTED_PREFIXES = ("127.",)
+
+# Nginx container IP prefix — only trust X-Forwarded-User from nginx.
+# In docker-compose, nginx talks to api over the default bridge network.
+_NGINX_IP_PREFIX = os.environ.get("NGINX_TRUSTED_IP_PREFIX", "172.")
 
 
 async def get_pool(request: Request) -> asyncpg.Pool:
@@ -26,11 +35,9 @@ async def verify_api_key(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> str:
-    # Docker network is trusted — only nginx is exposed to the host.
     client_ip = request.client.host if request.client else ""
-    if client_ip.startswith(_DOCKER_PREFIXES):
-        return "docker-bypass"
-
+    if client_ip.startswith(_TRUSTED_PREFIXES):
+        return "localhost-bypass"
 
     if not settings.api_secret_key:
         raise HTTPException(status_code=500, detail="API key not configured")
@@ -53,11 +60,15 @@ async def verify_ui_or_api_key(
     """Accept either nginx-forwarded auth (X-Forwarded-User) or an API key.
 
     When the request comes through nginx with a valid session cookie, nginx
-    sets ``X-Forwarded-User`` via ``auth_request``.  To swap to Okta / SSO,
-    replace the auth service container — this code stays the same.
+    sets ``X-Forwarded-User`` via ``auth_request``.  Only requests from
+    nginx's IP are trusted — sandboxes calling the API directly cannot
+    spoof this header.
     """
-    if request.headers.get("x-forwarded-user"):
-        return "nginx"
+    forwarded_user = request.headers.get("x-forwarded-user")
+    if forwarded_user:
+        client_ip = request.client.host if request.client else ""
+        if client_ip.startswith(_TRUSTED_PREFIXES) or client_ip.startswith(_NGINX_IP_PREFIX):
+            return "nginx"
     return await verify_api_key(request, x_api_key)
 
 

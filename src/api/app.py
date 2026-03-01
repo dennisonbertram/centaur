@@ -20,7 +20,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from api.agent import reap_stale_running_sessions, session_items_snapshot, signal_shutdown
-from api.deps import _DOCKER_PREFIXES
+from api.deps import _TRUSTED_PREFIXES
 from api.mcp_server import mcp, set_pool, set_tool_manager
 from api.routers import admin, health, query, search, secrets, slack_events, threads
 from api.routers import agent as agent_router_mod
@@ -189,14 +189,14 @@ _mcp_starlette = mcp.streamable_http_app()
 class _MCPAuthMiddleware:
     """ASGI middleware that validates Bearer token before forwarding to MCP.
 
-    Requests from the Docker network are trusted (only nginx is host-exposed).
+    Only localhost is trusted without a token.
     """
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             request = Request(scope, receive)
             client_ip = request.client.host if request.client else ""
-            if not client_ip.startswith(_DOCKER_PREFIXES):
+            if not client_ip.startswith(_TRUSTED_PREFIXES):
                 token: str | None = None
                 auth = request.headers.get("authorization", "")
                 if auth.lower().startswith("bearer "):
