@@ -39,6 +39,12 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./tools:/app/tools
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     depends_on:
       postgres:
         condition: service_healthy

@@ -44,7 +44,7 @@ jobs:
           echo "$DIFF" | grep -q '^apps/slackbot/' && echo "slackbot=true" >> "$GITHUB_OUTPUT" || true
           echo "$DIFF" | grep -q '^sandbox/' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || true
           echo "$DIFF" | grep -qE '^(src/etl/|src/shared/)' && echo "etl=true" >> "$GITHUB_OUTPUT" || true
-          echo "$DIFF" | grep -qE '^(Dockerfile|pyproject.toml|uv.lock|docker-compose.yml|migrations/)' && echo "infra=true" >> "$GITHUB_OUTPUT" || true
+          echo "$DIFF" | grep -qE '^(Dockerfile|pyproject.toml|uv.lock|docker-compose.yml|migrations/|services/|monitoring/)' && echo "infra=true" >> "$GITHUB_OUTPUT" || true
 
       # Tool-only change → zero-downtime reload (no container restart)
       - name: Reload tools
@@ -62,9 +62,14 @@ jobs:
           # Avoid writing /usr/bin shims on self-hosted runners without root.
           corepack pnpm install --frozen-lockfile
 
-      # API+ETL share the same Dockerfile — build once, deploy both in parallel
+      # Infra change → rebuild entire stack (docker-compose, Dockerfile, services/, monitoring/)
+      - name: Deploy all services
+        if: steps.changes.outputs.infra == 'true'
+        run: docker compose up -d --build
+
+      # API+ETL share the same Dockerfile — build once, deploy both
       - name: Deploy API + ETL
-        if: steps.changes.outputs.api == 'true' || steps.changes.outputs.infra == 'true'
+        if: steps.changes.outputs.api == 'true' && steps.changes.outputs.infra != 'true'
         run: docker compose up -d --build api etl
 
       # ETL-only change (src/etl or src/shared but not src/api) — still same image
