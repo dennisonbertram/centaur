@@ -84,20 +84,6 @@ textarea {
   }
 }
 
-.thread-shell-sidebar {
-  width: 320px;
-  transition: width 180ms ease;
-}
-
-html.threads-sidebar-collapsed .thread-shell-sidebar {
-  width: 48px;
-}
-
-.thread-sidebar-card {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 88px;
-}
-
 @layer base {
   * {
     border-color: var(--border);
@@ -109,10 +95,43 @@ html.threads-sidebar-collapsed .thread-shell-sidebar {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .thread-shell-sidebar {
-    transition: none;
+@media (pointer: coarse) {
+  button,
+  [role="button"],
+  summary,
+  [tabindex="0"] {
+    min-height: 44px;
+    min-width: 44px;
   }
+
+  .step-item summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+  }
+}
+
+.pill-expand {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 200ms ease-out;
+}
+
+.pill-expand[data-open="true"] {
+  grid-template-rows: 1fr;
+}
+
+.pill-expand > div {
+  overflow: hidden;
+}
+
+.pill-expand[data-open="true"] > div {
+  opacity: 1;
+  transition: opacity 150ms ease-out 50ms;
+}
+
+.pill-expand[data-open="false"] > div {
+  opacity: 0;
 }
 
 @layer components {
@@ -137,13 +156,47 @@ html.threads-sidebar-collapsed .thread-shell-sidebar {
     background: var(--background);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    overflow: auto;
     padding: 0.75rem;
+    position: relative;
   }
 
   .prose-console :where(pre code) {
     background: transparent;
     border-radius: 0;
     padding: 0;
+  }
+
+  @media (max-width: 767px) {
+    .prose-console {
+      font-size: 0.875rem;
+      line-height: 1.7;
+    }
+
+    .prose-console :where(pre) {
+      overflow-x: hidden;
+      white-space: pre-wrap;
+      word-break: break-word;
+      tab-size: 2;
+      font-size: 0.75rem;
+      border-radius: 8px;
+    }
+
+    .prose-console :where(pre) .copy-btn {
+      display: flex;
+    }
+  }
+
+  @media (min-width: 768px) {
+    .prose-console :where(pre) {
+      overflow: auto;
+    }
+
+    .prose-console :where(pre) .copy-btn {
+      display: none;
+    }
+
+    .prose-console :where(pre):hover .copy-btn {
+      display: flex;
+    }
   }
 }

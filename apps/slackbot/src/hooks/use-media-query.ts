@@ -1,21 +1,34 @@
-"use client";
+import { useCallback, useSyncExternalStore } from "react";
 
-import { useSyncExternalStore } from "react";
-
-function subscribe(query: string, onStoreChange: () => void): () => void {
-  const mediaQueryList = window.matchMedia(query);
-  mediaQueryList.addEventListener("change", onStoreChange);
-  return () => mediaQueryList.removeEventListener("change", onStoreChange);
+function subscribe(query: string) {
+  return (callback: () => void) => {
+    const mql = window.matchMedia(query);
+    mql.addEventListener("change", callback);
+    return () => mql.removeEventListener("change", callback);
+  };
 }
 
-function getSnapshot(query: string): boolean {
-  return window.matchMedia(query).matches;
+function getSnapshot(query: string) {
+  return () => window.matchMedia(query).matches;
 }
+
+const SERVER_SNAPSHOT = false;
 
 export function useMediaQuery(query: string): boolean {
+  const subscribeToQuery = useCallback((callback: () => void) => subscribe(query)(callback), [query]);
+  const getQuerySnapshot = useCallback(() => getSnapshot(query)(), [query]);
+
   return useSyncExternalStore(
-    (onStoreChange) => subscribe(query, onStoreChange),
-    () => getSnapshot(query),
-    () => false,
+    subscribeToQuery,
+    getQuerySnapshot,
+    () => SERVER_SNAPSHOT,
   );
+}
+
+export function useIsMobile(): boolean {
+  return !useMediaQuery("(min-width: 768px)");
+}
+
+export function useHasHover(): boolean {
+  return useMediaQuery("(hover: hover)");
 }

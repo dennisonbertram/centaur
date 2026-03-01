@@ -1,3 +1,4 @@
+import type { Metadata, Viewport } from "next";
 import Link from "next/link";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
@@ -5,14 +6,28 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
-export const metadata = {
-  title: "Paradigm AI",
+export const metadata: Metadata = {
+  title: "AI2",
+  other: {
+    "apple-mobile-web-app-status-bar-style": "black-translucent",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+  ],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`dark ${GeistSans.variable} ${GeistMono.variable}`}>
-      <body className="m-0 bg-background text-foreground antialiased font-sans">
+      <body className="m-0 bg-background text-foreground antialiased font-sans fixed inset-0 overflow-hidden">
         <TooltipProvider>
           <a
             href="#main-content"
@@ -20,12 +35,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           >
             Skip to main content
           </a>
-          <nav className="flex items-center gap-6 px-6 py-2.5 border-b border-border bg-background/95 backdrop-blur-sm font-sans z-50 shrink-0">
+          <nav className="hidden md:flex items-center gap-6 px-6 py-2.5 border-b border-border bg-background/95 backdrop-blur-sm font-sans z-50 shrink-0">
             <Link
               href="/"
               className="text-foreground no-underline font-semibold text-[13px] tracking-tight rounded-sm"
             >
-              Paradigm AI
+              AI2
             </Link>
             <Link
               href="/threads"
@@ -34,7 +49,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               Threads
             </Link>
           </nav>
-          <main id="main-content">{children}</main>
+          <main id="main-content" className="h-full md:h-[calc(100%-41px)] overflow-hidden">
+            {children}
+          </main>
           <Toaster position="top-right" richColors closeButton />
         </TooltipProvider>
       </body>

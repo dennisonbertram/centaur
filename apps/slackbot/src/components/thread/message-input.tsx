@@ -1,214 +1,167 @@
 "use client";
 
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { LoaderCircle, Send, Square } from "lucide-react";
-import type { ThreadState } from "@/lib/types";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowUp, Loader2, Square } from "lucide-react";
+import { useHasHover } from "@/hooks/use-media-query";
+import { cn } from "@/lib/utils";
 
-type ComposerMode = "reply" | "execute";
+type InputMode = "idle" | "running" | "waiting" | "error";
 
 type MessageInputProps = {
-  mode: ComposerMode;
-  state: ThreadState;
-  isAgentRunning: boolean;
-  onSend: (message: string) => Promise<boolean>;
-  onStop: () => Promise<void>;
+  mode: InputMode;
+  onSend: (message: string) => Promise<void>;
+  onStop?: () => Promise<void>;
+  className?: string;
 };
 
 const MAX_ROWS = 6;
+const LINE_HEIGHT = 22;
+const PADDING_Y = 20;
+const MAX_HEIGHT = MAX_ROWS * LINE_HEIGHT + PADDING_Y;
 
-export function MessageInput({
-  mode,
-  state,
-  isAgentRunning,
-  onSend,
-  onStop,
-}: MessageInputProps) {
+const PLACEHOLDERS: Record<InputMode, string> = {
+  idle: "Send a message\u2026",
+  running: "Agent is working\u2026",
+  waiting: "Reply to engineer\u2026",
+  error: "Retry with new instructions\u2026",
+};
+
+export function MessageInput({ mode, onSend, onStop, className }: MessageInputProps) {
   const [value, setValue] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [announcement, setAnnouncement] = useState("");
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const isComposingRef = useRef(false);
-  const inputId = useId();
-  const hintId = `${inputId}-hint`;
+  const [submitting, setSubmitting] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
+  const hasHover = useHasHover();
 
-  const trimmedValue = value.trim();
-  const hasText = trimmedValue.length > 0;
-  const isStopMode = isAgentRunning && !hasText && !isSubmitting;
-
-  const placeholder = useMemo(() => {
-    if (isSubmitting) return "Sending...";
-    if (isStopMode) return "Agent is working...";
-    if (mode === "reply") return "Reply to engineer...";
-    if (state === "error") return "Restart with new message...";
-    return "Send a message...";
-  }, [isStopMode, isSubmitting, mode, state]);
-
-  const announce = useCallback((message: string) => {
-    setAnnouncement("");
-    window.setTimeout(() => {
-      setAnnouncement(message);
-    }, 0);
+  const resize = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT)}px`;
   }, []);
 
-  const resizeTextarea = useCallback(() => {
-    const textarea = textareaRef.current;
-    if (!textarea) return;
+  useLayoutEffect(resize, [value, resize]);
 
-    textarea.style.height = "0px";
-    const styles = window.getComputedStyle(textarea);
-    const lineHeight = Number.parseFloat(styles.lineHeight) || 20;
-    const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
-    const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
-    const maxHeight = lineHeight * MAX_ROWS + paddingTop + paddingBottom;
-    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
+  const hasText = value.trim().length > 0;
+  const showStop = mode === "running" && !hasText && !!onStop;
 
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
-  }, []);
-
-  useLayoutEffect(() => {
-    resizeTextarea();
-  }, [resizeTextarea, value]);
-
-  useEffect(() => {
-    const textarea = textareaRef.current;
-    if (!textarea || typeof ResizeObserver === "undefined") return;
-
-    const observer = new ResizeObserver(() => {
-      resizeTextarea();
-    });
-    observer.observe(textarea);
-    return () => observer.disconnect();
-  }, [resizeTextarea]);
-
-  useEffect(() => {
-    setError(null);
-  }, [mode, state]);
-
-  const submitMessage = useCallback(async () => {
-    if (isSubmitting || !hasText) return;
-    setError(null);
-    setIsSubmitting(true);
+  async function handleSend() {
+    const text = value.trim();
+    if (!text || submitting) return;
+    setSubmitting(true);
     try {
-      const didSend = await onSend(trimmedValue);
-      if (!didSend) return;
+      await onSend(text);
       setValue("");
-      announce("Message sent");
-      textareaRef.current?.focus();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send message.");
     } finally {
-      setIsSubmitting(false);
+      setSubmitting(false);
+      textareaRef.current?.focus();
     }
-  }, [announce, hasText, isSubmitting, onSend, trimmedValue]);
+  }
 
-  const stopRun = useCallback(async () => {
-    if (isSubmitting) return;
-    setError(null);
-    setIsSubmitting(true);
+  async function handleStop() {
+    if (!onStop) return;
+    setSubmitting(true);
     try {
       await onStop();
-      announce("Run stopped");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to stop run.");
     } finally {
-      setIsSubmitting(false);
+      setSubmitting(false);
     }
-  }, [announce, isSubmitting, onStop]);
+  }
 
-  const handleSubmit = useCallback(
-    async (event: React.FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      if (isStopMode) {
-        await stopRun();
-        return;
-      }
-      await submitMessage();
-    },
-    [isStopMode, stopRun, submitMessage],
-  );
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (composingRef.current || e.nativeEvent.isComposing) return;
 
-  const handleKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key !== "Enter") return;
-      const nativeEvent = event.nativeEvent as KeyboardEvent & { keyCode?: number };
-      const isComposing = nativeEvent.isComposing || nativeEvent.keyCode === 229 || isComposingRef.current;
-      if (isComposing) return;
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+      e.preventDefault();
+      void handleSend();
+      return;
+    }
 
-      const isDesktop = window.matchMedia("(min-width: 768px)").matches;
-      const isShortcutSend = event.metaKey || event.ctrlKey;
-      const isDesktopEnterSend = isDesktop && !event.shiftKey;
-      if (!isShortcutSend && !isDesktopEnterSend) return;
+    if (e.key === "Enter" && !e.shiftKey && hasHover) {
+      e.preventDefault();
+      void handleSend();
+    }
+  }
 
-      event.preventDefault();
-      if (isStopMode) {
-        void stopRun();
-        return;
-      }
-      void submitMessage();
-    },
-    [isStopMode, stopRun, submitMessage],
-  );
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const start = () => { composingRef.current = true; };
+    const end = () => { composingRef.current = false; };
+    el.addEventListener("compositionstart", start);
+    el.addEventListener("compositionend", end);
+    return () => {
+      el.removeEventListener("compositionstart", start);
+      el.removeEventListener("compositionend", end);
+    };
+  }, []);
 
   return (
-    <form
-      onSubmit={handleSubmit}
-      aria-label="Message composer"
-      className="mt-3 flex flex-col gap-2 rounded-sm border border-border bg-card p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]"
-    >
-      {error ? (
-        <p className="px-2 text-xs text-destructive" aria-live="polite">
-          {error}
-        </p>
-      ) : null}
-      <div className="flex items-end gap-2">
-        <label htmlFor={inputId} className="sr-only">
-          Message
-        </label>
+    <div className={cn("flex-shrink-0 border-t border-border bg-background px-3 py-2", className)}>
+      <form
+        onSubmit={(e) => { e.preventDefault(); void handleSend(); }}
+        className="flex items-end gap-2"
+        aria-label="Message composer"
+      >
+        <label htmlFor="chat-input" className="sr-only">Message</label>
         <textarea
           ref={textareaRef}
-          id={inputId}
-          name="message"
-          rows={1}
+          id="chat-input"
           value={value}
-          onChange={(event) => setValue(event.target.value)}
+          onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          onCompositionStart={() => {
-            isComposingRef.current = true;
-          }}
-          onCompositionEnd={() => {
-            isComposingRef.current = false;
-          }}
-          placeholder={placeholder}
-          disabled={isSubmitting}
-          autoComplete="off"
-          aria-describedby={hintId}
-          className="min-h-11 flex-1 resize-none rounded-sm border border-input bg-background px-3 py-2 text-base text-foreground placeholder:text-muted-foreground [field-sizing:content] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-60 md:text-sm"
-        />
-        <button
-          type={isStopMode ? "button" : "submit"}
-          onClick={isStopMode ? () => void stopRun() : undefined}
-          disabled={isSubmitting || (!isStopMode && !hasText)}
-          aria-label={isStopMode ? "Stop generating" : "Send message"}
-          className="inline-flex min-h-11 min-w-11 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-sm bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {isSubmitting ? (
-            <LoaderCircle className="size-4 animate-spin" />
-          ) : isStopMode ? (
-            <Square className="size-3.5 fill-current" />
-          ) : (
-            <Send className="size-3.5" />
+          placeholder={PLACEHOLDERS[mode]}
+          disabled={submitting}
+          rows={1}
+          aria-describedby="chat-input-hint"
+          className={cn(
+            "flex-1 min-w-0 min-h-[44px] resize-none",
+            "text-[16px] md:text-sm leading-[22px]",
+            "bg-secondary/50 rounded-xl px-4 py-2.5",
+            "border border-border/50 focus:border-ring focus:ring-1 focus:ring-ring",
+            "placeholder:text-muted-foreground text-foreground",
+            "outline-none transition-colors",
+            submitting && "opacity-50",
           )}
-        </button>
-      </div>
-      <p id={hintId} className="sr-only">
-        Press Enter to send on desktop, or Command/Ctrl plus Enter on any device. Shift plus Enter
-        inserts a new line.
-      </p>
-      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-        {announcement}
-      </div>
-    </form>
+          style={{ maxHeight: MAX_HEIGHT, fieldSizing: "content" } as React.CSSProperties}
+        />
+        <span id="chat-input-hint" className="sr-only">
+          {hasHover ? "Press Enter to send, Shift+Enter for a new line" : "Tap send to submit"}
+        </span>
+
+        {submitting ? (
+          <button
+            type="button"
+            disabled
+            className="size-[44px] flex-shrink-0 rounded-xl flex items-center justify-center bg-primary/60 text-primary-foreground"
+          >
+            <Loader2 className="size-5 animate-spin" />
+          </button>
+        ) : showStop ? (
+          <button
+            type="button"
+            onClick={() => void handleStop()}
+            className="size-[44px] flex-shrink-0 rounded-xl flex items-center justify-center bg-destructive/80 text-destructive-foreground transition-all duration-150"
+            aria-label="Stop agent"
+          >
+            <Square className="size-4" />
+          </button>
+        ) : (
+          <button
+            type="submit"
+            disabled={!hasText}
+            className={cn(
+              "size-[44px] flex-shrink-0 rounded-xl flex items-center justify-center transition-all duration-150",
+              hasText
+                ? "bg-primary text-primary-foreground"
+                : "bg-primary/40 text-primary-foreground/40 pointer-events-none",
+            )}
+            aria-label="Send message"
+          >
+            <ArrowUp className="size-5" />
+          </button>
+        )}
+      </form>
+    </div>
   );
 }

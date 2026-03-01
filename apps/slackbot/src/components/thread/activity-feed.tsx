@@ -1,8 +1,17 @@
 "use client";
 
-import { AlertTriangle, ChevronRight, FileDiff, FilePenLine, MessagesSquare, TerminalSquare } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ThreadContextIcon } from "@/components/thread/icons/thread-icons";
+import {
+  AlertTriangle,
+  ArrowDown,
+  Check,
+  ChevronRight,
+  Copy,
+  FileDiff,
+  FilePenLine,
+  MessagesSquare,
+  TerminalSquare,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useAutoScroll } from "@/hooks/use-auto-scroll";
 import type { Step } from "@/lib/describe";
 import type { Participant } from "@/lib/types";
@@ -12,34 +21,54 @@ import { StepGroup } from "@/components/thread/step-group";
 import { TerminalCard } from "@/components/thread/terminal-card";
 import { ThinkingDivider } from "@/components/thread/thinking-divider";
 
-function sourceLabel(source?: string): string {
-  const normalized = (source || "").toLowerCase();
-  if (normalized === "thread_ui" || normalized === "thread-view" || normalized === "ui") {
-    return "Thread Viewer";
+function CopyResultButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copyResult() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
   }
-  if (normalized === "slack" || normalized === "slack_subscribed_message") {
-    return "Slack";
-  }
-  return normalized || "User";
+
+  return (
+    <button
+      type="button"
+      onClick={() => void copyResult()}
+      aria-label="Copy result text"
+      className="copy-btn ml-auto inline-flex items-center gap-1 rounded bg-secondary/80 text-muted-foreground text-[10px] px-2 py-1 transition-colors hover:text-foreground"
+    >
+      {copied ? <Check className="size-3 text-green-500" /> : <Copy className="size-3" />}
+      <span className="md:hidden">{copied ? "Copied" : "Copy"}</span>
+    </button>
+  );
 }
 
-function initials(label: string): string {
-  const parts = label.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+function sourceLabel(source?: string): string {
+  const normalized = (source ?? "").trim().toLowerCase();
+  if (!normalized) return "Unknown";
+  if (normalized === "thread_ui") return "Thread Viewer";
+  if (normalized === "slack") return "Slack";
+  if (normalized === "slack_subscribed_message") return "Slack Thread";
+  if (normalized === "api") return "API";
+  return normalized.replace(/_/g, " ");
+}
+
+function initials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
 }
 
 function renderStep(
   step: Step,
-  options: {
-    compactMode: boolean;
-    keepExpandedResultIds: Set<string>;
-    participantsById: Map<string, Participant>;
-  },
+  key: string,
+  participantsById: Map<string, Participant>,
 ): React.ReactNode {
-  const { compactMode, keepExpandedResultIds, participantsById } = options;
-  const key = step.id;
   if (step.type === "phase") {
     return (
       <div key={key} className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
@@ -50,16 +79,7 @@ function renderStep(
   }
   if (step.type === "thinking") return <ThinkingDivider key={key} text={step.text} durationS={step.durationS} />;
   if (step.type === "tool-group") {
-    return (
-      <StepGroup
-        key={key}
-        id={step.id}
-        icon={step.icon}
-        summary={step.summary}
-        calls={step.calls}
-        compactMode={compactMode}
-      />
-    );
+    return <StepGroup key={key} icon={step.icon} summary={step.summary} calls={step.calls} />;
   }
   if (step.type === "diff") {
     return <DiffCard key={key} file={step.file} lang={step.lang} oldStr={step.oldStr} newStr={step.newStr} />;
@@ -104,50 +124,42 @@ function renderStep(
     const participant = step.userId ? participantsById.get(step.userId) : undefined;
     const displayName = participant?.name || step.userId || "User";
     return (
-      <div key={key} className="step-item rounded-sm border border-border/50 bg-card px-3 py-2">
-        <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
-          <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
-            <div className="size-5 rounded-full bg-secondary text-secondary-foreground inline-flex items-center justify-center text-[10px] font-semibold overflow-hidden">
-              {participant?.avatar_url ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={participant.avatar_url}
-                  alt={displayName}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                initials(displayName)
-              )}
+      <div key={key} className="step-item rounded-lg border border-border/50 bg-card/50 p-3">
+        <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
+          {participant?.avatar_url ? (
+            <img src={participant.avatar_url} alt={displayName} className="size-[18px] rounded-full" />
+          ) : (
+            <div className="flex size-[18px] items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
+              {initials(displayName)}
             </div>
-            <span className="truncate text-foreground">{displayName}</span>
-          </div>
-          <span className="shrink-0 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          )}
+          <span className="text-sm font-medium text-foreground">{displayName}</span>
+          <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px]">
             {sourceLabel(step.source)}
           </span>
         </div>
-        <div className="text-sm whitespace-pre-wrap break-words">{step.text}</div>
+        <div className="whitespace-pre-wrap text-sm text-foreground">{step.text}</div>
       </div>
     );
   }
   if (step.type === "context-group") {
     return (
-      <details
-        key={key}
-        className="step-item rounded-sm border border-dashed border-border bg-card/60 px-3 py-2"
-      >
-        <summary className="cursor-pointer list-none text-xs text-muted-foreground">
-          <span className="inline-flex items-center gap-1.5">
-            <ThreadContextIcon className="size-3.5" />
-            {step.title} ({step.items.length} message{step.items.length === 1 ? "" : "s"})
-          </span>
+      <details key={key} className="group step-item rounded-lg border border-border/40 bg-card/40">
+        <summary className="list-none cursor-pointer px-3 py-2 min-h-[44px] flex items-center gap-2 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+          {step.items.length} message{step.items.length === 1 ? "" : "s"} in thread
         </summary>
-        <div className="mt-2 space-y-1.5">
+        <div className="space-y-2 px-3 pb-3">
           {step.items.map((item) => {
             const participant = item.userId ? participantsById.get(item.userId) : undefined;
-            const displayName = participant?.name || item.userId || "thread-user";
+            const displayName = participant?.name || item.userId || "Thread participant";
             return (
-              <div key={item.id} className="text-xs text-muted-foreground break-words">
-                <span className="font-medium text-foreground/90">@{displayName}:</span> {item.text}
+              <div key={item.id} className="rounded border border-border/50 bg-background px-2 py-1.5">
+                <div className="mb-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <span className="text-foreground">{displayName}</span>
+                  <span>{sourceLabel(item.source)}</span>
+                </div>
+                <div className="whitespace-pre-wrap text-xs text-muted-foreground">{item.text}</div>
               </div>
             );
           })}
@@ -156,27 +168,12 @@ function renderStep(
     );
   }
   if (step.type === "result") {
-    if (compactMode && !keepExpandedResultIds.has(step.id)) {
-      const previewLine = step.text.split("\n").map((line) => line.trim()).find(Boolean) ?? "Result";
-      return (
-        <details key={key} className="group step-item rounded-sm border border-border bg-card">
-          <summary className="list-none cursor-pointer px-3 py-2 flex items-center gap-2 [&::-webkit-details-marker]:hidden">
-            <ChevronRight className="size-3.5 text-muted-foreground transition-transform group-open:rotate-90" />
-            <MessagesSquare className="size-3.5 text-primary" />
-            <span className="text-xs text-muted-foreground">Result</span>
-            <span className="truncate text-sm text-foreground">{previewLine}</span>
-          </summary>
-          <div className="border-t border-border px-3 py-2">
-            <MarkdownView text={step.text} isStreaming={step.streaming} />
-          </div>
-        </details>
-      );
-    }
     return (
       <div key={key} className="step-item rounded-sm border border-border bg-card px-3 py-2">
         <div className="flex items-center gap-2 mb-1 text-xs text-muted-foreground">
           <MessagesSquare className="size-3.5 text-primary" />
           Result
+          <CopyResultButton text={step.text} />
         </div>
         <div className="relative">
           <MarkdownView text={step.text} isStreaming={step.streaming} />
@@ -190,31 +187,20 @@ function renderStep(
 export function ActivityFeed({
   steps,
   state,
-  compactMode = false,
+  isStreaming,
   participants,
 }: {
   steps: Step[];
   state?: string;
-  compactMode?: boolean;
+  isStreaming?: boolean;
   participants?: Participant[];
 }) {
   const activeCount = steps.length;
-  const isStreamingState = state === "running" || state === "working";
   const { containerRef, sentinelRef } = useAutoScroll([steps]);
   const [pendingSteps, setPendingSteps] = useState(0);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const previousCountRef = useRef(activeCount);
-  const keepExpandedResultIds = useMemo(() => {
-    const resultIds = steps.filter((step) => step.type === "result").map((step) => step.id);
-    return new Set(resultIds.slice(-2));
-  }, [steps]);
-  const participantsById = useMemo(() => {
-    const map = new Map<string, Participant>();
-    for (const participant of participants || []) {
-      map.set(participant.id, participant);
-    }
-    return map;
-  }, [participants]);
+  const participantsById = new Map((participants || []).map((participant) => [participant.id, participant]));
 
   useEffect(() => {
     if (activeCount <= previousCountRef.current) {
@@ -241,25 +227,26 @@ export function ActivityFeed({
     setPendingSteps(0);
   }
 
+  const ariaLive = isStreaming ? "off" : "polite";
+
   return (
     <div className="relative flex-1 min-h-0">
       <div
         ref={containerRef}
+        data-thread-feed-scroll="true"
         role="log"
-        aria-live={isStreamingState ? "off" : "polite"}
-        aria-busy={isStreamingState}
+        aria-live={ariaLive}
         onScroll={handleScroll}
-        className="h-full overflow-y-auto overscroll-contain scroll-pb-28 px-5 py-4 space-y-4"
+        className="h-full overflow-y-auto overscroll-contain px-4 md:px-5 py-3 md:py-4 space-y-1.5 md:space-y-4"
+        style={{ WebkitOverflowScrolling: "touch" }}
       >
       {activeCount === 0 ? (
         <div className="h-full flex items-center justify-center text-sm text-muted-foreground gap-2">
           <TerminalSquare className="size-4 text-primary" />
-          {state === "idle" ? "No events yet. This thread is idle." : "Waiting for events…"}
+          {state === "idle" ? "No events yet. This thread is idle." : "Waiting for events\u2026"}
         </div>
       ) : (
-        steps.map((step) =>
-          renderStep(step, { compactMode, keepExpandedResultIds, participantsById })
-        )
+        steps.map((step, index) => renderStep(step, `live-${index}`, participantsById))
       )}
       <div ref={sentinelRef} className="h-px" />
       </div>
@@ -268,9 +255,10 @@ export function ActivityFeed({
           type="button"
           onClick={jumpToLatest}
           aria-label={`Jump to latest, ${pendingSteps} new step${pendingSteps === 1 ? "" : "s"}`}
-          className="absolute bottom-4 right-5 rounded-full border border-border bg-card px-3 py-1.5 text-xs text-foreground shadow-md hover:bg-accent cursor-pointer"
+          className="absolute bottom-4 right-4 rounded-full bg-primary text-primary-foreground shadow-lg px-3 py-2 text-xs font-medium min-h-[36px] flex items-center gap-1.5 cursor-pointer animate-in fade-in duration-200"
         >
-          ↓ {pendingSteps} new step{pendingSteps === 1 ? "" : "s"}
+          <ArrowDown className="size-3.5" />
+          {pendingSteps} new
         </button>
       )}
     </div>

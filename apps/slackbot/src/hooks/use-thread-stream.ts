@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useChat } from "@ai-sdk/react";
 import { z } from "zod";
 import type { ThreadDetail } from "@/lib/types";
@@ -16,13 +16,21 @@ export type TokenUsage = {
   model: string | null;
 };
 
+const POLL_MS_VISIBLE = 5000;
+const RETRY_BASE_MS = 1000;
+const RETRY_MAX_MS = 30000;
+const RETRY_MAX_ATTEMPTS = 8;
+
 type SendRoute = "reply" | "execute";
 
 export function useThreadStream(threadKey: string) {
   const [thread, setThread] = useState<ThreadDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isPolling, setIsPolling] = useState(false);
   const [agentStatus, setAgentStatus] = useState<string | null>(null);
   const [tokenUsage, setTokenUsage] = useState<TokenUsage | null>(null);
+  const stopStreamRef = useRef<(() => void) | null>(null);
+  const resumeStreamRef = useRef<(() => void) | null>(null);
   const transport = useMemo(() => new AgentThreadTransport(threadKey), [threadKey]);
   const chat = useChat({
     id: `thread-${threadKey}`,
@@ -35,18 +43,18 @@ export function useThreadStream(threadKey: string) {
       "file-changes": z.object({ changes: z.array(z.object({ path: z.string(), kind: z.string() })) }),
       "user-message": z.object({
         id: z.string(),
-        turn_id: z.number().optional(),
+        turn_id: z.number(),
         text: z.string(),
         source: z.string().optional(),
-        user_id: z.string().optional(),
+        user_id: z.string().nullable().optional(),
         created_at: z.string().optional(),
       }),
       "context-message": z.object({
         id: z.string(),
-        turn_id: z.number().optional(),
+        turn_id: z.number(),
         text: z.string(),
         source: z.string().optional(),
-        user_id: z.string().optional(),
+        user_id: z.string().nullable().optional(),
         created_at: z.string().optional(),
       }),
       "token-usage": z.object({
@@ -92,75 +100,133 @@ export function useThreadStream(threadKey: string) {
       setAgentStatus(null);
     },
   });
+  useEffect(() => {
+    const stop = (chat as { stop?: () => void }).stop;
+    const resume = (chat as { resumeStream?: () => void }).resumeStream;
+    stopStreamRef.current = typeof stop === "function" ? stop : null;
+    resumeStreamRef.current = typeof resume === "function" ? resume : null;
+  }, [chat]);
 
-  const fetchThread = useCallback(async () => {
+  const fetchThread = useCallback(async (): Promise<boolean> => {
     try {
       const res = await fetch(
         `${BASE}/api/threads/detail?key=${encodeURIComponent(threadKey)}`
       );
       if (!res.ok) {
-        setThread(null);
-        setError(`Thread not found: ${threadKey}`);
-        return;
+        if (res.status === 404) {
+          setThread(null);
+          setError(`Thread not found: ${threadKey}`);
+        } else {
+          setError(`Failed to fetch thread (${res.status})`);
+        }
+        return false;
       }
       const data = await res.json();
       if (data.error) {
-        setThread(null);
-        setError(String(data.error));
-        return;
+        const message = String(data.error);
+        if (message.toLowerCase().includes("not found")) {
+          setThread(null);
+        }
+        setError(message);
+        return false;
       }
       setThread(data as ThreadDetail);
       setError(null);
+      return true;
     } catch {
-      setThread(null);
       setError("Failed to fetch thread");
+      return false;
     }
   }, [threadKey]);
 
   useEffect(() => {
     setThread(null);
     setError(null);
+    setIsPolling(false);
     setAgentStatus(null);
     setTokenUsage(null);
     void fetchThread();
-    const poll = setInterval(() => {
-      void fetchThread();
-    }, 5000);
+
+    let poll: ReturnType<typeof setTimeout> | null = null;
+    let disconnectTs = 0;
+    let retryAttempt = 0;
+
+    const stopLiveStream = () => {
+      stopStreamRef.current?.();
+    };
+    const resumeLiveStream = () => {
+      resumeStreamRef.current?.();
+    };
+
+    const schedulePoll = (ms: number) => {
+      if (poll) clearTimeout(poll);
+      poll = setTimeout(() => {
+        setIsPolling(true);
+        void fetchThread()
+          .then((ok) => {
+            if (ok) {
+              retryAttempt = 0;
+              schedulePoll(POLL_MS_VISIBLE);
+              return;
+            }
+            retryAttempt = Math.min(retryAttempt + 1, RETRY_MAX_ATTEMPTS);
+            const exp = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** retryAttempt);
+            const jitter = Math.floor(exp * 0.5 * Math.random());
+            schedulePoll(Math.min(RETRY_MAX_MS, exp) + jitter);
+          })
+          .finally(() => setIsPolling(false));
+      }, ms);
+    };
+
+    const clearPoll = () => {
+      if (poll) clearTimeout(poll);
+      poll = null;
+    };
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        clearPoll();
+        stopLiveStream();
+        disconnectTs = Date.now();
+        setIsPolling(false);
+        return;
+      }
+
+      const away = Date.now() - disconnectTs;
+      retryAttempt = 0;
+      clearPoll();
+      if (away >= 30_000) {
+        setIsPolling(true);
+        void fetchThread().finally(() => {
+          setIsPolling(false);
+          resumeLiveStream();
+          schedulePoll(POLL_MS_VISIBLE);
+        });
+        return;
+      }
+      resumeLiveStream();
+      schedulePoll(POLL_MS_VISIBLE);
+    };
+
+    if (!document.hidden) {
+      schedulePoll(POLL_MS_VISIBLE);
+    }
+    document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
-      clearInterval(poll);
+      clearPoll();
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [threadKey, fetchThread]);
 
   const sendThreadMessage = useCallback(
-    async (message: string, options?: { route?: SendRoute; harness?: ThreadDetail["harness"] }) => {
+    async (message: string, route: SendRoute = "execute") => {
       const text = message.trim();
       if (!text) return;
-      const route = options?.route ?? "execute";
-      await chat.sendMessage(
-        { text },
-        {
-          body: {
-            route,
-            ...(options?.harness ? { harness: options.harness } : {}),
-          },
-        },
-      );
+      await chat.sendMessage({ text }, { body: { route } });
     },
-    [chat],
+    [chat.sendMessage],
   );
-
-  const interruptThread = useCallback(async () => {
-    const res = await fetch(`${BASE}/api/agent/interrupt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ slack_thread_key: threadKey }),
-    });
-    const data = (await res.json().catch(() => ({}))) as { error?: string };
-    if (!res.ok || data.error) {
-      throw new Error(data.error ?? `Interrupt failed (${res.status}).`);
-    }
-  }, [threadKey]);
 
   const liveSteps = useMemo(() => stepsFromUiMessages(chat.messages), [chat.messages]);
 
@@ -168,12 +234,11 @@ export function useThreadStream(threadKey: string) {
     thread,
     error,
     fetchThread,
-    isReconnecting: chat.status === "error",
+    isReconnecting: isPolling || chat.status === "error",
     agentStatus,
     tokenUsage,
     chatStatus: chat.status,
     sendThreadMessage,
-    interruptThread,
     liveSteps,
   };
 }
