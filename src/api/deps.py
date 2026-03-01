@@ -24,6 +24,12 @@ async def verify_api_key(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> str:
+    # Docker network is trusted — only nginx is exposed to the host.
+    client_ip = request.client.host if request.client else ""
+    if client_ip.startswith(_DOCKER_PREFIXES):
+        return "docker-bypass"
+
+
     if not settings.api_secret_key:
         raise HTTPException(status_code=500, detail="API key not configured")
 

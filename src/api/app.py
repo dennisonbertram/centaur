@@ -17,7 +17,7 @@ import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from api.agent import reap_stale_running_sessions, session_items_snapshot, signal_shutdown
 from api.mcp_server import mcp, set_pool, set_tool_manager
@@ -186,24 +186,29 @@ _mcp_starlette = mcp.streamable_http_app()
 
 
 class _MCPAuthMiddleware:
-    """ASGI middleware that validates Bearer token before forwarding to MCP."""
+    """ASGI middleware that validates Bearer token before forwarding to MCP.
+
+    Requests from the Docker network are trusted (only nginx is host-exposed).
+    """
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             request = Request(scope, receive)
-            token: str | None = None
-            auth = request.headers.get("authorization", "")
-            if auth.lower().startswith("bearer "):
-                token = auth[7:]
+            client_ip = request.client.host if request.client else ""
+            if not client_ip.startswith(_DOCKER_PREFIXES):
+                token: str | None = None
+                auth = request.headers.get("authorization", "")
+                if auth.lower().startswith("bearer "):
+                    token = auth[7:]
 
-            if not settings.api_secret_key or not token or not _secrets.compare_digest(
-                token, settings.api_secret_key
-            ):
-                resp = JSONResponse(
-                    {"detail": "Invalid or missing Bearer token"}, status_code=401
-                )
-                await resp(scope, receive, send)
-                return
+                if not settings.api_secret_key or not token or not _secrets.compare_digest(
+                    token, settings.api_secret_key
+                ):
+                    resp = JSONResponse(
+                        {"detail": "Invalid or missing Bearer token"}, status_code=401
+                    )
+                    await resp(scope, receive, send)
+                    return
 
         await _mcp_starlette(scope, receive, send)
 
