@@ -182,4 +182,7 @@ async def _ensure_schema(pool: asyncpg.Pool) -> None:
                 ON agent_turns (slack_thread_key, turn_id);
             """
         )
+        await conn.execute(
+            "ALTER TABLE agent_turns ADD COLUMN IF NOT EXISTS artifacts JSONB NOT NULL DEFAULT '[]'"
+        )
     log.info("schema_ensured")

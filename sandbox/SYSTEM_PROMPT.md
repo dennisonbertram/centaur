@@ -35,6 +35,13 @@
 |IMPORTANT: "use your tools"/"demo your tools"/"show what you can do" → means API tools, NOT Amp built-ins
 |Run multiple independent API calls in parallel via Task sub-agents
 
+[Media uploads — Slack]
+|When uploading charts, images, or files to the current Slack thread:
+|  `slack-upload /path/to/file.png "Description of what this shows"`
+|This posts the file with your description as a SINGLE message.
+|Do NOT send a separate text message describing the chart AND then upload — one message only.
+|The file appearing in the thread IS the confirmation; never send a redundant "Uploaded ✅" follow-up.
+
 [API access — use `call` helper (returns TOON, saves tokens)]
 |call <tool> <method> [json_body] → e.g. call arkham get_transfers '{"address":"0x..."}'
 |call search <query> [limit]     → semantic+keyword search

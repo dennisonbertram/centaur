@@ -60,6 +60,7 @@ RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace 
 # ── Entrypoint + helpers (changes rarely) ───────────────────────────────────
 COPY --chmod=755 entrypoint.sh /entrypoint.sh
 COPY --chmod=755 call.sh /usr/local/bin/call
+COPY --chmod=755 slack-upload.sh /usr/local/bin/slack-upload
 
 # ── Pi-mono extensions (TODO: wire up pi-plugins/ from repo root) ─────────
 # COPY --chown=agent:agent pi-plugins/system-prompt.ts /home/agent/.pi/agent/extensions/system-prompt.ts
