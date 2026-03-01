@@ -29,7 +29,7 @@ class GitHubExtractor(BaseExtractor):
     def __init__(
         self,
         token: str,
-        org: str = "tempoxyz",
+        org: str = "paradigmxyz",
         repos: list[str] | None = None,
         max_pr_pages: int = 10,
     ) -> None:

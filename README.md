@@ -1,6 +1,6 @@
-# Tempo AI v2
+# Paradigm AI v2
 
-Rebuild of the Tempo AI system: **Postgres+pgvector** for data + search, **FastAPI+MCP** API layer, **Codex+Docker** sandbox.
+Rebuild of the Paradigm AI system: **Postgres+pgvector** for data + search, **FastAPI+MCP** API layer, **Codex+Docker** sandbox.
 
 ## Architecture
 
@@ -52,12 +52,12 @@ External tools (allium, defillama, etc.) are called on-demand — not ingested.
 
 ### Sandbox
 
-Docker image preloaded with 28 tempoxyz repos, auto-updated every 6h. For Codex / agent code execution.
+Docker image preloaded with 28 paradigmxyz repos, auto-updated every 6h. For Codex / agent code execution.
 
 ## Quick Start
 
 ```bash
-gh repo clone tempoxyz/ai_v2
+gh repo clone paradigmxyz/ai_v2
 cd ai_v2
 cp .env.example .env        # fill in secrets
 docker compose up -d         # start Postgres

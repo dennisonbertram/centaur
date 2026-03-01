@@ -62,7 +62,7 @@ log = structlog.get_logger()
 
 @click.group()
 def cli() -> None:
-    """Tempo AI v2 — Postgres+pgvector data plane, API, and sandbox."""
+    """Paradigm AI v2 — Postgres+pgvector data plane, API, and sandbox."""
 
 
 # ---------------------------------------------------------------------------

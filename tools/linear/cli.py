@@ -601,7 +601,7 @@ def weekly_report_cmd(
     team: str = typer.Option(None, "--team", "-t", help="Filter by team key"),
     limit: int = typer.Option(30, "--limit", "-n", help="Max issues"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
-    github_org: str = typer.Option("tempoxyz", "--org", help="GitHub org for link search"),
+    github_org: str = typer.Option("paradigmxyz", "--org", help="GitHub org for link search"),
 ):
     """Weekly report: issues from last 7 days with Slack & GitHub links.
 

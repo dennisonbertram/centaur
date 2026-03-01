@@ -26,7 +26,7 @@ from starlette.routing import Route
 
 _PASSWORD = os.environ.get("UI_PASSWORD", "")
 _SECRET_KEY = os.environ.get("API_SECRET_KEY", "")
-_COOKIE_NAME = "tempo_ui_session"
+_COOKIE_NAME = "paradigm_ui_session"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 _COOKIE_SECURE = os.environ.get("AUTH_COOKIE_INSECURE", "") != "1"
 
@@ -60,7 +60,7 @@ _LOGIN_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Tempo AI — Login</title>
+  <title>Paradigm AI — Login</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
         rel="stylesheet"/>
   <style>
@@ -146,7 +146,7 @@ _LOGIN_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <div class="card">
-    <h1>Tempo AI</h1>
+    <h1>Paradigm AI</h1>
     <p class="subtitle">Enter the password to view agent threads</p>
     <form method="POST" action="/login">
       <label for="password">Password</label>

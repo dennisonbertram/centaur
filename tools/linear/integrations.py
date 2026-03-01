@@ -19,8 +19,8 @@ for _env in [_cli_dir / ".env", _repo_root / ".env"]:
     if _env.exists():
         load_dotenv(_env, override=False)
 
-# Load Slack token from tempo-slack/.env (separate from bot tokens)
-_slack_env = _repo_root / "cli" / "tempo-slack" / ".env"
+# Load Slack token from paradigm-slack/.env (separate from bot tokens)
+_slack_env = _repo_root / "cli" / "paradigm-slack" / ".env"
 if _slack_env.exists():
     load_dotenv(_slack_env, override=False)
 
@@ -166,7 +166,7 @@ class LinearEnricher:
 
     def __init__(
         self,
-        github_org: str = "tempoxyz",
+        github_org: str = "paradigmxyz",
         github_token: str | None = None,
     ):
         self.github = GitHubClient(token=github_token)
@@ -269,7 +269,7 @@ def get_last_week_issues(
 
 def weekly_report(
     team_key: str | None = None,
-    github_org: str = "tempoxyz",
+    github_org: str = "paradigmxyz",
     limit: int = 30,
 ) -> list[dict[str, Any]]:
     """Generate a weekly report with enriched issues.

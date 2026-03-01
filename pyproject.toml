@@ -1,7 +1,7 @@
 [project]
-name = "tempo-ai-v2"
+name = "paradigm-ai-v2"
 version = "0.1.0"
-description = "Tempo AI v2 — Postgres+pgvector data plane, FastAPI+MCP API, Codex+Docker sandbox"
+description = "Paradigm AI v2 — Postgres+pgvector data plane, FastAPI+MCP API, Codex+Docker sandbox"
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [

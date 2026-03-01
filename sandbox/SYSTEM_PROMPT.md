@@ -17,7 +17,6 @@
 |alloy-rs:{alloy,core,op-alloy,evm,trie,chains,hardforks}
 |commonwarexyz:{monorepo}
 |ithacaxyz:{porto,relay,infrastructure}
-|tempoxyz:{tempo,ai,app,mpp,presto}
 |wevm:{viem,wagmi,ox,vocs,abitype}
 |installed: Rust,Node22,Python3(uv),Foundry(forge/cast/anvil),rg,fd,jq,tmux,cmake,protobuf,docker(CLI only)
 |docker: socket mounted — use `docker ps`, `docker logs <container>`, `docker run`, etc. Full Docker access to inspect and manage services.

@@ -13,7 +13,7 @@ from api.deps import EmbeddingService
 from shared.tool_manager import ToolManager, _flatten_for_tabular
 
 mcp = FastMCP(
-    "Tempo AI v2",
+    "Paradigm AI v2",
     streamable_http_path="/",
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )  # mounted at /mcp in app.py

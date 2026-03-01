@@ -24,7 +24,7 @@ from .client import (
 )
 
 # Feedback database location
-FEEDBACK_DB_PATH = Path.home() / ".cache" / "tempo-slack" / "feedback.db"
+FEEDBACK_DB_PATH = Path.home() / ".cache" / "paradigm-slack" / "feedback.db"
 
 # Heuristic signals for feedback detection
 NEGATIVE_REACTIONS = {"thumbsdown", "-1", "x", "confused", "thinking_face", "bug", "facepalm"}

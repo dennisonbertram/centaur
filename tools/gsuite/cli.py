@@ -1086,7 +1086,7 @@ def docs_insert_cmd(
 def _get_channel_member_emails_via_cli(channel: str) -> list[str]:
     """Get channel member emails by calling the slack CLI.
 
-    This avoids importing tempo_slack directly, keeping packages independent.
+    This avoids importing the slack client directly, keeping packages independent.
     """
     import json
     import subprocess
