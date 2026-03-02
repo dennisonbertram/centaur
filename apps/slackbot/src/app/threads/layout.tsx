@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import {
   ThreadLayout,
   THREAD_SIDEBAR_COLLAPSE_CLASS,
@@ -17,7 +18,9 @@ export default function ThreadsLayout({ children }: { children: React.ReactNode 
   return (
     <>
       <script dangerouslySetInnerHTML={{ __html: SIDEBAR_BOOTSTRAP_SCRIPT }} />
-      <ThreadLayout>{children}</ThreadLayout>
+      <Suspense fallback={<div className="h-full bg-background" />}>
+        <ThreadLayout>{children}</ThreadLayout>
+      </Suspense>
     </>
   );
 }

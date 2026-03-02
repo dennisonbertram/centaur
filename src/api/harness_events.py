@@ -77,6 +77,28 @@ def _tool_result_event(tool_use_id: str, content: Any, is_error: bool = False) -
     }
 
 
+def _subagent_event(
+    *,
+    status: str,
+    subagent_id: str,
+    name: str = "",
+    summary: str = "",
+    error: str = "",
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "type": "subagent",
+        "status": status,
+        "subagent_id": subagent_id,
+    }
+    if name:
+        payload["name"] = name
+    if summary:
+        payload["summary"] = summary
+    if error:
+        payload["error"] = error
+    return payload
+
+
 def _normalize_amp_like_event(event: dict[str, Any]) -> list[dict[str, Any]]:
     event_type = _as_text(event.get("type"))
 
@@ -109,6 +131,7 @@ def _normalize_amp_like_event(event: dict[str, Any]) -> list[dict[str, Any]]:
         "tool",
         "command_execution",
         "file_change",
+        "subagent",
         "result",
     }:
         return [event]
@@ -189,6 +212,35 @@ def _normalize_codex_item(item: dict[str, Any], phase: str) -> list[dict[str, An
     if item_type in {"mcp_tool_call", "tool_call", "function_call", "custom_tool_call"}:
         tool_id = _codex_tool_call_id(item)
         tool_name = _codex_tool_name(item)
+        if tool_name.strip().lower() == "subagent":
+            tool_input = _codex_tool_input(item)
+            label = (
+                _as_text(tool_input.get("description"))
+                or _as_text(tool_input.get("name"))
+                or "Delegated subagent"
+            )
+            if phase == "started":
+                return [_subagent_event(status="started", subagent_id=tool_id, name=label)]
+            if phase == "completed":
+                if item.get("error") is not None:
+                    return [
+                        _subagent_event(
+                            status="failed",
+                            subagent_id=tool_id,
+                            name=label,
+                            error=_as_text(item.get("error")) or "Subagent failed",
+                        )
+                    ]
+                result_summary = _as_text(item.get("result"))
+                return [
+                    _subagent_event(
+                        status="completed",
+                        subagent_id=tool_id,
+                        name=label,
+                        summary=result_summary[:220],
+                    )
+                ]
+            return []
         if phase == "started":
             tool_input = _codex_tool_input(item)
             return [_assistant_tool_use_event(tool_id, tool_name, tool_input)]
@@ -296,12 +348,37 @@ def _normalize_pi_event(event: dict[str, Any]) -> list[dict[str, Any]]:
         tool_name = _as_text(event.get("toolName")) or "tool"
         tool_input = _as_dict(event.get("args"))
         tool_id = _as_text(event.get("toolCallId"))
+        if tool_name.strip().lower() == "subagent":
+            fallback_id = tool_id or _stable_tool_call_id(tool_name, tool_input)
+            label = (
+                _as_text(tool_input.get("description"))
+                or _as_text(tool_input.get("name"))
+                or "Delegated subagent"
+            )
+            return [_subagent_event(status="started", subagent_id=fallback_id, name=label)]
         return [_assistant_tool_use_event(tool_id, tool_name, tool_input)]
 
     if event_type == "tool_execution_end":
         tool_id = _as_text(event.get("toolCallId"))
         if not tool_id:
             return []
+        if _as_text(event.get("toolName")).strip().lower() == "subagent":
+            if bool(event.get("isError")):
+                return [
+                    _subagent_event(
+                        status="failed",
+                        subagent_id=tool_id,
+                        error=_as_text(event.get("error")) or "Subagent failed",
+                    )
+                ]
+            result_summary = _as_text(event.get("result"))
+            return [
+                _subagent_event(
+                    status="completed",
+                    subagent_id=tool_id,
+                    summary=result_summary[:220],
+                )
+            ]
         return [_tool_result_event(tool_id, event.get("result"), bool(event.get("isError")))]
 
     if event_type == "message_end":

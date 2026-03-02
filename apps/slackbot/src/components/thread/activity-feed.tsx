@@ -2,16 +2,18 @@
 
 import {
   AlertTriangle,
-  ArrowDown,
+  ArrowDownToLine,
+  Bot,
   Check,
   ChevronRight,
   Copy,
   FileDiff,
   FilePenLine,
+  LoaderCircle,
   MessagesSquare,
-  TerminalSquare,
+  Timer,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAutoScroll } from "@/hooks/use-auto-scroll";
 import type { Step } from "@/lib/describe";
 import type { Participant } from "@/lib/types";
@@ -64,10 +66,17 @@ function initials(name: string): string {
   return `${words[0][0]}${words[1][0]}`.toUpperCase();
 }
 
+function subagentStatusLabel(status: string): string {
+  const normalized = status.trim().toLowerCase();
+  if (!normalized) return "Update";
+  return normalized.replace(/_/g, " ");
+}
+
 function renderStep(
   step: Step,
   key: string,
   participantsById: Map<string, Participant>,
+  turnDurationsById: Record<number, number>,
 ): React.ReactNode {
   if (step.type === "phase") {
     return (
@@ -78,6 +87,44 @@ function renderStep(
     );
   }
   if (step.type === "thinking") return <ThinkingDivider key={key} text={step.text} durationS={step.durationS} />;
+  if (step.type === "subagent") {
+    const normalizedStatus = step.status.trim().toLowerCase();
+    const toneClass =
+      normalizedStatus === "failed"
+        ? "border-destructive/30 bg-destructive/10 text-destructive"
+        : normalizedStatus === "completed" || normalizedStatus === "selected"
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+          : normalizedStatus === "cancelled"
+            ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+            : "border-border bg-card text-foreground";
+    const progressText =
+      step.completed !== undefined && step.totalBranches !== undefined
+        ? `${step.completed}/${step.totalBranches} done`
+        : null;
+    const usageText =
+      step.totalTokens !== undefined
+        ? `${Math.max(0, step.totalTokens).toLocaleString()} tok${
+            step.costUsd !== null && step.costUsd !== undefined ? ` / $${step.costUsd.toFixed(4)}` : ""
+          }`
+        : null;
+    return (
+      <div key={key} className={`step-item rounded-sm border px-3 py-2 ${toneClass}`}>
+        <div className="flex items-center gap-2 text-xs">
+          <Bot className="size-3.5" />
+          <span className="font-medium">{step.name || "Subagent"}</span>
+          <span className="ml-auto rounded bg-background/60 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+            {subagentStatusLabel(step.status)}
+          </span>
+        </div>
+        <div className="mt-1 text-[11px] text-muted-foreground">
+          {[step.phase, progressText].filter(Boolean).join(" • ") || "Parallel worker update"}
+        </div>
+        {usageText ? <div className="mt-1 text-[11px] text-muted-foreground">{usageText}</div> : null}
+        {step.summary ? <div className="mt-1 text-xs">{step.summary}</div> : null}
+        {step.error ? <div className="mt-1 text-xs font-medium">{step.error}</div> : null}
+      </div>
+    );
+  }
   if (step.type === "tool-group") {
     return <StepGroup key={key} icon={step.icon} summary={step.summary} calls={step.calls} />;
   }
@@ -123,8 +170,9 @@ function renderStep(
   if (step.type === "user-message") {
     const participant = step.userId ? participantsById.get(step.userId) : undefined;
     const displayName = participant?.name || step.userId || "User";
+    const turnDuration = step.turnId ? turnDurationsById[step.turnId] : undefined;
     return (
-      <div key={key} className="step-item rounded-lg border border-border/50 bg-card/50 p-3">
+      <div key={key} className="step-item rounded-sm border-l-[3px] border-l-primary bg-primary/5 px-3 py-2.5">
         <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
           {participant?.avatar_url ? (
             <img src={participant.avatar_url} alt={displayName} className="size-[18px] rounded-full" />
@@ -134,7 +182,13 @@ function renderStep(
             </div>
           )}
           <span className="text-sm font-medium text-foreground">{displayName}</span>
-          <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px]">
+          {typeof turnDuration === "number" ? (
+            <span className="ml-auto inline-flex items-center gap-1 rounded bg-background/70 px-1.5 py-0.5 text-[10px] font-mono tabular-nums text-muted-foreground">
+              <Timer className="size-3" />
+              {Math.max(0, Math.round(turnDuration))}s
+            </span>
+          ) : null}
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
             {sourceLabel(step.source)}
           </span>
         </div>
@@ -175,7 +229,7 @@ function renderStep(
           Result
           <CopyResultButton text={step.text} />
         </div>
-        <div className="relative">
+        <div className={`relative ${step.streaming ? "streaming-cursor" : ""}`}>
           <MarkdownView text={step.text} isStreaming={step.streaming} />
         </div>
       </div>
@@ -189,18 +243,23 @@ export function ActivityFeed({
   state,
   isStreaming,
   participants,
+  turnDurationsById = {},
 }: {
   steps: Step[];
   state?: string;
   isStreaming?: boolean;
   participants?: Participant[];
+  turnDurationsById?: Record<number, number>;
 }) {
   const activeCount = steps.length;
   const { containerRef, sentinelRef } = useAutoScroll([steps]);
   const [pendingSteps, setPendingSteps] = useState(0);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const previousCountRef = useRef(activeCount);
-  const participantsById = new Map((participants || []).map((participant) => [participant.id, participant]));
+  const participantsById = useMemo(
+    () => new Map((participants || []).map((participant) => [participant.id, participant])),
+    [participants],
+  );
 
   useEffect(() => {
     if (activeCount <= previousCountRef.current) {
@@ -236,17 +295,31 @@ export function ActivityFeed({
         data-thread-feed-scroll="true"
         role="log"
         aria-live={ariaLive}
+        aria-busy={isStreaming}
         onScroll={handleScroll}
-        className="h-full overflow-y-auto overscroll-contain px-4 md:px-5 py-3 md:py-4 space-y-1.5 md:space-y-4"
+        className="h-full overflow-y-auto overscroll-contain px-4 md:px-5 py-3 md:py-4 space-y-2.5 md:space-y-3"
         style={{ WebkitOverflowScrolling: "touch" }}
       >
       {activeCount === 0 ? (
-        <div className="h-full flex items-center justify-center text-sm text-muted-foreground gap-2">
-          <TerminalSquare className="size-4 text-primary" />
-          {state === "idle" ? "No events yet. This thread is idle." : "Waiting for events\u2026"}
+        <div className="h-full flex items-center justify-center">
+          <div className="flex flex-col items-center gap-2 text-center">
+            {state === "idle" || state === "stopped" ? (
+              <MessagesSquare className="size-8 text-muted-foreground/70" />
+            ) : (
+              <LoaderCircle className="size-8 text-muted-foreground/70 animate-spin" />
+            )}
+            <p className="text-sm text-foreground">
+              {state === "idle" || state === "stopped" ? "No activity yet" : "Waiting for events"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {state === "idle" || state === "stopped"
+                ? "Send a message below to start the agent."
+                : "The agent is processing your request."}
+            </p>
+          </div>
         </div>
       ) : (
-        steps.map((step, index) => renderStep(step, `live-${index}`, participantsById))
+        steps.map((step, index) => renderStep(step, `live-${index}`, participantsById, turnDurationsById))
       )}
       <div ref={sentinelRef} className="h-px" />
       </div>
@@ -255,9 +328,10 @@ export function ActivityFeed({
           type="button"
           onClick={jumpToLatest}
           aria-label={`Jump to latest, ${pendingSteps} new step${pendingSteps === 1 ? "" : "s"}`}
-          className="absolute bottom-4 right-4 rounded-full bg-primary text-primary-foreground shadow-lg px-3 py-2 text-xs font-medium min-h-[36px] flex items-center gap-1.5 cursor-pointer animate-in fade-in duration-200"
+          className="absolute right-4 rounded-full bg-primary text-primary-foreground shadow-lg px-3 py-2 text-xs font-medium min-h-[44px] flex items-center gap-1.5 cursor-pointer animate-in fade-in slide-in-from-bottom-2 duration-200"
+          style={{ bottom: "max(1rem, calc(env(safe-area-inset-bottom) + 0.5rem))" }}
         >
-          <ArrowDown className="size-3.5" />
+          <ArrowDownToLine className="size-3.5" />
           {pendingSteps} new
         </button>
       )}

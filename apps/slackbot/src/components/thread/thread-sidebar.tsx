@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   forwardRef,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -16,6 +16,7 @@ import {
 import { ChevronLeft, ChevronRight, LoaderCircle, RefreshCw } from "lucide-react";
 import { ParticipantAvatars } from "@/components/thread/participant-avatars";
 import { Progress } from "@/components/ui/progress";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HarnessBadge } from "@/components/ui/harness-badge";
 import { StateDot } from "@/components/ui/state-dot";
 import { useElapsed } from "@/hooks/use-elapsed";
@@ -83,12 +84,12 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
   ref,
 ) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<ThreadStatusFilter>("all");
   const [focusedThreadKey, setFocusedThreadKey] = useState<string | null>(null);
   const filterId = useId();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -96,6 +97,13 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
   const cardRefs = useRef<Record<string, HTMLAnchorElement | null>>({});
   const latestFetchIdRef = useRef(0);
   const detailPrefetchAtRef = useRef<Record<string, number>>({});
+  const query = searchParams.get("q") ?? "";
+  const statusParam = searchParams.get("status");
+  const statusFilter: ThreadStatusFilter =
+    statusParam === "active" || statusParam === "idle" || statusParam === "error"
+      ? statusParam
+      : "all";
+  const sidebarQueryString = searchParams.toString();
 
   const fetchThreads = useCallback(
     async (showRefreshIndicator = true) => {
@@ -190,7 +198,8 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
 
   const prefetchThread = useCallback(
     (threadKey: string) => {
-      const href = `/threads/${encodeURIComponent(threadKey)}`;
+      const baseHref = `/threads/${encodeURIComponent(threadKey)}`;
+      const href = sidebarQueryString ? `${baseHref}?${sidebarQueryString}` : baseHref;
       router.prefetch(href);
 
       const now = Date.now();
@@ -201,16 +210,36 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
         cache: "force-cache",
       }).catch(() => {});
     },
-    [router],
+    [router, sidebarQueryString],
+  );
+
+  useEffect(() => {
+    if (!active || sortedThreads.length === 0) return;
+    sortedThreads.slice(0, 5).forEach((thread) => prefetchThread(thread.slack_thread_key));
+  }, [active, prefetchThread, sortedThreads]);
+
+  const setSidebarParam = useCallback(
+    (key: "q" | "status", value: string) => {
+      const nextParams = new URLSearchParams(searchParams.toString());
+      if (!value || (key === "status" && value === "all")) {
+        nextParams.delete(key);
+      } else {
+        nextParams.set(key, value);
+      }
+      const next = nextParams.toString();
+      router.replace(next ? `${pathname}?${next}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
   );
 
   const openThread = useCallback(
     (threadKey: string) => {
-      const href = `/threads/${encodeURIComponent(threadKey)}`;
+      const baseHref = `/threads/${encodeURIComponent(threadKey)}`;
+      const href = sidebarQueryString ? `${baseHref}?${sidebarQueryString}` : baseHref;
       router.push(href);
       onNavigate?.();
     },
-    [onNavigate, router],
+    [onNavigate, router, sidebarQueryString],
   );
 
   const focusThreadAt = useCallback(
@@ -302,15 +331,20 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
     return (
       <div className="flex h-full w-full flex-col items-center justify-end p-2">
         {canToggle ? (
-          <button
-            ref={toggleRef}
-            type="button"
-            onClick={() => onCollapsedChange?.(false)}
-            aria-label="Expand sidebar"
-            className="inline-flex size-8 items-center justify-center rounded-sm border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          >
-            <ChevronRight className="size-4" />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                ref={toggleRef}
+                type="button"
+                onClick={() => onCollapsedChange?.(false)}
+                aria-label="Expand sidebar"
+                className="inline-flex size-8 items-center justify-center rounded-sm border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              >
+                <ChevronRight className="size-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Expand sidebar (Cmd+[)</TooltipContent>
+          </Tooltip>
         ) : null}
       </div>
     );
@@ -359,7 +393,7 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
             id={filterId}
             name={filterId}
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => setSidebarParam("q", event.target.value)}
             placeholder="Filter threads… (/)"
             autoComplete="off"
             className="h-8 w-full rounded-sm border border-input bg-card px-2.5 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
@@ -375,7 +409,7 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
             <button
               key={item.id}
               type="button"
-              onClick={() => setStatusFilter(item.id)}
+              onClick={() => setSidebarParam("status", item.id)}
               className={cn(
                 "flex-1 rounded-[2px] px-1.5 py-1 text-center text-muted-foreground transition-colors",
                 statusFilter === item.id && "bg-accent text-foreground",
@@ -387,11 +421,16 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-2.5 py-2" role="listbox" aria-label="Thread list">
+      <div className="thread-sidebar-list flex-1 min-h-0 overflow-y-auto px-2.5 py-2" role="listbox" aria-label="Thread list">
         {loading ? (
-          <div className="inline-flex w-full items-center justify-center gap-2 py-8 text-xs text-muted-foreground">
-            <LoaderCircle className="size-3.5 animate-spin text-primary" />
-            Loading threads...
+          <div className="space-y-2 py-1">
+            {[0, 1, 2].map((index) => (
+              <div key={index} className="rounded-sm border border-border bg-card px-2.5 py-2">
+                <div className="h-3.5 w-5/6 rounded bg-secondary animate-pulse" />
+                <div className="mt-1.5 h-3 w-2/3 rounded bg-secondary animate-pulse" />
+                <div className="mt-1.5 h-3 w-4/5 rounded bg-secondary animate-pulse" />
+              </div>
+            ))}
           </div>
         ) : error && sortedThreads.length === 0 ? (
           <div className="space-y-2 py-8 text-center">
@@ -412,7 +451,8 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
           <div className="space-y-2">
             {sortedThreads.map((thread) => {
               const name = thread.thread_name || threadName(thread.slack_thread_key);
-              const href = `/threads/${encodeURIComponent(thread.slack_thread_key)}`;
+              const baseHref = `/threads/${encodeURIComponent(thread.slack_thread_key)}`;
+              const href = sidebarQueryString ? `${baseHref}?${sidebarQueryString}` : baseHref;
               const rawTask =
                 thread.last_user_message || thread.first_message || thread.last_result || "";
               const taskPreview = rawTask.replace(/^\[[\w]+\]\s*/, "").replace(/\s+/g, " ").slice(0, 120);
@@ -448,7 +488,7 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
                     onNavigate?.();
                   }}
                   className={cn(
-                    "thread-sidebar-card block rounded-sm border border-border bg-card px-2.5 py-2 no-underline outline-none transition-colors hover:bg-accent/50 focus-visible:ring-1 focus-visible:ring-ring",
+                    "thread-sidebar-card group block rounded-sm border border-border bg-card px-2.5 py-2 no-underline outline-none select-none transition-[transform,background-color,border-color] duration-100 hover:bg-accent/50 active:scale-[0.98] focus-visible:ring-1 focus-visible:ring-ring",
                     isSelected && "border-l-2 border-l-primary bg-accent",
                     activeState && "border-l-2 border-l-primary/70",
                   )}
@@ -483,9 +523,14 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
                     <div className="mt-1 line-clamp-1 text-[11px] text-muted-foreground">{statusSubtitle}</div>
                   ) : null}
                   {taskPreview ? (
-                    <div className="mt-1 line-clamp-1 text-[11px] leading-relaxed text-muted-foreground/90">
-                      {taskPreview}
-                    </div>
+                    <>
+                      <div className="mt-1 line-clamp-1 text-[11px] leading-relaxed text-muted-foreground/90">
+                        {taskPreview}
+                      </div>
+                      <div className="hidden text-[11px] leading-relaxed text-muted-foreground/80 md:group-hover:line-clamp-2 md:group-hover:block">
+                        {taskPreview}
+                      </div>
+                    </>
                   ) : null}
                   {activePhase ? <Progress value={progress} className="mt-2 h-0.5 bg-muted" /> : null}
                 </Link>

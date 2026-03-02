@@ -761,6 +761,44 @@ def _ui_stream_chunks_for_event(
                     "data": base_data,
                 }
             )
+    elif event_type == "subagent":
+        subagent_id = str(event.get("subagent_id") or "").strip()
+        phase = str(event.get("phase") or "").strip()
+        status = str(event.get("status") or "").strip()
+        if not status:
+            return chunks
+        input_tokens = int(event.get("input_tokens") or 0)
+        output_tokens = int(event.get("output_tokens") or 0)
+        model_name = str(event.get("model") or "").strip() or None
+        stable_id = subagent_id or f"turn-{turn_id}-subagent-{event_index}"
+        chunks.append(
+            {
+                "type": "data-subagent",
+                "id": f"turn-{turn_id}-subagent-{stable_id}-{status}",
+                "data": {
+                    "subagent_id": subagent_id or None,
+                    "phase": phase or None,
+                    "status": status,
+                    "name": event.get("name"),
+                    "summary": event.get("summary"),
+                    "error": event.get("error"),
+                    "branch_index": event.get("branch_index"),
+                    "total_branches": event.get("total_branches"),
+                    "completed": event.get("completed"),
+                    "acceptable": event.get("acceptable"),
+                    "failed": event.get("failed"),
+                    "turns": event.get("turns"),
+                    "tool_calls": event.get("tool_calls"),
+                    "duration_s": event.get("duration_s"),
+                    "max_parallel": event.get("max_parallel"),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": int(event.get("total_tokens") or (input_tokens + output_tokens)),
+                    "cost_usd": _estimate_cost_usd(model_name, input_tokens, output_tokens),
+                    "model": model_name,
+                },
+            }
+        )
     elif event_type == "error":
         chunks.append(
             {"type": "error", "errorText": str(event.get("error") or event.get("message") or "")}

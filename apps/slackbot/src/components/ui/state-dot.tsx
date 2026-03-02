@@ -5,6 +5,9 @@ export function StateDot({ state, className }: { state: string; className?: stri
   if (state === "running" || state === "working") {
     return <LoaderCircle aria-hidden="true" className={cn("size-3 text-primary animate-spin", className)} />;
   }
+  if (state === "stopping") {
+    return <CircleStop aria-hidden="true" className={cn("size-3 text-amber-400 animate-pulse", className)} />;
+  }
   if (state === "waiting") {
     return <CirclePause aria-hidden="true" className={cn("size-3 text-violet-400 animate-pulse", className)} />;
   }

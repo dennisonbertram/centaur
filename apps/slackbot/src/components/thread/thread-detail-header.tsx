@@ -1,7 +1,22 @@
 "use client";
 
+import { useEffect, useMemo, useState, type ComponentType } from "react";
 import Link from "next/link";
-import { ArrowLeft, CircleStop, Info, Menu, RefreshCw, Timer } from "lucide-react";
+import {
+  ArrowLeft,
+  Bot,
+  Brain,
+  CircleStop,
+  FilePenLine,
+  FileText,
+  Globe,
+  Info,
+  Menu,
+  RefreshCw,
+  SearchCode,
+  SquareTerminal,
+  Timer,
+} from "lucide-react";
 import type { ThreadDetail } from "@/lib/types";
 import { HarnessBadge } from "@/components/ui/harness-badge";
 import { StateDot } from "@/components/ui/state-dot";
@@ -41,6 +56,26 @@ type ThreadDetailHeaderProps = {
   onOpenDrawer: () => void;
 };
 
+function normalizeStatusLabel(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function categorizeStatus(status: string | null): {
+  icon: ComponentType<{ className?: string }>;
+  text: string;
+} {
+  const raw = normalizeStatusLabel(status ?? "");
+  const lower = raw.toLowerCase();
+  if (!raw) return { icon: Bot, text: "Working" };
+  if (/search|grep|find/.test(lower)) return { icon: SearchCode, text: raw };
+  if (/read|reading/.test(lower)) return { icon: FileText, text: raw };
+  if (/edit|write|creat/.test(lower)) return { icon: FilePenLine, text: raw };
+  if (/run|shell|command/.test(lower)) return { icon: SquareTerminal, text: raw };
+  if (/fetch|web/.test(lower)) return { icon: Globe, text: raw };
+  if (/think|reason/.test(lower)) return { icon: Brain, text: raw };
+  return { icon: Bot, text: raw };
+}
+
 export function ThreadDetailHeader({
   thread,
   humanName,
@@ -62,11 +97,27 @@ export function ThreadDetailHeader({
   onOpenInfo,
   onOpenDrawer,
 }: ThreadDetailHeaderProps) {
-  const showReconnect = isReconnecting && thread.state !== "error";
+  const [showReconnectBar, setShowReconnectBar] = useState(false);
   const showError = !!error && !(thread.state === "error" && error.startsWith("Stream disconnected."));
+  const statusSummary = useMemo(() => {
+    if (thread.state === "error") return { icon: Bot, text: error || "Agent encountered an error" };
+    if (isWaiting) return { icon: Bot, text: "Waiting for your reply" };
+    if (!isRunning) return { icon: Bot, text: "Idle" };
+    return categorizeStatus(stableStatus);
+  }, [error, isRunning, isWaiting, stableStatus, thread.state]);
+
+  useEffect(() => {
+    if (!isReconnecting || thread.state === "error") {
+      setShowReconnectBar(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setShowReconnectBar(true), 2000);
+    return () => window.clearTimeout(timeout);
+  }, [isReconnecting, thread.state]);
 
   return (
-    <div className="shrink-0 border-b border-border bg-background/95 backdrop-blur-xl">
+    <div className="relative shrink-0 border-b border-border bg-background/95 backdrop-blur-xl">
+      {showReconnectBar ? <div className="reconnect-bar" aria-hidden="true" /> : null}
       <div className="h-[48px] px-3 flex items-center gap-2">
         <button
           type="button"
@@ -115,8 +166,8 @@ export function ThreadDetailHeader({
           <Timer className="size-3.5" />
           {liveElapsed}
         </span>
-        <span className="text-[10px] text-muted-foreground font-mono hidden sm:inline" title="Press Esc to go back">
-          esc
+        <span className="text-[10px] text-muted-foreground font-mono hidden md:inline" title="Open command palette">
+          Cmd+K
         </span>
 
         <button
@@ -150,48 +201,51 @@ export function ThreadDetailHeader({
         </Popover>
 
         {canInterrupt && (
-          <button
-            type="button"
-            onClick={onInterrupt}
-            disabled={isInterrupting}
-            className="hidden md:inline-flex items-center gap-1 text-[11px] text-destructive hover:opacity-80 disabled:opacity-60 transition-colors cursor-pointer bg-transparent border-none p-0 rounded-sm"
-          >
-            <CircleStop className={isInterrupting ? "size-3.5 animate-pulse" : "size-3.5"} />
-            {isInterrupting ? "Stopping..." : "Stop"}
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={onInterrupt}
+                disabled={isInterrupting}
+                className="hidden md:inline-flex items-center gap-1 text-[11px] text-destructive hover:opacity-80 disabled:opacity-60 transition-colors cursor-pointer bg-transparent border-none p-0 rounded-sm"
+              >
+                <CircleStop className={isInterrupting ? "size-3.5 animate-pulse" : "size-3.5"} />
+                {isInterrupting ? "Stopping..." : "Stop"}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Stop S</TooltipContent>
+          </Tooltip>
         )}
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="hidden md:inline-flex text-muted-foreground text-[11px] hover:text-foreground transition-colors cursor-pointer bg-transparent border-none p-0 rounded-sm items-center gap-1"
-        >
-          <RefreshCw className="size-3.5" />
-          Refresh
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="hidden md:inline-flex text-muted-foreground text-[11px] hover:text-foreground transition-colors cursor-pointer bg-transparent border-none p-0 rounded-sm items-center gap-1"
+            >
+              <RefreshCw className="size-3.5" />
+              Refresh
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Refresh R</TooltipContent>
+        </Tooltip>
       </div>
 
-      {stableStatus && isRunning && (
-        <div className="h-[24px] px-3 text-[11px] text-muted-foreground truncate border-t border-border/50 flex items-center animate-in fade-in duration-300">
-          {stableStatus}
-        </div>
-      )}
-      {isWaiting && (
-        <div className="h-[24px] px-3 text-[11px] text-amber-400 truncate border-t border-border/50 flex items-center">
-          Waiting for your reply
-        </div>
-      )}
-      {thread.state === "error" && (
-        <div className="h-[24px] px-3 text-[11px] text-destructive truncate border-t border-border/50 flex items-center">
-          {error || "Agent encountered an error"}
-        </div>
-      )}
+      <div className="h-[24px] px-3 text-[11px] border-t border-border/50 flex items-center gap-2 animate-in fade-in duration-200">
+        <statusSummary.icon className="size-3.5 text-muted-foreground" />
+        <span className={thread.state === "error" ? "text-destructive truncate" : "text-muted-foreground truncate"}>
+          {statusSummary.text}
+        </span>
+        {isRunning && tokenUsage?.model ? (
+          <span className="ml-auto hidden sm:inline text-[10px] font-mono text-muted-foreground">{tokenUsage.model}</span>
+        ) : null}
+      </div>
 
-      {(showError || !!interruptError || showReconnect) && (
+      {(showError || !!interruptError) && (
         <div className="px-3 py-1.5 text-[11px] text-amber-300 inline-flex items-center gap-1.5 border-t border-border/50">
-          <RefreshCw className={isReconnecting ? "size-3.5 animate-spin" : "size-3.5"} />
+          <RefreshCw className="size-3.5" />
           {interruptError ??
-            (thread.state === "error" && error?.startsWith("Stream disconnected.") ? null : error) ??
-            (isReconnecting ? "Reconnecting stream..." : "")}
+            (thread.state === "error" && error?.startsWith("Stream disconnected.") ? null : error)}
         </div>
       )}
 

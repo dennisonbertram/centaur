@@ -9,6 +9,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "AI2",
   other: {
+    "apple-mobile-web-app-capable": "yes",
     "apple-mobile-web-app-status-bar-style": "black-translucent",
   },
 };
@@ -28,7 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`dark ${GeistSans.variable} ${GeistMono.variable}`}>
       <body className="m-0 bg-background text-foreground antialiased font-sans fixed inset-0 overflow-hidden">
-        <TooltipProvider>
+        <TooltipProvider delayDuration={300} skipDelayDuration={100}>
           <a
             href="#main-content"
             className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-card focus:text-foreground focus:px-3 focus:py-2 focus:rounded-sm focus:outline-none focus:ring-2 focus:ring-ring"

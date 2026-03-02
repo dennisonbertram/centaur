@@ -1,5 +1,5 @@
 export type Harness = "amp" | "claude-code" | "codex" | "pi-mono" | "engineer";
-export type ThreadState = "running" | "idle" | "stopped" | "working" | "waiting" | "error";
+export type ThreadState = "running" | "idle" | "stopped" | "stopping" | "working" | "waiting" | "error";
 
 export type Turn = {
   turn_id: number;

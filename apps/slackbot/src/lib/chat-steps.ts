@@ -16,6 +16,15 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+function asNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
 function outputToText(output: unknown): string | undefined {
   if (output === undefined || output === null) return undefined;
   if (typeof output === "string") return output;
@@ -107,6 +116,41 @@ export function stepsFromUiMessages(messages: UIMessage[]): Step[] {
         continue;
       }
 
+      if (partType === "data-subagent") {
+        const data = asRecord(part.data);
+        const status = asString(data.status);
+        if (!status) continue;
+        flushGroup();
+        const subagentId = asString(data.subagent_id);
+        const phase = asString(data.phase) || undefined;
+        const stepId = `subagent:${subagentId || partId}:${status}`;
+        steps.push({
+          id: stepId,
+          type: "subagent",
+          subagentId: subagentId || undefined,
+          phase,
+          status,
+          name: asString(data.name) || undefined,
+          summary: asString(data.summary) || undefined,
+          error: asString(data.error) || undefined,
+          branchIndex: asNumber(data.branch_index),
+          totalBranches: asNumber(data.total_branches),
+          completed: asNumber(data.completed),
+          acceptable: asNumber(data.acceptable),
+          failed: asNumber(data.failed),
+          turns: asNumber(data.turns),
+          toolCalls: asNumber(data.tool_calls),
+          durationS: asNumber(data.duration_s),
+          maxParallel: asNumber(data.max_parallel),
+          inputTokens: asNumber(data.input_tokens),
+          outputTokens: asNumber(data.output_tokens),
+          totalTokens: asNumber(data.total_tokens),
+          costUsd: asNumber(data.cost_usd) ?? null,
+          model: asString(data.model) || undefined,
+        });
+        continue;
+      }
+
       if (partType === "data-shell-command") {
         flushGroup();
         const data = asRecord(part.data);
@@ -132,6 +176,7 @@ export function stepsFromUiMessages(messages: UIMessage[]): Step[] {
           text,
           source: asString(data.source) || undefined,
           userId: asString(data.user_id) || undefined,
+          turnId: asNumber(data.turn_id),
         });
         continue;
       }

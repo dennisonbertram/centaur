@@ -1,6 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 import { timeAgo } from "@/lib/format";
 
+const tickListeners = new Set<() => void>();
+let tickInterval: ReturnType<typeof setInterval> | null = null;
+
+function startSharedTicker(): void {
+  if (tickInterval || tickListeners.size === 0) return;
+  tickInterval = setInterval(() => {
+    tickListeners.forEach((listener) => listener());
+  }, 1000);
+}
+
+function stopSharedTicker(): void {
+  if (!tickInterval || tickListeners.size > 0) return;
+  clearInterval(tickInterval);
+  tickInterval = null;
+}
+
+function subscribeSharedTick(listener: () => void): () => void {
+  tickListeners.add(listener);
+  startSharedTicker();
+  return () => {
+    tickListeners.delete(listener);
+    stopSharedTicker();
+  };
+}
+
 function formatElapsed(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
@@ -13,8 +38,7 @@ export function useElapsed(startedAt: number | null | undefined, isRunning: bool
 
   useEffect(() => {
     if (!isRunning || !startedAt) return;
-    const interval = setInterval(() => setTick((value) => value + 1), 1000);
-    return () => clearInterval(interval);
+    return subscribeSharedTick(() => setTick((value) => value + 1));
   }, [isRunning, startedAt]);
 
   return useMemo(() => {

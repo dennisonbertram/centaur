@@ -30,6 +30,30 @@ export type ContextMessageItem = {
 
 export type Step =
   | { id: string; type: "phase"; phase: string }
+  | {
+      id: string;
+      type: "subagent";
+      subagentId?: string;
+      phase?: string;
+      status: string;
+      name?: string;
+      summary?: string;
+      error?: string;
+      branchIndex?: number;
+      totalBranches?: number;
+      completed?: number;
+      acceptable?: number;
+      failed?: number;
+      turns?: number;
+      toolCalls?: number;
+      durationS?: number;
+      maxParallel?: number;
+      inputTokens?: number;
+      outputTokens?: number;
+      totalTokens?: number;
+      costUsd?: number | null;
+      model?: string;
+    }
   | { id: string; type: "tool-group"; icon: LucideIcon; summary: string; category: string; calls: ToolCall[] }
   | { id: string; type: "diff"; file: string; lang: string; oldStr: string; newStr: string; result?: string }
   | { id: string; type: "terminal"; command: string; output?: string; exitCode?: number; description: string }
@@ -37,7 +61,7 @@ export type Step =
   | { id: string; type: "error"; message: string }
   | { id: string; type: "result"; text: string; streaming?: boolean }
   | { id: string; type: "file-changes"; changes: Array<{ path: string; kind: "add" | "delete" | "update" }> }
-  | { id: string; type: "user-message"; text: string; source?: string; userId?: string }
+  | { id: string; type: "user-message"; text: string; source?: string; userId?: string; turnId?: number }
   | { id: string; type: "context-group"; title: string; items: ContextMessageItem[] };
 
 function asString(value: unknown): string {

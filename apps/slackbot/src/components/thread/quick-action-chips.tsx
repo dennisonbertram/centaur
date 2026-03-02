@@ -15,9 +15,6 @@ type QuickActionChipsProps = {
 };
 
 const CHIP_SETS: Record<string, ChipAction[]> = {
-  running: [
-    { label: "Stop agent", value: "stop", variant: "destructive" },
-  ],
   waiting: [
     { label: "Yes, continue", value: "yes" },
     { label: "No", value: "no" },

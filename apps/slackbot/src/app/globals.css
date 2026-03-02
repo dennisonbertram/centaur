@@ -54,6 +54,14 @@
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
+html {
+  touch-action: manipulation;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
 [data-slot="badge"] {
   font-family: var(--font-mono);
   letter-spacing: 0.05em;
@@ -68,12 +76,12 @@ textarea {
 .step-item {
   opacity: 1;
   transform: translateY(0);
-  transition: opacity 300ms ease, transform 300ms ease;
+  transition: opacity 200ms ease-out, transform 200ms ease-out;
   content-visibility: auto;
-  contain-intrinsic-size: auto 40px;
+  contain-intrinsic-size: auto 80px;
   @starting-style {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(4px);
   }
 }
 
@@ -81,6 +89,11 @@ textarea {
   .step-item {
     transition: none;
     transform: none;
+  }
+
+  .streaming-cursor::after,
+  .reconnect-bar::after {
+    animation: none;
   }
 }
 
@@ -93,6 +106,87 @@ textarea {
     background: var(--background);
     color: var(--foreground);
   }
+}
+
+.thread-shell {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.thread-shell-sidebar {
+  width: 280px;
+  min-width: 224px;
+  max-width: 384px;
+}
+
+[data-thread-feed-scroll],
+.thread-sidebar-list,
+.thread-shell [data-thread-list-scroll="true"] {
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.streaming-cursor::after {
+  content: "▎";
+  color: var(--primary);
+  animation: cursor-blink 1s step-end infinite;
+}
+
+@keyframes cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.reconnect-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  overflow: hidden;
+}
+
+.reconnect-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 100%;
+  background: var(--primary);
+  animation: reconnect-indeterminate 1.5s ease-in-out infinite;
+}
+
+@keyframes reconnect-indeterminate {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.step-item .prose-console,
+.step-item pre,
+.step-item .whitespace-pre-wrap {
+  user-select: text;
+}
+
+.step-item summary,
+.step-item button,
+.step-item [data-slot="badge"],
+.copy-btn {
+  user-select: none;
 }
 
 @media (pointer: coarse) {

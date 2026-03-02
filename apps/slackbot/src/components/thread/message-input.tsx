@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, Loader2, Square } from "lucide-react";
 import { useHasHover } from "@/hooks/use-media-query";
+import { useKeyboardHeight } from "@/hooks/use-visual-viewport";
 import { cn } from "@/lib/utils";
 
 type InputMode = "idle" | "running" | "waiting" | "error";
@@ -29,9 +30,12 @@ const PLACEHOLDERS: Record<InputMode, string> = {
 export function MessageInput({ mode, onSend, onStop, className }: MessageInputProps) {
   const [value, setValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
   const hasHover = useHasHover();
+  const keyboardHeight = useKeyboardHeight();
+  const effectiveKeyboardHeight = isFocused ? keyboardHeight : 0;
 
   const resize = useCallback(() => {
     const el = textareaRef.current;
@@ -97,7 +101,12 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
   }, []);
 
   return (
-    <div className={cn("flex-shrink-0 border-t border-border bg-background px-3 py-2", className)}>
+    <div
+      className={cn("flex-shrink-0 border-t border-border bg-background px-3 py-2 transition-[padding] duration-200", className)}
+      style={{
+        paddingBottom: `calc(max(8px, env(safe-area-inset-bottom)) + ${effectiveKeyboardHeight}px)`,
+      }}
+    >
       <form
         onSubmit={(e) => { e.preventDefault(); void handleSend(); }}
         className="flex items-end gap-2"
@@ -110,6 +119,8 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
+          onFocus={() => setIsFocused(true)}
+          onBlur={() => setIsFocused(false)}
           placeholder={PLACEHOLDERS[mode]}
           disabled={submitting}
           rows={1}

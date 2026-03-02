@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, ChevronRight, CircleCheck, CircleX, LoaderCircle, X as XIcon } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { describeToolCall, type ToolCall } from "@/lib/describe";
@@ -20,7 +20,13 @@ function PillStatusIcon({ loading, error }: { loading: number; error: number }) 
   return <Check className="size-4 text-green-500 flex-shrink-0" />;
 }
 
-function ToolCallItem({ call }: { call: ToolCall }) {
+function ToolCallItem({ call, isMobile }: { call: ToolCall; isMobile: boolean }) {
+  const [expandedOutput, setExpandedOutput] = useState(false);
+  const output = call.output ?? "";
+  const outputLines = output.split("\n");
+  const showMobileToggle = isMobile && outputLines.length > 6;
+  const previewOutput = showMobileToggle ? outputLines.slice(0, 6).join("\n") : output;
+
   return (
     <Collapsible className="group/call">
       <CollapsibleTrigger className="w-full flex items-center gap-2 py-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer">
@@ -41,10 +47,34 @@ function ToolCallItem({ call }: { call: ToolCall }) {
         )}
       </CollapsibleTrigger>
       <CollapsibleContent>
-        {call.output ? (
-          <pre className="ml-5 rounded-sm bg-background p-2 text-[11px] text-muted-foreground overflow-auto max-h-[200px] md:max-h-[260px] whitespace-pre-wrap">
-            {call.output}
-          </pre>
+        {output ? (
+          <div className="ml-5 space-y-1.5">
+            {isMobile ? (
+              <div className="rounded-sm bg-background p-2">
+                <div className="relative">
+                  <div className="whitespace-pre-wrap text-[11px] text-muted-foreground">
+                    {expandedOutput ? output : previewOutput}
+                  </div>
+                  {showMobileToggle && !expandedOutput ? (
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background to-transparent" />
+                  ) : null}
+                </div>
+                {showMobileToggle ? (
+                  <button
+                    type="button"
+                    onClick={() => setExpandedOutput((value) => !value)}
+                    className="mt-1 text-[11px] text-primary"
+                  >
+                    {expandedOutput ? "Collapse" : "Show full output"}
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <pre className="rounded-sm bg-background p-2 text-[11px] text-muted-foreground overflow-auto overscroll-contain max-h-[260px] whitespace-pre-wrap">
+                {output}
+              </pre>
+            )}
+          </div>
         ) : null}
       </CollapsibleContent>
     </Collapsible>
@@ -65,10 +95,37 @@ export function StepGroup({
   const errorCount = calls.filter((call) => call.state === "error").length;
   const doneCount = calls.filter((call) => call.state === "done").length;
   const manuallyToggled = useRef(false);
-  const [forceOpen, setForceOpen] = useState(false);
+  const previousLoadingCount = useRef(loadingCount);
+  const hasBeenActive = useRef(false);
+  const [forceOpen, setForceOpen] = useState(!isMobile);
 
-  const defaultOpen = isMobile ? false : true;
-  const isOpen = manuallyToggled.current ? forceOpen : defaultOpen;
+  useEffect(() => {
+    if (loadingCount > 0) {
+      hasBeenActive.current = true;
+    }
+  }, [loadingCount]);
+
+  useEffect(() => {
+    const wasLoading = previousLoadingCount.current > 0;
+    previousLoadingCount.current = loadingCount;
+    if (isMobile || manuallyToggled.current) return;
+    if (loadingCount > 0 || errorCount > 0) {
+      setForceOpen(true);
+      return;
+    }
+    // Auto-collapse only after this group was actively loading and then completed.
+    if (!wasLoading || !hasBeenActive.current) return;
+    const timeout = window.setTimeout(() => setForceOpen(false), 2000);
+    return () => window.clearTimeout(timeout);
+  }, [errorCount, isMobile, loadingCount]);
+
+  useEffect(() => {
+    if (!isMobile && loadingCount > 0) {
+      manuallyToggled.current = false;
+    }
+  }, [isMobile, loadingCount]);
+
+  const isOpen = forceOpen;
 
   function handleToggle(nextOpen: boolean) {
     manuallyToggled.current = true;
@@ -80,16 +137,16 @@ export function StepGroup({
       open={isOpen}
       onOpenChange={handleToggle}
       className={cn(
-        "group step-item rounded-lg md:rounded-sm",
+        "group step-item rounded-lg md:rounded-none",
         isMobile
           ? "bg-secondary/30 border border-border/30"
-          : "border border-border bg-card",
+          : "border-0 border-l-2 border-l-border/70 bg-transparent pl-1",
       )}
     >
       <CollapsibleTrigger
         className={cn(
           "w-full flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors",
-          isMobile ? "min-h-[44px] active:bg-secondary/60" : "hover:bg-accent",
+          isMobile ? "min-h-[44px] active:bg-secondary/60" : "hover:bg-accent/50",
         )}
       >
         {isMobile ? (
@@ -125,9 +182,9 @@ export function StepGroup({
           )} />
         )}
       </CollapsibleTrigger>
-      <CollapsibleContent className="px-3 pb-2 pl-4 md:pl-8 space-y-1">
+      <CollapsibleContent className="px-3 pb-2 pl-4 md:pl-6 space-y-1">
         {calls.map((call) => (
-          <ToolCallItem key={call.id} call={call} />
+          <ToolCallItem key={call.id} call={call} isMobile={isMobile} />
         ))}
       </CollapsibleContent>
     </Collapsible>

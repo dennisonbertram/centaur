@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Check, Copy } from "lucide-react";
 import { diffLines } from "diff";
 import { Badge } from "@/components/ui/badge";
 
@@ -28,38 +29,84 @@ export function DiffCard({
   newStr: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const chunks = useMemo(() => diffLines(oldStr, newStr), [oldStr, newStr]);
-  const canToggle = chunks.length > 10;
-  const hiddenCount = Math.max(0, chunks.length - 10);
-  const visibleChunks = expanded ? chunks : chunks.slice(0, 10);
+  const rows = useMemo(() => {
+    const collected: Array<{
+      kind: "add" | "remove" | "context";
+      text: string;
+      oldLine: number | null;
+      newLine: number | null;
+    }> = [];
+    let oldLine = 1;
+    let newLine = 1;
+    for (const chunk of chunks) {
+      const kind = chunk.added ? "add" : chunk.removed ? "remove" : "context";
+      const lines = chunk.value
+        .split("\n")
+        .filter((line, index, arr) => index < arr.length - 1 || line.length > 0);
+      for (const line of lines) {
+        if (kind === "add") {
+          collected.push({ kind, text: line, oldLine: null, newLine });
+          newLine += 1;
+        } else if (kind === "remove") {
+          collected.push({ kind, text: line, oldLine, newLine: null });
+          oldLine += 1;
+        } else {
+          collected.push({ kind, text: line, oldLine, newLine });
+          oldLine += 1;
+          newLine += 1;
+        }
+      }
+    }
+    return collected;
+  }, [chunks]);
+  const canToggle = rows.length > 80;
+  const visibleRows = expanded ? rows : rows.slice(0, 80);
+  const hiddenCount = Math.max(0, rows.length - visibleRows.length);
+
+  async function copyDiff() {
+    try {
+      await navigator.clipboard.writeText(`--- old\n${oldStr}\n+++ new\n${newStr}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  }
 
   return (
-    <div className="step-item rounded-sm border border-border bg-card overflow-hidden">
+    <div className="group step-item rounded-sm border border-border bg-card overflow-hidden">
       <div className="px-3 py-2 border-b border-border flex items-center gap-2">
         <Badge className={LANGUAGE_CLASSES[lang] ?? "bg-secondary text-muted-foreground"}>{lang}</Badge>
         <span className="font-mono text-xs text-foreground truncate">{file}</span>
+        <button
+          type="button"
+          onClick={() => void copyDiff()}
+          className="ml-auto hidden md:inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+        >
+          {copied ? <Check className="size-3 text-green-500" /> : <Copy className="size-3" />}
+          {copied ? "Copied" : "Copy"}
+        </button>
       </div>
-      <pre className="p-3 text-[11px] font-mono overflow-auto max-h-[360px]">
-        {visibleChunks.map((chunk, i) => {
-          const tone = chunk.added
-            ? "bg-green-500/10 text-green-300"
-            : chunk.removed
-              ? "bg-red-500/10 text-red-300"
-              : "text-muted-foreground";
-          const prefix = chunk.added ? "+" : chunk.removed ? "-" : " ";
-          return (
-            <span key={i} className={`block ${tone}`}>
-              {chunk.value
-                .split("\n")
-                .filter((line, index, arr) => index < arr.length - 1 || line)
-                .map((line, lineIndex) => (
-                  <span key={lineIndex} className="block">
-                    {prefix} {line}
-                  </span>
-                ))}
+      <pre className="p-3 text-[11px] font-mono overflow-auto overscroll-contain max-h-[360px]">
+        {visibleRows.map((row, i) => (
+          <span
+            key={`${i}-${row.oldLine ?? "x"}-${row.newLine ?? "x"}`}
+            className={
+              row.kind === "add"
+                ? "grid grid-cols-[52px_1fr] bg-green-500/10 text-green-300"
+                : row.kind === "remove"
+                  ? "grid grid-cols-[52px_1fr] bg-red-500/10 text-red-300"
+                  : "grid grid-cols-[52px_1fr] text-muted-foreground"
+            }
+          >
+            <span className="select-none pr-2 text-right text-[10px] text-muted-foreground">
+              {row.newLine ?? row.oldLine ?? ""}
             </span>
-          );
-        })}
+            <span>{row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " "} {row.text}</span>
+          </span>
+        ))}
       </pre>
       {canToggle && (
         <button
@@ -68,7 +115,7 @@ export function DiffCard({
           aria-expanded={expanded}
           className="w-full border-t border-border px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground cursor-pointer"
         >
-          {expanded ? "Show less context" : `Show ${hiddenCount} hidden diff blocks`}
+          {expanded ? "Show less context" : `Show ${hiddenCount} more lines`}
         </button>
       )}
     </div>

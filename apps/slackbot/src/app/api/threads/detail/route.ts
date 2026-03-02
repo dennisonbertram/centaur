@@ -16,8 +16,15 @@ export async function GET(request: Request) {
     const res = await apiGet("/api/threads/detail", { key }, { signal: request.signal });
 
     if (!res.ok) {
+      const payload = await res.json().catch(() => null) as { error?: string; detail?: string } | null;
+      const message =
+        payload?.error ||
+        payload?.detail ||
+        (res.status === 404
+          ? `Thread not found: ${key}`
+          : `Failed to load thread (${res.status})`);
       return Response.json(
-        { error: `Thread not found: ${key}` },
+        { error: message },
         { status: res.status, headers: { "Cache-Control": "no-store" } }
       );
     }

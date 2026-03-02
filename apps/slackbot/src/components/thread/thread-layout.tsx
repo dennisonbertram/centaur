@@ -106,14 +106,22 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const desktopSidebarRef = useRef<ThreadSidebarHandle>(null);
   const mobileSidebarRef = useRef<ThreadSidebarHandle>(null);
+  const mobileSidebarReturnFocusRef = useRef<HTMLElement | null>(null);
   const panelRef = useRef<HTMLElement>(null);
 
   const closeMobileSidebar = useCallback(() => {
     setMobileSidebarOpen(false);
+    const returnTarget = mobileSidebarReturnFocusRef.current;
+    if (returnTarget) {
+      window.requestAnimationFrame(() => returnTarget.focus());
+      mobileSidebarReturnFocusRef.current = null;
+    }
   }, []);
 
   const openMobileSidebar = useCallback(() => {
     if (isDesktop) return;
+    mobileSidebarReturnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setMobileSidebarOpen(true);
   }, [isDesktop]);
 
@@ -122,14 +130,6 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
       setMobileSidebarOpen(false);
     }
   }, [isDesktop, mobileSidebarOpen]);
-
-  useEffect(() => {
-    if (!mobileSidebarOpen) return;
-    const raf = window.requestAnimationFrame(() => {
-      mobileSidebarRef.current?.focusSearch();
-    });
-    return () => window.cancelAnimationFrame(raf);
-  }, [mobileSidebarOpen]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -246,7 +246,7 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
           aria-modal="true"
           aria-label="Threads"
           className={cn(
-            "absolute inset-y-0 left-0 flex w-[320px] max-w-[88vw] flex-col border-r border-border bg-background shadow-2xl transition-transform duration-200",
+            "absolute inset-y-0 left-0 flex w-[320px] max-w-[88vw] flex-col overflow-y-auto overscroll-contain border-r border-border bg-background shadow-2xl transition-transform duration-200",
             mobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
           )}
         >

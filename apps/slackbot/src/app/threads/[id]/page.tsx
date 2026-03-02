@@ -1,26 +1,29 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { LoaderCircle } from "lucide-react";
 import { ActivityFeed } from "@/components/thread/activity-feed";
+import { CommandPalette } from "@/components/thread/command-palette";
 import { MessageInput } from "@/components/thread/message-input";
 import { QuickActionChips } from "@/components/thread/quick-action-chips";
 import { MobileTabBar } from "@/components/thread/mobile-tab-bar";
 import { ThreadInfoSheet } from "@/components/thread/thread-info-sheet";
-import { ThreadSidebarDrawer } from "@/components/thread/thread-sidebar-drawer";
 import { ThreadDetailHeader } from "@/components/thread/thread-detail-header";
+import { useThreadLayout } from "@/components/thread/thread-layout";
 import { threadName } from "@/lib/thread-name";
 import { useThreadStream } from "@/hooks/use-thread-stream";
 import { useElapsed } from "@/hooks/use-elapsed";
 import { useStableStatus } from "@/hooks/use-stable-status";
 import { BASE } from "@/lib/constants";
 import type { ThreadSummary } from "@/lib/types";
+import { toast } from "sonner";
 
 export default function ThreadDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const { openMobileSidebar, mobileSidebarOpen } = useThreadLayout();
   const threadKey = decodeURIComponent(params.id as string);
   const {
     thread,
@@ -37,15 +40,17 @@ export default function ThreadDetailPage() {
   const [isInterrupting, setIsInterrupting] = useState(false);
   const [interruptError, setInterruptError] = useState<string | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [sidebarThreads, setSidebarThreads] = useState<ThreadSummary[]>([]);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [compactMode, setCompactMode] = useState(false);
+  const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const closeInfoSheet = useCallback(() => setInfoOpen(false), []);
-  const closeDrawer = useCallback(() => setDrawerOpen(false), []);
   const isEngineer = thread?.harness === "engineer";
   const isWaiting = thread?.state === "waiting";
-  const isRunning = thread?.state === "running" || thread?.state === "working";
+  const isRunning =
+    thread?.state === "running" || thread?.state === "working" || thread?.state === "stopping";
   const isStreaming = chatStatus === "submitted" || chatStatus === "streaming";
-  const canInterrupt = !!thread && !isEngineer && isRunning;
+  const canInterrupt =
+    !!thread && !isEngineer && (thread.state === "running" || thread.state === "working");
   const activeTurnStartedAt =
     thread && thread.turns.length > 0 ? thread.turns[thread.turns.length - 1]?.started_at : null;
   const elapsedAnchor = isRunning ? activeTurnStartedAt : thread?.last_activity;
@@ -57,6 +62,10 @@ export default function ThreadDetailPage() {
       }${tokenUsage.estimated ? "~" : ""}`
     : "-- tok / --";
   const phases = liveSteps.flatMap((step) => (step.type === "phase" ? [step.phase] : []));
+  const turnDurationsById = useMemo(() => {
+    if (!thread) return {};
+    return Object.fromEntries(thread.turns.map((turn) => [turn.turn_id, turn.duration_s]));
+  }, [thread]);
   const latestUserMessage = thread?.turns[thread.turns.length - 1]?.user_message?.trim() ?? "";
   const retryMessage = latestUserMessage || "Please retry the previous request.";
 
@@ -91,6 +100,13 @@ export default function ThreadDetailPage() {
     }
   }, [canInterrupt, fetchThread, isInterrupting, thread, threadKey]);
 
+  useEffect(() => {
+    fetch(`${BASE}/api/threads`)
+      .then((res) => res.json())
+      .then((data) => setThreads(Array.isArray(data?.threads) ? data.threads : []))
+      .catch(() => {});
+  }, []);
+
   const handleSendMessage = useCallback(
     async (text: string) => {
       const route = isEngineer && isWaiting ? "reply" : "execute";
@@ -123,16 +139,8 @@ export default function ThreadDetailPage() {
   }, [interruptRun, handleSendMessage, retryMessage, sendThreadMessage]);
 
   useEffect(() => {
-    if (!drawerOpen) return;
-    fetch(`${BASE}/api/threads`)
-      .then((r) => r.json())
-      .then((data) => setSidebarThreads(data.threads ?? []))
-      .catch(() => {});
-  }, [drawerOpen]);
-
-  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (infoOpen || drawerOpen) {
+      if (infoOpen || mobileSidebarOpen) {
         return;
       }
       const targetIsInput =
@@ -151,6 +159,24 @@ export default function ThreadDetailPage() {
 
       if (targetIsInput) return;
 
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen(true);
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+        e.preventDefault();
+        setCompactMode((value) => !value);
+        return;
+      }
+
+      if (e.shiftKey && e.key === "?") {
+        e.preventDefault();
+        toast("Shortcuts: Cmd/Ctrl+K, R, S, /, Esc, Cmd+., Shift+?");
+        return;
+      }
+
       if (e.key.toLowerCase() === "r") {
         e.preventDefault();
         fetchThread();
@@ -164,7 +190,7 @@ export default function ThreadDetailPage() {
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [canInterrupt, drawerOpen, fetchThread, infoOpen, interruptRun, router]);
+  }, [canInterrupt, fetchThread, infoOpen, interruptRun, mobileSidebarOpen, router]);
 
   useEffect(() => {
     if (!thread) return;
@@ -243,7 +269,7 @@ export default function ThreadDetailPage() {
         onInterrupt={() => void interruptRun()}
         onRefresh={() => void fetchThread()}
         onOpenInfo={() => setInfoOpen(true)}
-        onOpenDrawer={() => setDrawerOpen(true)}
+        onOpenDrawer={openMobileSidebar}
       />
 
       {/* Activity feed - the only scrollable area */}
@@ -253,6 +279,7 @@ export default function ThreadDetailPage() {
           state={thread.state}
           isStreaming={isStreaming}
           participants={thread.participants}
+          turnDurationsById={turnDurationsById}
         />
       </div>
 
@@ -286,11 +313,32 @@ export default function ThreadDetailPage() {
           canStop={canInterrupt}
         />
       )}
-      <ThreadSidebarDrawer
-        open={drawerOpen}
-        onClose={closeDrawer}
-        threads={sidebarThreads}
-        activeKey={threadKey}
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        threads={threads}
+        currentThreadKey={threadKey}
+        compactMode={compactMode}
+        canInterrupt={canInterrupt}
+        isRefreshing={false}
+        onNavigate={(nextThreadKey) => router.push(`/threads/${encodeURIComponent(nextThreadKey)}`, { scroll: false })}
+        onRefresh={() => void fetchThread()}
+        onStop={() => void interruptRun()}
+        onCopyUrl={() => {
+          navigator.clipboard
+            ?.writeText(window.location.href)
+            .then(() => toast("Copied link"))
+            .catch(() => {});
+        }}
+        onToggleCompact={() => setCompactMode((value) => !value)}
+        onOpenSlack={thread.slack_thread_key.includes(":")
+          ? () => {
+              const [channel, ts] = thread.slack_thread_key.replace(/^slack:/, "").split(":");
+              window.open(`slack://app_redirect?channel=${channel}&thread_ts=${ts}`, "_blank");
+            }
+          : null}
+        onOpenShortcuts={() => toast("Shortcuts: Cmd/Ctrl+K, R, S, /, Esc, Cmd+., Shift+?")}
       />
     </div>
   );
