@@ -217,35 +217,23 @@ app.mount("/mcp", app=_MCPAuthMiddleware())
 
 
 # ---------------------------------------------------------------------------
-# Lazy secret fetches — resolved once via secret manager, cached for process
-# ---------------------------------------------------------------------------
-_API_SECRET_KEY: str | None = None
-
-
 def _get_api_secret_key() -> str:
-    global _API_SECRET_KEY
-    if _API_SECRET_KEY is None:
-        from shared.tool_sdk import _sm_read
+    from shared.tool_sdk import _sm_read
 
-        _API_SECRET_KEY = _sm_read("API_SECRET_KEY") or ""
-    return _API_SECRET_KEY
+    return _sm_read("API_SECRET_KEY") or ""
 
 
 # ---------------------------------------------------------------------------
 # Reverse proxy: /api/webhooks/* → slackbot on port 3001
 # ---------------------------------------------------------------------------
 _SLACKBOT_URL = os.environ.get("SLACKBOT_URL", "http://localhost:3001")
-_SLACK_SIGNING_SECRET: str | None = None
 _SLACK_TIMESTAMP_MAX_AGE = 5 * 60  # 5 minutes
 
 
 def _get_slack_signing_secret() -> str:
-    global _SLACK_SIGNING_SECRET
-    if _SLACK_SIGNING_SECRET is None:
-        from shared.tool_sdk import _sm_read
+    from shared.tool_sdk import _sm_read
 
-        _SLACK_SIGNING_SECRET = _sm_read("SLACK_SIGNING_SECRET") or ""
-    return _SLACK_SIGNING_SECRET
+    return _sm_read("SLACK_SIGNING_SECRET") or ""
 
 
 def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool:

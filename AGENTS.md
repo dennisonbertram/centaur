@@ -137,6 +137,10 @@ All deploys happen automatically via GitHub Actions on merge to `main`. **Never 
 
 **Admin endpoint:** `POST /admin/reload-tools` is available as a manual fallback if the file watcher misses something.
 
+## Secret Manager
+
+**NEVER manually restart or redeploy the `secrets` container.** It requires `OP_SERVICE_ACCOUNT_TOKEN` which is only injected by CI (GitHub Actions secret). Manual `docker compose up -d secrets` will start it without the token, breaking all secret resolution across the stack. Always let CI handle secrets container deploys.
+
 ## Debugging (SSH only for logs)
 
 SSH is only for reading logs and inspecting state — never for deploying:
