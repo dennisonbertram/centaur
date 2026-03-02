@@ -44,24 +44,36 @@ jobs:
       - name: Detect changes
         id: changes
         run: |
-          DIFF=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} 2>/dev/null || echo "")
+          BEFORE="${{ github.event.before }}"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            # workflow_dispatch or missing before — deploy everything
+            DIFF="force-all"
+          else
+            DIFF=$(git diff --name-only "$BEFORE" ${{ github.sha }} 2>/dev/null || echo "force-all")
+          fi
           echo "diff<<EOF" >> "$GITHUB_OUTPUT"
           echo "$DIFF" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
-          echo "tools=false" >> "$GITHUB_OUTPUT"
-          echo "api=false" >> "$GITHUB_OUTPUT"
-          echo "slackbot=false" >> "$GITHUB_OUTPUT"
-          echo "sandbox=false" >> "$GITHUB_OUTPUT"
-          echo "etl=false" >> "$GITHUB_OUTPUT"
-          echo "infra=false" >> "$GITHUB_OUTPUT"
+          if [ "$DIFF" = "force-all" ]; then
+            for key in tools api slackbot sandbox etl infra; do
+              echo "$key=true" >> "$GITHUB_OUTPUT"
+            done
+          else
+            echo "tools=false" >> "$GITHUB_OUTPUT"
+            echo "api=false" >> "$GITHUB_OUTPUT"
+            echo "slackbot=false" >> "$GITHUB_OUTPUT"
+            echo "sandbox=false" >> "$GITHUB_OUTPUT"
+            echo "etl=false" >> "$GITHUB_OUTPUT"
+            echo "infra=false" >> "$GITHUB_OUTPUT"
 
-          echo "$DIFF" | grep -q '^tools/' && echo "tools=true" >> "$GITHUB_OUTPUT" || true
-          echo "$DIFF" | grep -q '^src/' && echo "api=true" >> "$GITHUB_OUTPUT" || true
-          echo "$DIFF" | grep -q '^apps/slackbot/' && echo "slackbot=true" >> "$GITHUB_OUTPUT" || true
-          echo "$DIFF" | grep -q '^sandbox/' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || true
-          echo "$DIFF" | grep -qE '^(src/etl/|src/shared/)' && echo "etl=true" >> "$GITHUB_OUTPUT" || true
-          echo "$DIFF" | grep -qE '^(Dockerfile|pyproject.toml|uv.lock|docker-compose.yml|migrations/|services/|monitoring/)' && echo "infra=true" >> "$GITHUB_OUTPUT" || true
+            echo "$DIFF" | grep -q '^tools/' && echo "tools=true" >> "$GITHUB_OUTPUT" || true
+            echo "$DIFF" | grep -q '^src/' && echo "api=true" >> "$GITHUB_OUTPUT" || true
+            echo "$DIFF" | grep -q '^apps/slackbot/' && echo "slackbot=true" >> "$GITHUB_OUTPUT" || true
+            echo "$DIFF" | grep -q '^sandbox/' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || true
+            echo "$DIFF" | grep -qE '^(src/etl/|src/shared/)' && echo "etl=true" >> "$GITHUB_OUTPUT" || true
+            echo "$DIFF" | grep -qE '^(Dockerfile|pyproject.toml|uv.lock|docker-compose.yml|migrations/|services/|monitoring/)' && echo "infra=true" >> "$GITHUB_OUTPUT" || true
+          fi
 
       # Tool-only change → zero-downtime reload (no container restart)
       - name: Reload tools
