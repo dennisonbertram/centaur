@@ -206,8 +206,8 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <ThreadLayoutContext.Provider value={contextValue}>
-      <div className="thread-shell h-[calc(100dvh-41px)]">
-        <aside className="thread-shell-sidebar hidden shrink-0 border-r border-border bg-card/20 md:flex">
+      <div className="thread-shell flex h-[calc(100dvh-41px)]">
+        <aside className="thread-shell-sidebar hidden w-[320px] shrink-0 border-r border-border bg-card/20 md:flex">
           <ThreadSidebar
             ref={desktopSidebarRef}
             selectedThreadKey={selectedThreadKey}
