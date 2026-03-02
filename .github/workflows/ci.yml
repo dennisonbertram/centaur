@@ -61,9 +61,11 @@ jobs:
               "amp",
               {"type": "subagent", "status": "progress", "phase": "research", "total_branches": 4},
           )
-          assert isinstance(normalized, dict)
-          assert normalized.get("type") == "subagent"
-          assert normalized.get("status") == "progress"
+          assert isinstance(normalized, list) and normalized
+          first = normalized[0]
+          assert isinstance(first, dict)
+          assert first.get("type") == "subagent"
+          assert first.get("status") == "progress"
 
           print("harness normalization smoke passed")
           PY
