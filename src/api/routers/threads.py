@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from typing import Annotated, Any
 
 import asyncpg
@@ -30,6 +31,7 @@ _CONTEXT_HEADER = (
     "Additional Slack thread context since the last AI instruction "
     "(ambient discussion from humans):"
 )
+_SLACK_MENTION_RE = re.compile(r"<@[A-Z0-9]+>")
 
 
 def _raw_item_call_digest(item: dict[str, Any]) -> str:
@@ -250,6 +252,7 @@ def _user_message_preview(text: str, *, max_chars: int = 200) -> str:
     cleaned = _display_user_message(text)
     if not cleaned:
         cleaned = text.strip()
+    cleaned = _SLACK_MENTION_RE.sub("", cleaned)
     compact = " ".join(cleaned.split())
     return compact[:max_chars]
 
