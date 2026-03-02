@@ -14,6 +14,9 @@ jobs:
     env:
       DEPLOY_DIR: ${{ github.workspace }}
       OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      API_SECRET_KEY: ${{ secrets.API_SECRET_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -62,7 +65,10 @@ jobs:
       - name: Reload tools
         if: steps.changes.outputs.tools == 'true' && steps.changes.outputs.api != 'true' && steps.changes.outputs.infra != 'true'
         run: |
-          API_SECRET_KEY=$(grep -E '^API_SECRET_KEY=' .env | tail -n1 | cut -d= -f2-)
+          if [ -z "${API_SECRET_KEY:-}" ]; then
+            echo "Skipping tool reload: API_SECRET_KEY secret is not configured."
+            exit 0
+          fi
           curl -sf -X POST http://localhost:8000/admin/reload-tools \
             -H "Authorization: Bearer $API_SECRET_KEY"
 
@@ -161,8 +167,10 @@ jobs:
         if: always() && steps.changes.outputs.diff != ''
         continue-on-error: true
         run: |
-          OPENAI_API_KEY=$(grep -E '^OPENAI_API_KEY=' .env | tail -n1 | cut -d= -f2-)
-          SLACK_BOT_TOKEN=$(grep -E '^SLACK_BOT_TOKEN=' .env | tail -n1 | cut -d= -f2-)
+          if [ -z "${OPENAI_API_KEY:-}" ] || [ -z "${SLACK_BOT_TOKEN:-}" ]; then
+            echo "Skipping Slack notification: OPENAI_API_KEY/SLACK_BOT_TOKEN secrets are not configured."
+            exit 0
+          fi
 
           COMPONENTS=""
           [ "${{ steps.changes.outputs.api }}" = "true" ] && COMPONENTS="${COMPONENTS} api"
