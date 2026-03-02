@@ -11,6 +11,7 @@ import {
   postThreadContextMessage,
   replyEngineerFlow,
   spawn,
+  splitThreadKey,
   startEngineerFlow,
   watchProgress,
   type AgentMode,
@@ -50,6 +51,7 @@ type ThreadModeConfig = {
   budgetMode: BudgetMode | null;
 };
 
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const HARNESSES: readonly Harness[] = ["amp", "claude-code", "codex", "pi-mono"] as const;
 
 function isHarness(value: string | null | undefined): value is Harness {
@@ -58,6 +60,69 @@ function isHarness(value: string | null | undefined): value is Harness {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+type SlackReply = {
+  ts: string;
+  user?: string;
+  text?: string;
+  bot_id?: string;
+};
+
+async function fetchThreadHistory(
+  channel: string,
+  threadTs: string,
+  botUserId?: string,
+): Promise<string> {
+  if (!SLACK_BOT_TOKEN) return "";
+  try {
+    const params = new URLSearchParams({
+      channel,
+      ts: threadTs,
+      limit: "50",
+      inclusive: "true",
+    });
+    const res = await fetch(
+      `https://slack.com/api/conversations.replies?${params}`,
+      { headers: { Authorization: `Bearer ${SLACK_BOT_TOKEN}` } },
+    );
+    const data = (await res.json()) as {
+      ok: boolean;
+      messages?: SlackReply[];
+    };
+    if (!data.ok || !data.messages || data.messages.length <= 1) return "";
+
+    // Exclude the last message (the mention itself) and any bot messages
+    const prior = data.messages.slice(0, -1).filter((m) => {
+      if (m.bot_id) return false;
+      if (botUserId && m.user === botUserId) return false;
+      return true;
+    });
+    if (prior.length === 0) return "";
+
+    const lines = prior.map((m) => {
+      const user = m.user ? `<@${m.user}>` : "Unknown";
+      return `${user}: ${m.text || "(no text)"}`;
+    });
+
+    return [
+      "## Prior Thread Messages",
+      "",
+      "The following messages were posted in this Slack thread before you were mentioned. Use them as context:",
+      "",
+      ...lines,
+      "",
+      "---",
+      "",
+    ].join("\n");
+  } catch (error) {
+    console.warn("fetch_thread_history_failed", {
+      channel,
+      threadTs,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return "";
+  }
 }
 
 function messageIdentifier(message: {
@@ -93,8 +158,85 @@ function preprocessSlackLinks(text: string): string {
   return result;
 }
 
+/**
+ * Convert markdown tables to a Slack-friendly list format.
+ * Slack mrkdwn doesn't support tables, so we render each row as a
+ * bold-header section with labeled bullet points.
+ *
+ * Example input:
+ *   | Area | v1 | v2 |
+ *   |------|----|----|
+ *   | Secrets | flat .env | 1Password vault |
+ *
+ * Output:
+ *   *Secrets*
+ *   • *v1:* flat .env
+ *   • *v2:* 1Password vault
+ */
+function preprocessMarkdownTables(text: string): string {
+  const lines = text.split("\n");
+  const result: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    // Detect a table row: starts and ends with |, contains at least 2 pipes
+    if (/^\s*\|.*\|.*\|\s*$/.test(line)) {
+      // Collect all consecutive table lines
+      const tableLines: string[] = [];
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+
+      // Parse cells from each line
+      const parseRow = (row: string): string[] =>
+        row
+          .replace(/^\s*\|/, "")
+          .replace(/\|\s*$/, "")
+          .split("|")
+          .map((c) => c.trim());
+
+      // Filter out separator rows (all dashes/colons/spaces)
+      const dataRows = tableLines.filter(
+        (l) => !/^\s*\|[\s:|-]+\|\s*$/.test(l)
+      );
+      if (dataRows.length === 0) {
+        result.push(...tableLines);
+        continue;
+      }
+
+      const headers = parseRow(dataRows[0]);
+      const bodyRows = dataRows.slice(1);
+
+      if (bodyRows.length === 0) {
+        // Header-only table, just render as bold items
+        result.push(headers.map((h) => `*${h}*`).join("  ·  "));
+        result.push("");
+      } else {
+        for (const row of bodyRows) {
+          const cells = parseRow(row);
+          // First cell is the row label
+          const label = cells[0] || "";
+          result.push(`*${label}*`);
+          for (let c = 1; c < cells.length; c++) {
+            const headerLabel = headers[c] || `Col ${c}`;
+            result.push(`• *${headerLabel}:* ${cells[c] || "—"}`);
+          }
+          result.push("");
+        }
+      }
+    } else {
+      result.push(line);
+      i++;
+    }
+  }
+
+  return result.join("\n");
+}
+
 function renderSlackMessage(markdown: string) {
-  const ast = parseMarkdown(preprocessSlackLinks(markdown));
+  const ast = parseMarkdown(preprocessMarkdownTables(preprocessSlackLinks(markdown)));
   const escapeLiteralTildes = (
     node: MarkdownNode,
     inDelete = false
@@ -160,7 +302,7 @@ function createBot() {
       "- Preserve Slack user mentions (`<@UXXXXXXX>`) exactly as-is — only use these for actual Slack users",
       "- For Twitter/X handles, always link to the profile: `[@handle](https://x.com/handle)` — bare @handle gets auto-converted to a broken Slack mention",
       "- Slack enforces a 4,000 character limit per message — split long responses across multiple messages or summarize",
-      "- Use Slack Block Kit formatting for tables, not markdown or ASCII",
+      "- Markdown tables are auto-converted — use standard `| col1 | col2 |` markdown tables freely",
       "- After completing a long task, tag the requester with `@username`",
       "",
       "---",
@@ -264,14 +406,17 @@ function createBot() {
       try {
         if (isFirstMessage) {
           await thread.startTyping("Starting engineer flow...");
+          const { channel: engChannel, threadTs: engThreadTs } = splitThreadKey(threadKey);
+          const engHistory = await fetchThreadHistory(engChannel, engThreadTs);
+          const engTask = engHistory ? engHistory + parsed.cleanedText : parsed.cleanedText;
           const result = await startEngineerFlow(
             threadKey,
-            parsed.cleanedText,
+            engTask,
             modelPreference,
             budgetMode,
             files.length > 0 ? files : undefined
           );
-          const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
+          const viewerUrl = `${THREAD_VIEWER_URL}/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
           const preferenceLine = modelPreference
             ? `\nModel preference: \`${modelPreference}\``
             : "";
@@ -349,8 +494,13 @@ function createBot() {
       await spawn(threadKey, harness, undefined, requestId);
 
       await thread.startTyping("Running...");
+      let threadHistory = "";
+      if (isFirstMessage) {
+        const { channel, threadTs } = splitThreadKey(threadKey);
+        threadHistory = await fetchThreadHistory(channel, threadTs);
+      }
       const message = isFirstMessage
-        ? buildSessionContext(threadKey) + instruction
+        ? buildSessionContext(threadKey) + threadHistory + instruction
         : instruction;
 
       const stopProgress = watchProgress(threadKey, (status) => {
@@ -386,7 +536,7 @@ function createBot() {
       }
       let finalMessage = result;
       if (isFirstMessage) {
-        const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
+        const viewerUrl = `${THREAD_VIEWER_URL}/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
         finalMessage = `[🔗 Thread Viewer](${viewerUrl})\n\n` + finalMessage;
       }
       if (finalMessage.trim()) {

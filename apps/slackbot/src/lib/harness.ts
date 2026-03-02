@@ -261,7 +261,7 @@ export async function replyEngineerFlow(
   return { status: (result.status as string) || "accepted" };
 }
 
-function splitThreadKey(threadKey: string): { channel: string; threadTs: string } {
+export function splitThreadKey(threadKey: string): { channel: string; threadTs: string } {
   const parts = threadKey.trim().split(":");
   if (parts.length === 2 && parts[0] && parts[1]) {
     return { channel: parts[0], threadTs: parts[1] };
