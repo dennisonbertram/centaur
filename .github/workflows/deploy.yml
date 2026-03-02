@@ -24,6 +24,12 @@ jobs:
         working-directory: /home/ubuntu/github/paradigmxyz/ai_v2
 
     steps:
+      - name: Clean runner workspace
+        working-directory: ${{ github.workspace }}
+        run: |
+          # Remove Docker-owned __pycache__ dirs that block actions/checkout cleanup
+          sudo find . -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
