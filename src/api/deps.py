@@ -8,7 +8,7 @@ import asyncpg
 from fastapi import Depends, Header, HTTPException, Request
 from openai import AsyncOpenAI
 
-from shared.config import settings
+from shared.tool_sdk import _sm_read
 
 # Only localhost is trusted without an API key (e.g. health checks).
 # All other callers — including sandbox containers on agent_net — must
@@ -19,6 +19,15 @@ _TRUSTED_PREFIXES = ("127.",)
 # Nginx container IP prefix — only trust X-Forwarded-User from nginx.
 # In docker-compose, nginx talks to api over the default bridge network.
 _NGINX_IP_PREFIX = os.environ.get("NGINX_TRUSTED_IP_PREFIX", "172.")
+
+_API_SECRET_KEY: str | None = None
+
+
+def _get_api_secret_key() -> str:
+    global _API_SECRET_KEY
+    if _API_SECRET_KEY is None:
+        _API_SECRET_KEY = _sm_read("API_SECRET_KEY") or ""
+    return _API_SECRET_KEY
 
 
 async def get_pool(request: Request) -> asyncpg.Pool:
@@ -39,7 +48,8 @@ async def verify_api_key(
     if client_ip.startswith(_TRUSTED_PREFIXES):
         return "localhost-bypass"
 
-    if not settings.api_secret_key:
+    api_key = _get_api_secret_key()
+    if not api_key:
         raise HTTPException(status_code=500, detail="API key not configured")
 
     token = x_api_key
@@ -48,7 +58,7 @@ async def verify_api_key(
         if auth.lower().startswith("bearer "):
             token = auth[7:]
 
-    if not token or not secrets.compare_digest(token, settings.api_secret_key):
+    if not token or not secrets.compare_digest(token, api_key):
         raise HTTPException(status_code=401, detail="Invalid API key")
     return token
 
@@ -75,7 +85,7 @@ async def verify_ui_or_api_key(
 class EmbeddingService:
     def __init__(self, pool: asyncpg.Pool) -> None:
         self.pool = pool
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.client = AsyncOpenAI(api_key=_sm_read("OPENAI_API_KEY") or "")
 
     async def embed(self, text: str) -> list[float]:
         resp = await self.client.embeddings.create(

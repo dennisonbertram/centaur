@@ -30,7 +30,7 @@ from shared.engineer.session import EngineerSession
 from shared.engineer.settings import engineer_settings
 from shared.models import EmbeddingRecord
 from shared.tool_manager import ToolManager
-
+from shared.tool_sdk import _sm_read
 
 _LOG_LEVELS = {
     "critical": 50,
@@ -43,9 +43,7 @@ _default_level = os.getenv("AI_V2_LOG_LEVEL", "warning").lower()
 _log_level = _LOG_LEVELS.get(_default_level, 30)
 
 _renderer: structlog.types.Processor = (
-    structlog.dev.ConsoleRenderer()
-    if sys.stderr.isatty()
-    else structlog.processors.JSONRenderer()
+    structlog.dev.ConsoleRenderer() if sys.stderr.isatty() else structlog.processors.JSONRenderer()
 )
 
 structlog.configure(
@@ -91,14 +89,15 @@ def sync(source: tuple[str, ...]) -> None:
 def embed(source: str | None, batch_size: int) -> None:
     """Generate/refresh embeddings for raw records."""
     settings = Settings()
-    if not settings.openai_api_key:
+    openai_key = _sm_read("OPENAI_API_KEY") or ""
+    if not openai_key:
         click.echo("Error: OPENAI_API_KEY not set", err=True)
         sys.exit(1)
 
     async def _run() -> None:
         pool = await create_pool(settings.database_url)
         svc = EmbeddingService(
-            settings.openai_api_key,
+            openai_key,
             settings.embedding_model,
             settings.embedding_dimensions,
         )
@@ -231,14 +230,15 @@ def status() -> None:
 def search(query: str, limit: int, source: str | None) -> None:
     """Test hybrid search (vector + full-text)."""
     settings = Settings()
-    if not settings.openai_api_key:
+    openai_key = _sm_read("OPENAI_API_KEY") or ""
+    if not openai_key:
         click.echo("Error: OPENAI_API_KEY not set", err=True)
         sys.exit(1)
 
     async def _run() -> None:
         pool = await create_pool(settings.database_url)
         svc = EmbeddingService(
-            settings.openai_api_key,
+            openai_key,
             settings.embedding_model,
             settings.embedding_dimensions,
         )
@@ -443,9 +443,7 @@ def engineer_run(
     selected_budget_mode = (budget_mode or "").strip().lower() or None
     if selected_budget_mode not in {None, "simple", "auto", "complex"}:
         raise click.BadParameter(f"Invalid mode: {selected_budget_mode}")
-    normalized_budget_mode = cast(
-        Literal["simple", "auto", "complex"] | None, selected_budget_mode
-    )
+    normalized_budget_mode = cast(Literal["simple", "auto", "complex"] | None, selected_budget_mode)
 
     async def _run() -> None:
         session = EngineerSession(
@@ -657,9 +655,6 @@ def tools_test(cli_args: str) -> None:
 def serve(host: str, port: int, reload: bool) -> None:
     """Run the API server."""
     uvicorn.run("api.app:app", host=host, port=port, reload=reload)
-
-
-
 
 
 if __name__ == "__main__":

@@ -84,11 +84,10 @@ def _sm_read(key: str) -> str | None:
 
 
 def secret(key: str, default: str | None = None) -> str:
-    """Get a secret. Resolution order: tool context → secret manager → os.environ.
+    """Get a secret. Resolution order: tool context → secret manager → default.
 
     - **ToolContext**: Set by ToolManager, populated from .env files (if any).
     - **Secret Manager**: HTTP sidecar backed by 1Password (``SECRET_MANAGER_URL``).
-    - **os.environ**: Final fallback for local dev, Docker env, k8s, etc.
     """
     # 1. Check tool context if available (server mode)
     try:
@@ -101,11 +100,6 @@ def secret(key: str, default: str | None = None) -> str:
 
     # 2. Secret manager sidecar (backed by 1Password)
     val = _sm_read(key)
-    if val is not None:
-        return val
-
-    # 3. Fall back to os.environ (local dev, Docker, k8s)
-    val = os.environ.get(key)
     if val is not None:
         return val
 

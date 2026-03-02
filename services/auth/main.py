@@ -15,17 +15,38 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import sys
+from urllib.parse import quote
+from urllib.request import Request as URLRequest
+from urllib.request import urlopen
 
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-_PASSWORD = os.environ.get("UI_PASSWORD", "")
-_SECRET_KEY = os.environ.get("API_SECRET_KEY", "")
+_SECRET_MANAGER_URL = os.environ.get("SECRET_MANAGER_URL", "http://secrets:8100")
+
+
+def _fetch_secret(key: str) -> str:
+    """Fetch a secret from the secret manager. Returns empty string on failure."""
+    if not _SECRET_MANAGER_URL:
+        return ""
+    try:
+        req = URLRequest(f"{_SECRET_MANAGER_URL}/secrets/{quote(key, safe='')}")
+        with urlopen(req, timeout=5) as resp:
+            if resp.status == 200:
+                return json.loads(resp.read()).get("value", "")
+    except Exception:
+        pass
+    return ""
+
+
+_PASSWORD = _fetch_secret("UI_PASSWORD")
+_SECRET_KEY = _fetch_secret("API_SECRET_KEY")
 _COOKIE_NAME = "paradigm_ui_session"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 _COOKIE_SECURE = os.environ.get("AUTH_COOKIE_INSECURE", "") != "1"
@@ -38,9 +59,7 @@ if not _SECRET_KEY and _PASSWORD:
 def _make_token() -> str:
     if not _PASSWORD:
         return ""
-    return hmac.new(
-        _SECRET_KEY.encode(), _PASSWORD.encode(), hashlib.sha256
-    ).hexdigest()
+    return hmac.new(_SECRET_KEY.encode(), _PASSWORD.encode(), hashlib.sha256).hexdigest()
 
 
 def _check_auth(request: Request) -> bool:

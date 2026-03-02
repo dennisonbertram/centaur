@@ -30,7 +30,6 @@ services:
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
       OP_VAULT: Paradigm AI Secrets & API Keys
     networks:
-      - default
       - secrets_net
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8100/health"]
@@ -136,8 +135,13 @@ services:
   auth:
     build: services/auth
     environment:
-      UI_PASSWORD: ${UI_PASSWORD:-}
-      API_SECRET_KEY: ${API_SECRET_KEY:-}
+      SECRET_MANAGER_URL: http://secrets:8100
+    networks:
+      - default
+      - secrets_net
+    depends_on:
+      secrets:
+        condition: service_healthy
     restart: unless-stopped
 
   nginx:

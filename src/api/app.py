@@ -202,9 +202,8 @@ class _MCPAuthMiddleware:
                 if auth.lower().startswith("bearer "):
                     token = auth[7:]
 
-                if not settings.api_secret_key or not token or not _secrets.compare_digest(
-                    token, settings.api_secret_key
-                ):
+                api_key = _get_api_secret_key()
+                if not api_key or not token or not _secrets.compare_digest(token, api_key):
                     resp = JSONResponse(
                         {"detail": "Invalid or missing Bearer token"}, status_code=401
                     )
@@ -218,11 +217,35 @@ app.mount("/mcp", app=_MCPAuthMiddleware())
 
 
 # ---------------------------------------------------------------------------
+# Lazy secret fetches — resolved once via secret manager, cached for process
+# ---------------------------------------------------------------------------
+_API_SECRET_KEY: str | None = None
+
+
+def _get_api_secret_key() -> str:
+    global _API_SECRET_KEY
+    if _API_SECRET_KEY is None:
+        from shared.tool_sdk import _sm_read
+
+        _API_SECRET_KEY = _sm_read("API_SECRET_KEY") or ""
+    return _API_SECRET_KEY
+
+
+# ---------------------------------------------------------------------------
 # Reverse proxy: /api/webhooks/* → slackbot on port 3001
 # ---------------------------------------------------------------------------
 _SLACKBOT_URL = os.environ.get("SLACKBOT_URL", "http://localhost:3001")
-_SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
+_SLACK_SIGNING_SECRET: str | None = None
 _SLACK_TIMESTAMP_MAX_AGE = 5 * 60  # 5 minutes
+
+
+def _get_slack_signing_secret() -> str:
+    global _SLACK_SIGNING_SECRET
+    if _SLACK_SIGNING_SECRET is None:
+        from shared.tool_sdk import _sm_read
+
+        _SLACK_SIGNING_SECRET = _sm_read("SLACK_SIGNING_SECRET") or ""
+    return _SLACK_SIGNING_SECRET
 
 
 def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool:
@@ -230,7 +253,8 @@ def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool
 
     See https://api.slack.com/authentication/verifying-requests-from-slack
     """
-    if not _SLACK_SIGNING_SECRET:
+    signing_secret = _get_slack_signing_secret()
+    if not signing_secret:
         log.warning("slack_signing_secret_not_set")
         return False
     try:
@@ -239,9 +263,10 @@ def _verify_slack_signature(body: bytes, timestamp: str, signature: str) -> bool
     except (ValueError, TypeError):
         return False
     sig_basestring = f"v0:{timestamp}:{body.decode('utf-8')}"
-    expected = "v0=" + hmac.new(
-        _SLACK_SIGNING_SECRET.encode(), sig_basestring.encode(), hashlib.sha256
-    ).hexdigest()
+    expected = (
+        "v0="
+        + hmac.new(signing_secret.encode(), sig_basestring.encode(), hashlib.sha256).hexdigest()
+    )
     return hmac.compare_digest(expected, signature)
 
 
@@ -276,5 +301,3 @@ async def proxy_webhooks(request: Request, path: str):
         status_code=resp.status_code,
         headers=dict(resp.headers),
     )
-
-
