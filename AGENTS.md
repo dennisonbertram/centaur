@@ -261,6 +261,19 @@ docker ps --filter label=agent2=true
 docker exec <container_id> curl -s -H "Authorization: Bearer $AI_V2_API_KEY" http://api:8000/health
 ```
 
+### Container cleanup
+
+Only touch `agent2` containers (label `agent2=true`). **Never stop or remove `agent-*` (v1) containers** — those are managed separately.
+
+```bash
+# List agent2 containers
+docker ps --filter label=agent2=true
+
+# Stop and prune all agent2 containers
+docker ps --filter label=agent2=true -q | xargs -r docker stop
+docker container prune -f --filter label=agent2=true
+```
+
 ## Available Skills Reference
 
 All installed skills across `~/.config/agents/skills/`, `~/.agents/skills/`, and any project-local `.agents/skills/`. Use the `skill` tool to load any of these by name.
