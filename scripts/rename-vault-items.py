@@ -26,8 +26,8 @@ ACCOUNT = "paradigmoperationslp"
 OVERRIDES: dict[str, str] = {
     "Claude API": "ANTHROPIC_API_KEY",
     "ChatGPT API": "OPENAI_API_KEY",
-    "Github": "GITHUB_TOKEN",
-    "svc-paradigm Github": "SVC_PARADIGM_GITHUB_TOKEN",
+    "Github": "BOT00FF00_GITHUB_TOKEN",
+    "svc-paradigm Github": "GITHUB_TOKEN",
     "Dune API": "DUNE_API_KEY",
     "Coingecko API": "COINGECKO_API_KEY",
     "Coinmetrics": "COINMETRICS_API_KEY",

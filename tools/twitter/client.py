@@ -3,6 +3,8 @@
 import asyncio
 import os
 
+from shared.tool_sdk import secret
+
 from .sdk import TwitterClient
 
 
@@ -14,9 +16,9 @@ class PTwitterClient:
         api_key: str | None = None,
         base_url: str | None = None,
     ):
-        self._api_key = api_key or os.environ.get("SYNOPTIC_API_KEY", "")
-        self._base_url = base_url or os.environ.get(
-            "SYNOPTIC_BASE_URL", "https://api.synoptic.com"
+        self._api_key = api_key or secret("SYNOPTIC_API_KEY", os.environ.get("SYNOPTIC_API_KEY", ""))
+        self._base_url = base_url or secret(
+            "SYNOPTIC_BASE_URL", os.environ.get("SYNOPTIC_BASE_URL", "https://api.synoptic.com")
         )
 
     def _make_client(self) -> TwitterClient:
