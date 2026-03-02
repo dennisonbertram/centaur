@@ -28,7 +28,7 @@ jobs:
           enable-cache: true
 
       - name: Install Python dependencies
-        run: uv sync --frozen --group dev
+        run: uv sync --group dev
 
       - name: Lint critical runtime paths
         run: |
@@ -60,6 +60,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
       - uses: actions/setup-node@v4
         with:
