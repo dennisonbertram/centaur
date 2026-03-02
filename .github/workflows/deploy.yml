@@ -11,10 +11,8 @@ concurrency:
 
 jobs:
   deploy:
-    # Restrict deploys to the Docker-capable self-hosted runner (ai-v2-deploy).
     runs-on: [self-hosted, linux, x64, docker]
     env:
-      DEPLOY_DIR: /home/ubuntu/github/paradigmxyz/ai_v2
       OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
       API_SECRET_KEY: ${{ secrets.API_SECRET_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -24,11 +22,11 @@ jobs:
         working-directory: /home/ubuntu/github/paradigmxyz/ai_v2
 
     steps:
+      # --- Workspace setup ---
+
       - name: Clean runner workspace
         working-directory: ${{ github.workspace }}
-        run: |
-          # Remove Docker-owned __pycache__ dirs that block actions/checkout cleanup
-          sudo find . -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
+        run: sudo find . -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -46,160 +44,133 @@ jobs:
           docker volume create ai_v2_prometheusdata 2>/dev/null || true
           docker volume create ai_v2_lokidata 2>/dev/null || true
 
+      # --- Detect what changed ---
+
       - name: Detect changes
         id: changes
         working-directory: ${{ github.workspace }}
         run: |
           BEFORE="${{ github.event.before }}"
           if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            # workflow_dispatch or missing before — deploy everything
-            DIFF="force-all"
-          else
-            DIFF=$(git diff --name-only "$BEFORE" ${{ github.sha }} 2>/dev/null || echo "force-all")
+            echo "scope=all" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+
+          DIFF=$(git diff --name-only "$BEFORE" ${{ github.sha }} 2>/dev/null || echo "")
+          if [ -z "$DIFF" ]; then
+            echo "scope=all" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           echo "diff<<EOF" >> "$GITHUB_OUTPUT"
           echo "$DIFF" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
-          if [ "$DIFF" = "force-all" ]; then
-            # Manual dispatch — deploy app services only, skip infra rebuild
-            for key in api slackbot etl sandbox; do
-              echo "$key=true" >> "$GITHUB_OUTPUT"
-            done
-            echo "tools=false" >> "$GITHUB_OUTPUT"
-            echo "infra=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "tools=false" >> "$GITHUB_OUTPUT"
-            echo "api=false" >> "$GITHUB_OUTPUT"
-            echo "slackbot=false" >> "$GITHUB_OUTPUT"
-            echo "sandbox=false" >> "$GITHUB_OUTPUT"
-            echo "etl=false" >> "$GITHUB_OUTPUT"
-            echo "infra=false" >> "$GITHUB_OUTPUT"
-
-            echo "$DIFF" | grep -q '^tools/' && echo "tools=true" >> "$GITHUB_OUTPUT" || true
-            echo "$DIFF" | grep -q '^src/' && echo "api=true" >> "$GITHUB_OUTPUT" || true
-            echo "$DIFF" | grep -q '^apps/slackbot/' && echo "slackbot=true" >> "$GITHUB_OUTPUT" || true
-            echo "$DIFF" | grep -q '^sandbox/' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || true
-            echo "$DIFF" | grep -qE '^(src/etl/|src/shared/)' && echo "etl=true" >> "$GITHUB_OUTPUT" || true
-            echo "$DIFF" | grep -qE '^(Dockerfile|pyproject.toml|uv.lock|docker-compose.yml|migrations/|services/|monitoring/)' && echo "infra=true" >> "$GITHUB_OUTPUT" || true
+          # If infra files changed, rebuild everything
+          if echo "$DIFF" | grep -qE '^(Dockerfile|pyproject\.toml|uv\.lock|docker-compose\.yml|migrations/|services/|monitoring/)'; then
+            echo "scope=all" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-      # Tool-only change → zero-downtime reload (no container restart)
+          # Otherwise, figure out which services changed
+          SCOPE=""
+          echo "$DIFF" | grep -q '^src/' && SCOPE="${SCOPE} api"
+          echo "$DIFF" | grep -q '^apps/slackbot/' && SCOPE="${SCOPE} slackbot"
+          echo "$DIFF" | grep -q '^sandbox/' && SCOPE="${SCOPE} sandbox"
+          echo "$DIFF" | grep -q '^tools/' && SCOPE="${SCOPE} tools"
+
+          if [ -z "$SCOPE" ]; then
+            echo "scope=none" >> "$GITHUB_OUTPUT"
+          else
+            echo "scope=${SCOPE}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # --- Deploy ---
+
+      - name: Deploy all services
+        if: steps.changes.outputs.scope == 'all'
+        run: docker compose up -d --build
+
+      - name: Deploy API + ETL
+        if: steps.changes.outputs.scope != 'all' && contains(steps.changes.outputs.scope, 'api')
+        run: docker compose up -d --build --wait api etl
+
+      - name: Deploy slackbot
+        if: steps.changes.outputs.scope != 'all' && contains(steps.changes.outputs.scope, 'slackbot')
+        run: |
+          test ! -f apps/slackbot/package-lock.json
+          docker compose up -d --build slackbot
+
+      - name: Build sandbox image
+        if: steps.changes.outputs.scope != 'all' && contains(steps.changes.outputs.scope, 'sandbox')
+        run: docker build -t agent2:latest sandbox/
+
       - name: Reload tools
-        if: steps.changes.outputs.tools == 'true' && steps.changes.outputs.api != 'true' && steps.changes.outputs.infra != 'true'
+        if: steps.changes.outputs.scope != 'all' && contains(steps.changes.outputs.scope, 'tools') && !contains(steps.changes.outputs.scope, 'api')
         run: |
           if [ -z "${API_SECRET_KEY:-}" ]; then
-            echo "Skipping tool reload: API_SECRET_KEY secret is not configured."
+            echo "Skipping: API_SECRET_KEY not configured"
             exit 0
           fi
           curl -sf -X POST http://localhost:8000/admin/reload-tools \
             -H "Authorization: Bearer $API_SECRET_KEY"
 
-      - name: Verify Slackbot package manager consistency
-        if: steps.changes.outputs.slackbot == 'true'
-        run: test ! -f apps/slackbot/package-lock.json
+      # --- Post-deploy ---
 
-      # Infra change → rebuild entire stack (docker-compose, Dockerfile, services/, monitoring/)
-      - name: Deploy all services
-        if: steps.changes.outputs.infra == 'true'
-        run: docker compose up -d --build
-
-      # API+ETL share the same Dockerfile — build once, deploy both.
-      # --wait blocks until health checks pass, preventing slackbot from
-      # hitting a half-started API.
-      - name: Deploy API + ETL
-        if: steps.changes.outputs.api == 'true' && steps.changes.outputs.infra != 'true'
-        run: docker compose up -d --build --wait api etl
-
-      # ETL-only change (src/etl or src/shared but not src/api) — still same image
-      - name: Deploy ETL only
-        if: steps.changes.outputs.etl == 'true' && steps.changes.outputs.api != 'true' && steps.changes.outputs.infra != 'true'
-        run: docker compose up -d --build etl
-
-      # Slackbot + sandbox are independent — build in parallel
-      - name: Deploy slackbot + sandbox
-        run: |
-          PIDS=()
-          if [ "${{ steps.changes.outputs.slackbot }}" = "true" ]; then
-            docker compose up -d --build slackbot &
-            PIDS+=($!)
-          fi
-          if [ "${{ steps.changes.outputs.sandbox }}" = "true" ]; then
-            docker build -t agent2:latest sandbox/ &
-            PIDS+=($!)
-          fi
-          FAIL=0
-          for pid in "${PIDS[@]}"; do
-            wait "$pid" || FAIL=1
-          done
-          exit $FAIL
-        if: steps.changes.outputs.slackbot == 'true' || steps.changes.outputs.sandbox == 'true'
-
-      # Restart nginx to re-resolve upstream DNS after container rebuilds
       - name: Restart nginx
-        if: steps.changes.outputs.api == 'true' || steps.changes.outputs.infra == 'true'
+        if: steps.changes.outputs.scope == 'all' || contains(steps.changes.outputs.scope, 'api')
         run: docker compose restart nginx
 
-      # Health check — poll instead of blind sleep
       - name: Health check
-        if: steps.changes.outputs.api == 'true' || steps.changes.outputs.tools == 'true' || steps.changes.outputs.infra == 'true'
+        if: steps.changes.outputs.scope != 'none'
         run: |
           for i in $(seq 1 60); do
             if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
-              echo "Health check passed after ${i}s"
+              echo "API healthy after ${i}s"
               exit 0
             fi
             sleep 1
           done
-          echo "Health check failed after 60s"
+          echo "API health check failed after 60s"
           exit 1
 
-      - name: Secret manager health check
-        if: steps.changes.outputs.api == 'true' || steps.changes.outputs.etl == 'true' || steps.changes.outputs.infra == 'true'
+      - name: Secrets health check
+        if: steps.changes.outputs.scope == 'all' || contains(steps.changes.outputs.scope, 'api')
         run: |
           for i in $(seq 1 90); do
-            CID=$(docker compose ps -q secrets)
+            CID=$(docker compose ps -q secrets 2>/dev/null)
             if [ -z "$CID" ]; then
-              echo "Secret manager container not found yet"
               sleep 1
               continue
             fi
-
-            STATUS=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CID")
+            FMT='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'
+            STATUS=$(docker inspect --format "$FMT" "$CID")
             if [ "$STATUS" = "healthy" ]; then
-              echo "Secret manager healthy after ${i}s"
+              echo "Secrets healthy after ${i}s"
               exit 0
             fi
             if [ "$STATUS" = "unhealthy" ]; then
-              echo "Secret manager reported unhealthy"
-              docker compose logs --tail 120 secrets || true
+              echo "Secrets unhealthy"
+              docker compose logs --tail 50 secrets || true
               exit 1
             fi
             sleep 1
           done
-          echo "Secret manager health check failed after 90s"
-          docker compose logs --tail 120 secrets || true
+          echo "Secrets health check timed out"
+          docker compose logs --tail 50 secrets || true
           exit 1
 
-      # Notify #ai-v2 with LLM summary of what changed
+      # --- Notify ---
+
       - name: Notify Slack
-        if: always() && steps.changes.outputs.diff != ''
+        if: always() && steps.changes.outputs.scope != 'none'
         continue-on-error: true
         run: |
           if [ -z "${OPENAI_API_KEY:-}" ] || [ -z "${SLACK_BOT_TOKEN:-}" ]; then
-            echo "Skipping Slack notification: OPENAI_API_KEY/SLACK_BOT_TOKEN secrets are not configured."
+            echo "Skipping Slack notification: missing secrets"
             exit 0
           fi
 
-          COMPONENTS=""
-          [ "${{ steps.changes.outputs.api }}" = "true" ] && COMPONENTS="${COMPONENTS} api"
-          [ "${{ steps.changes.outputs.slackbot }}" = "true" ] && COMPONENTS="${COMPONENTS} slackbot"
-          [ "${{ steps.changes.outputs.etl }}" = "true" ] && COMPONENTS="${COMPONENTS} etl"
-          [ "${{ steps.changes.outputs.sandbox }}" = "true" ] && COMPONENTS="${COMPONENTS} sandbox"
-          [ "${{ steps.changes.outputs.tools }}" = "true" ] && COMPONENTS="${COMPONENTS} tools"
-          [ "${{ steps.changes.outputs.infra }}" = "true" ] && COMPONENTS="${COMPONENTS} infra"
-
-          # Capture error logs if the job failed
           ERROR_LOG=""
           if [ "${{ job.status }}" = "failure" ]; then
             ERROR_LOG=$(gh run view ${{ github.run_id }} --log-failed --repo ${{ github.repository }} 2>&1 | tail -40 || echo "Failed to fetch logs")
@@ -209,7 +180,7 @@ jobs:
           ./scripts/deploy-notify.sh \
             "${{ github.event.before }}" \
             "${{ github.sha }}" \
-            "$COMPONENTS" \
+            "${{ steps.changes.outputs.scope }}" \
             "${{ github.repository }}" \
             "${{ job.status }}" \
             "$ERROR_LOG"
