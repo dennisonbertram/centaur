@@ -82,12 +82,12 @@ class ParadigmDBClient:
         return db.get_asset_by_symbol(symbol)
 
     def db_daily_prices(
-        self, asset_id: int, start_date: str | None = None, end_date: str | None = None
+        self, asset_id: str, start_date: str | None = None, end_date: str | None = None
     ) -> list[dict]:
         """Get daily prices for an asset.
 
         Args:
-            asset_id: The asset ID
+            asset_id: The asset ID (text UUID)
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
         """

@@ -356,18 +356,25 @@ class Database:
         )
 
     def get_asset_by_symbol(self, symbol: str) -> dict | None:
-        """Get asset by symbol."""
+        """Get asset by ticker symbol (searches XAssetToken and XAssetPublicEquity)."""
         return self.query_one(
-            'SELECT * FROM "XAssetBase" WHERE symbol = %s',
-            (symbol,),
+            'SELECT a.*, t.ticker FROM "XAssetBase" a '
+            'INNER JOIN "XAssetToken" t ON t.id = a.id '
+            "WHERE t.ticker ILIKE %s "
+            "UNION ALL "
+            'SELECT a.*, e.ticker FROM "XAssetBase" a '
+            'INNER JOIN "XAssetPublicEquity" e ON e.id = a.id '
+            "WHERE e.ticker ILIKE %s "
+            "LIMIT 1",
+            (symbol, symbol),
         )
 
     def get_daily_prices(
-        self, asset_id: int, start_date: str | None = None, end_date: str | None = None
+        self, asset_id: str, start_date: str | None = None, end_date: str | None = None
     ) -> list[dict]:
         """Get daily prices for an asset."""
         sql = 'SELECT * FROM "XAssetDailyPrice" WHERE "assetId" = %s'
-        params: list = [asset_id]
+        params: list = [str(asset_id)]
 
         if start_date:
             sql += " AND date >= %s"
@@ -382,7 +389,7 @@ class Database:
     def get_transactions(self, limit: int = 100) -> list[dict]:
         """Get recent transactions."""
         return self.query(
-            'SELECT * FROM "XTransactionBase" ORDER BY "createdAt" DESC LIMIT %s',
+            'SELECT * FROM "XTransactionBase" ORDER BY created_at DESC LIMIT %s',
             (limit,),
         )
 
