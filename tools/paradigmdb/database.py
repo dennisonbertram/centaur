@@ -359,11 +359,11 @@ class Database:
         """Get asset by ticker symbol (searches XAssetToken and XAssetPublicEquity)."""
         return self.query_one(
             'SELECT a.*, t.ticker FROM "XAssetBase" a '
-            'INNER JOIN "XAssetToken" t ON t.id = a.id '
+            'INNER JOIN "XAssetToken" t ON t."assetBaseId" = a.id '
             "WHERE t.ticker ILIKE %s "
             "UNION ALL "
             'SELECT a.*, e.ticker FROM "XAssetBase" a '
-            'INNER JOIN "XAssetPublicEquity" e ON e.id = a.id '
+            'INNER JOIN "XAssetPublicEquity" e ON e."assetBaseId" = a.id '
             "WHERE e.ticker ILIKE %s "
             "LIMIT 1",
             (symbol, symbol),
