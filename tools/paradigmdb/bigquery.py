@@ -15,9 +15,9 @@ DATASET = "shift_prod_public_views"
 def get_bigquery_client() -> bigquery.Client:
     """Get a BigQuery client using available credentials.
 
-    Uses Application Default Credentials (ADC) from ~/.config/gcloud/.
-    The quota project should be set to ai-svc-485017 where svc_ai has
-    serviceUsageConsumer permission.
+    Supports both service account JSON and Application Default Credentials (ADC).
+    ADC files (from gcloud auth login) have 'account' key; service account files
+    have 'client_email' key.
 
     To set up ADC:
         gcloud auth login svc_ai@paradigm.xyz --update-adc
@@ -25,11 +25,18 @@ def get_bigquery_client() -> bigquery.Client:
     """
     creds_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if creds_file and os.path.exists(creds_file):
-        from google.oauth2 import service_account
+        import json
 
-        credentials = service_account.Credentials.from_service_account_file(creds_file)
-        return bigquery.Client(project=GCP_PROJECT, credentials=credentials)
+        with open(creds_file) as f:
+            creds_data = json.load(f)
 
+        if "client_email" in creds_data:
+            from google.oauth2 import service_account
+
+            credentials = service_account.Credentials.from_service_account_file(creds_file)
+            return bigquery.Client(project=GCP_PROJECT, credentials=credentials)
+
+    # Fall through to ADC (handles both gcloud login ADC and implicit credentials)
     return bigquery.Client(project=GCP_PROJECT)
 
 def query_bigquery(sql: str, limit: int = 100) -> list[dict[str, Any]]:
