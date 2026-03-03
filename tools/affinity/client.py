@@ -1,9 +1,9 @@
 """Affinity API client."""
 
-import os
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 BASE_URL = "https://api.affinity.co"
 
@@ -17,7 +17,7 @@ class AffinityClient:
         self._client: httpx.Client | None = None
 
     def _get_api_key(self) -> str:
-        api_key = self._api_key or os.getenv("AFFINITY_API_KEY")
+        api_key = self._api_key or secret("AFFINITY_API_KEY", "")
         if not api_key:
             raise RuntimeError(
                 "AFFINITY_API_KEY not set.\n"
@@ -146,7 +146,7 @@ class AffinityClient:
 
 
 def _client() -> AffinityClient:
-    api_key = os.getenv("AFFINITY_API_KEY")
+    api_key = secret("AFFINITY_API_KEY", "")
     if not api_key:
         raise RuntimeError("AFFINITY_API_KEY not set.")
     return AffinityClient(api_key=api_key)

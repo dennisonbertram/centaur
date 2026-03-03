@@ -1,6 +1,5 @@
 """Attio API client."""
 
-import os
 from typing import Any
 
 import httpx
@@ -10,7 +9,7 @@ class AttioClient:
     """Authenticated Attio CRM API client."""
 
     def __init__(self, api_key: str | None = None):
-        self._api_key = api_key or os.getenv("ATTIO_API_KEY")
+        self._api_key = api_key or secret("ATTIO_API_KEY", "")
         if not self._api_key:
             raise RuntimeError(
                 "ATTIO_API_KEY not set.\nGenerate one at https://app.attio.com/settings/developers"

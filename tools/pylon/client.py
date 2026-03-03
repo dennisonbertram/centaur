@@ -1,10 +1,10 @@
 """Pylon API client."""
 
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 BASE_URL = "https://api.usepylon.com"
 
@@ -18,7 +18,7 @@ class PylonClient:
 
     def _get_api_key(self) -> str:
         """Get Pylon API key from environment."""
-        key = self._api_key or os.getenv("PYLON_API_KEY")
+        key = self._api_key or secret("PYLON_API_KEY", "")
         if not key:
             raise RuntimeError(
                 "PYLON_API_KEY not set.\n"

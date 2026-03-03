@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 
 SUPPORTED_CHAINS = {
@@ -55,7 +55,7 @@ class AlchemyClient:
         """Get API key from env var."""
         if self.api_key:
             return self.api_key
-        key = os.getenv("ALCHEMY_API_KEY")
+        key = secret("ALCHEMY_API_KEY", "")
         if key:
             return key
         raise RuntimeError("ALCHEMY_API_KEY not set.")
@@ -272,7 +272,7 @@ def format_gwei(wei: int) -> str:
 
 
 def _client() -> AlchemyClient:
-    api_key = os.getenv("ALCHEMY_API_KEY")
+    api_key = secret("ALCHEMY_API_KEY", "")
     if not api_key:
         raise RuntimeError("ALCHEMY_API_KEY not set.")
     return AlchemyClient(api_key=api_key)

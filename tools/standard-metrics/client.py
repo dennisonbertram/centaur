@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 BASE_URL = "https://api.standardmetrics.io/v1"
 TOKEN_URL = "https://api.standardmetrics.io/o/token/"
@@ -28,7 +29,7 @@ class StandardMetricsClient:
     def _get_credentials(self) -> tuple[str, str]:
         """Get client credentials from environment."""
         client_id = self._client_id or os.getenv("STANDARD_METRICS_CLIENT_ID")
-        client_secret = self._client_secret or os.getenv("STANDARD_METRICS_CLIENT_SECRET")
+        client_secret = self._client_secret or secret("STANDARD_METRICS_CLIENT_SECRET", "")
         if not client_id or not client_secret:
             raise RuntimeError(
                 "STANDARD_METRICS_CLIENT_ID and STANDARD_METRICS_CLIENT_SECRET must be set.\n"

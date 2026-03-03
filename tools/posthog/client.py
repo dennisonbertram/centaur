@@ -3,6 +3,7 @@
 import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class PostHogClient:
@@ -45,7 +46,7 @@ class PostHogClient:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        key = os.getenv("POSTHOG_API_KEY")
+        key = secret("POSTHOG_API_KEY", "")
         if key:
             return key
         raise RuntimeError("POSTHOG_API_KEY not set.")
@@ -55,7 +56,7 @@ class PostHogClient:
         """Get project ID from instance or env var."""
         if self._project_id:
             return self._project_id
-        pid = os.getenv("POSTHOG_PROJECT_ID")
+        pid = secret("POSTHOG_PROJECT_ID", "")
         if pid:
             return pid
         raise RuntimeError("POSTHOG_PROJECT_ID not set.")
@@ -280,6 +281,6 @@ class PostHogClient:
 
 
 def _client() -> PostHogClient:
-    api_key = os.getenv("POSTHOG_API_KEY")
-    project_id = os.getenv("POSTHOG_PROJECT_ID")
+    api_key = secret("POSTHOG_API_KEY", "")
+    project_id = secret("POSTHOG_PROJECT_ID", "")
     return PostHogClient(api_key=api_key, project_id=project_id)

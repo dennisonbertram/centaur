@@ -1,10 +1,10 @@
 """SimilarWeb API client."""
 
-import os
 from datetime import date
 from typing import Literal
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class SimilarWebClient:
@@ -32,7 +32,7 @@ class SimilarWebClient:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        key = os.getenv("SIMILARWEB_API_KEY")
+        key = secret("SIMILARWEB_API_KEY", "")
         if not key:
             raise RuntimeError(
                 "SIMILARWEB_API_KEY not set. Get your API key from SimilarWeb account settings."
@@ -381,5 +381,5 @@ class SimilarWebClient:
 
 
 def _client() -> SimilarWebClient:
-    api_key = os.getenv("SIMILARWEB_API_KEY")
+    api_key = secret("SIMILARWEB_API_KEY", "")
     return SimilarWebClient(api_key=api_key)

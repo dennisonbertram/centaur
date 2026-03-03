@@ -2,7 +2,6 @@
 
 import base64
 import json
-import os
 from typing import Any
 
 import httpx
@@ -26,8 +25,8 @@ class AddeparClient:
         api_secret: str | None = None,
         timeout: float = 60.0,
     ):
-        self._api_key = api_key or os.getenv("ADDEPAR_API_KEY")
-        self._api_secret = api_secret or os.getenv("ADDEPAR_API_SECRET")
+        self._api_key = api_key or secret("ADDEPAR_API_KEY", "")
+        self._api_secret = api_secret or secret("ADDEPAR_API_SECRET", "")
 
         if not self._api_key or not self._api_secret:
             raise RuntimeError(

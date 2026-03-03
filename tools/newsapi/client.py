@@ -1,9 +1,9 @@
 """NewsAPI.org client."""
 
-import os
 import subprocess
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class NewsAPIClient:
@@ -27,7 +27,7 @@ class NewsAPIClient:
         if self._api_key:
             return self._api_key
 
-        key = os.getenv("NEWSAPI_KEY")
+        key = secret("NEWSAPI_KEY", "")
         if key:
             return key
 

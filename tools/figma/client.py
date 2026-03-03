@@ -1,10 +1,10 @@
 """Figma REST API client using personal access token."""
 
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from urllib.request import Request, urlopen
+from shared.tool_sdk import secret
 
 
 @dataclass
@@ -27,7 +27,7 @@ class FigmaClient:
     BASE_URL = "https://api.figma.com/v1"
 
     def __init__(self, token: str | None = None):
-        self.token = token or os.getenv("FIGMA_ACCESS_TOKEN") or os.getenv("FIGMA")
+        self.token = token or secret("FIGMA_ACCESS_TOKEN", "") or secret("FIGMA", "")
         if not self.token:
             raise ValueError("FIGMA token not found. Set FIGMA_ACCESS_TOKEN env var or pass token.")
 

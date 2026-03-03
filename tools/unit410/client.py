@@ -1,9 +1,9 @@
 """Unit 410 API client."""
 
-import os
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 BASE_URL = "https://balanceapi-pd-prod.app.unit410.com"
 
@@ -20,7 +20,7 @@ class Unit410Client:
     def _get_api_key(self) -> str:
         if self._api_key:
             return self._api_key
-        api_key = os.getenv("UNIT410_API_KEY")
+        api_key = secret("UNIT410_API_KEY", "")
         if not api_key:
             raise RuntimeError("UNIT410_API_KEY not set.")
         return api_key

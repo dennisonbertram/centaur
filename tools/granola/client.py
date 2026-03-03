@@ -4,10 +4,10 @@ Uses the official public API: https://docs.granola.ai
 Provides workspace-wide access to meeting notes and transcripts.
 """
 
-import os
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 API_BASE = "https://public-api.granola.ai"
 
@@ -16,7 +16,7 @@ class GranolaClient:
     """Client for Granola Enterprise API (workspace-wide notes access)."""
 
     def __init__(self, api_key: str | None = None):
-        self._api_key = api_key or os.getenv("GRANOLA_API_KEY")
+        self._api_key = api_key or secret("GRANOLA_API_KEY", "")
         if not self._api_key:
             raise RuntimeError(
                 "GRANOLA_API_KEY not set.\n"

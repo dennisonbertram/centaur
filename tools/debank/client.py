@@ -1,8 +1,8 @@
 """DeBank Pro API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class DeBankClient:
@@ -24,7 +24,7 @@ class DeBankClient:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        return os.getenv("DEBANK_API_KEY")
+        return secret("DEBANK_API_KEY", "")
 
     def _request(
         self,
@@ -157,4 +157,4 @@ class DeBankClient:
 
 def _client() -> DeBankClient:
     """Factory: create a DeBankClient from env vars."""
-    return DeBankClient(api_key=os.getenv("DEBANK_API_KEY"))
+    return DeBankClient(api_key=secret("DEBANK_API_KEY", ""))

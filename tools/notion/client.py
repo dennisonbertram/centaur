@@ -1,9 +1,9 @@
 """Notion REST API client."""
 
-import os
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 API_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
@@ -14,7 +14,7 @@ class NotionClient:
     """Client for Notion's REST API."""
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or os.getenv("NOTION_API_KEY")
+        self.api_key = api_key or secret("NOTION_API_KEY", "")
         if not self.api_key:
             raise RuntimeError(
                 "NOTION_API_KEY not set.\nGet one at https://www.notion.so/my-integrations"
@@ -441,4 +441,4 @@ class NotionClient:
 
 
 def _client() -> NotionClient:
-    return NotionClient(api_key=os.getenv("NOTION_API_KEY"))
+    return NotionClient(api_key=secret("NOTION_API_KEY", ""))

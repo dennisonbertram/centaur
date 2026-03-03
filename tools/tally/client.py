@@ -1,8 +1,8 @@
 """Tally GraphQL API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class TallyClient:
@@ -13,7 +13,7 @@ class TallyClient:
     """
 
     def __init__(self, api_key: str | None = None, timeout: float = 30.0):
-        self._api_key = api_key or os.getenv("TALLY_API_KEY")
+        self._api_key = api_key or secret("TALLY_API_KEY", "")
         if not self._api_key:
             raise RuntimeError("TALLY_API_KEY not set.")
         self.base_url = "https://api.tally.xyz/query"

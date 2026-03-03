@@ -21,9 +21,9 @@ class CoinbasePrimeClient:
         passphrase: str | None = None,
         portfolio_id: str | None = None,
     ):
-        self._api_key = api_key or os.getenv("COINBASE_API_KEY")
-        self._api_secret = api_secret or os.getenv("COINBASE_API_SECRET")
-        self._passphrase = passphrase or os.getenv("COINBASE_API_PASSPHRASE")
+        self._api_key = api_key or secret("COINBASE_API_KEY", "")
+        self._api_secret = api_secret or secret("COINBASE_API_SECRET", "")
+        self._passphrase = passphrase or secret("COINBASE_API_PASSPHRASE", "")
         self._portfolio_id = portfolio_id or os.getenv("COINBASE_PORTFOLIO_ID") or ""
 
         if not self._api_key or not self._api_secret or not self._passphrase:

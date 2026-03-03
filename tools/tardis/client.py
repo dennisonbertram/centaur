@@ -1,8 +1,8 @@
 """Tardis API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class TardisClient:
@@ -23,7 +23,7 @@ class TardisClient:
     def _get_api_key(self) -> str | None:
         if self._api_key:
             return self._api_key
-        return os.getenv("TARDIS_API_KEY")
+        return secret("TARDIS_API_KEY", "")
 
     def _headers(self) -> dict[str, str]:
         api_key = self._get_api_key()

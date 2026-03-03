@@ -1,10 +1,11 @@
 """Anchorage Digital API client with optional Ed25519 signing."""
 
-import os
 import time
 from typing import Any
 
 import httpx
+
+from shared.tool_sdk import secret
 
 BASE_URL = "https://api.anchorage.com/v2"
 
@@ -66,8 +67,8 @@ class AnchorageClient:
 
     def _get_auth(self) -> AnchorageAuth:
         api_key_var, signing_key_var = FUND_ENV_VARS[self.fund]
-        api_key = os.getenv(api_key_var)
-        signing_key = os.getenv(signing_key_var)  # Optional
+        api_key = secret(api_key_var, "")
+        signing_key = secret(signing_key_var, "")  # Optional
 
         if not api_key:
             raise RuntimeError(

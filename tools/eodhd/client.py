@@ -1,6 +1,5 @@
 """EODHD Financial API client — real-time quotes and historical EOD prices."""
 
-import os
 from typing import Any
 
 import httpx
@@ -11,7 +10,7 @@ BASE_URL = "https://eodhd.com/api"
 class EodhdClient:
 
     def __init__(self, api_key: str | None = None):
-        self._api_key = api_key or os.getenv("EODHD_API_KEY")
+        self._api_key = api_key or secret("EODHD_API_KEY", "")
         if not self._api_key:
             raise RuntimeError(
                 "EODHD API key not set.\n"

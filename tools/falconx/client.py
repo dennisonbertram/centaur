@@ -3,11 +3,12 @@
 import base64
 import hashlib
 import hmac
-import os
 import time
 from typing import Literal
 
 import httpx
+
+from shared.tool_sdk import secret
 
 BASE_URL = "https://api.falconx.io"
 
@@ -27,9 +28,9 @@ def get_credentials(account: AccountType = "p1") -> tuple[str, str, str]:
         RuntimeError: If credentials are not set
     """
     prefix = f"FALCONX_{account.upper()}"
-    api_key = os.getenv(f"{prefix}_API_KEY")
-    passphrase = os.getenv(f"{prefix}_PASSPHRASE")
-    secret_key = os.getenv(f"{prefix}_SECRET_KEY")
+    api_key = secret(f"{prefix}_API_KEY", "")
+    passphrase = secret(f"{prefix}_PASSPHRASE", "")
+    secret_key = secret(f"{prefix}_SECRET_KEY", "")
 
     if not all([api_key, passphrase, secret_key]):
         missing = []

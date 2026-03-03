@@ -1,9 +1,9 @@
 """Loki HTTP API client for LogQL queries, labels, and log streams."""
 
-import os
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class LokiClient:
@@ -20,7 +20,7 @@ class LokiClient:
 
     @property
     def base_url(self) -> str:
-        return (self._url or os.getenv("LOKI_URL", "http://loki:3100")).rstrip("/")
+        return (self._url or secret("LOKI_URL", "URL")).rstrip("/")
 
     @property
     def client(self) -> httpx.Client:

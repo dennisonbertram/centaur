@@ -1,12 +1,12 @@
 """Veo 3 video generation client."""
 
-import os
 import time
 from collections.abc import Callable
 from pathlib import Path
 
 from google import genai
 from google.genai import types
+from shared.tool_sdk import secret
 
 
 class Veo3Client:
@@ -36,7 +36,7 @@ class Veo3Client:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        key = os.getenv("GOOGLE_API_KEY")
+        key = secret("GOOGLE_API_KEY", "")
         if key:
             return key
         raise RuntimeError("GOOGLE_API_KEY not set.")

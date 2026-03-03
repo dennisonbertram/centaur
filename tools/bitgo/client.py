@@ -1,6 +1,5 @@
 """BitGo API client."""
 
-import os
 from typing import Any
 
 import httpx
@@ -11,7 +10,7 @@ BASE_URL = "https://app.bitgo.com/api/v2"
 class BitGoClient:
 
     def __init__(self, access_token: str | None = None):
-        self._token = access_token or os.getenv("BITGO_API_KEY")
+        self._token = access_token or secret("BITGO_API_KEY", "")
         if not self._token:
             raise RuntimeError(
                 "BITGO_API_KEY not set.\n"

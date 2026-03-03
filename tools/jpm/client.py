@@ -24,7 +24,7 @@ class JPMClient:
         private_key: str | None = None,
         account_ids: list[str] | None = None,
     ):
-        raw_key = private_key or os.getenv("JPM_API_PRIVATE_KEY") or ""
+        raw_key = private_key or secret("JPM_API_PRIVATE_KEY", "") or ""
         self._private_key = raw_key.replace("\\n", "\n")
 
         raw_ids = os.getenv("JPM_API_ACCOUNT_IDS") or ""

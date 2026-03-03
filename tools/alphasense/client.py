@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class AlphaSenseClient:
@@ -38,11 +39,11 @@ class AlphaSenseClient:
 
     def _get_credentials(self) -> tuple[str, str, str, str, str]:
         """Get credentials from instance or env vars."""
-        api_key = self._api_key or os.getenv("ALPHASENSE_API_KEY")
+        api_key = self._api_key or secret("ALPHASENSE_API_KEY", "")
         client_id = self._client_id or os.getenv("ALPHASENSE_CLIENT_ID")
-        client_secret = self._client_secret or os.getenv("ALPHASENSE_CLIENT_SECRET")
+        client_secret = self._client_secret or secret("ALPHASENSE_CLIENT_SECRET", "")
         username = self._username or os.getenv("ALPHASENSE_USERNAME")
-        password = self._password or os.getenv("ALPHASENSE_PASSWORD")
+        password = self._password or secret("ALPHASENSE_PASSWORD", "")
 
         if not api_key:
             raise RuntimeError("ALPHASENSE_API_KEY not set.")

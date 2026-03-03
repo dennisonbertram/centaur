@@ -1,9 +1,9 @@
 """Messari API client."""
 
-import os
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 BASE_URL_V1 = "https://data.messari.io/api/v1"
 BASE_URL_V2 = "https://data.messari.io/api/v2"
@@ -13,7 +13,7 @@ class MessariClient:
     """Client for Messari API."""
 
     def __init__(self, api_key: str | None = None):
-        self._api_key = api_key or os.getenv("MESSARI_API_KEY")
+        self._api_key = api_key or secret("MESSARI_API_KEY", "")
         if not self._api_key:
             raise RuntimeError("MESSARI_API_KEY not set.")
         self._client = httpx.Client(
@@ -103,18 +103,5 @@ class MessariClient:
         self.close()
 
 
-try:
-    from shared.tool_sdk import secret
-except ImportError:
-
-    def secret(key: str, default: str | None = None) -> str:  # type: ignore[misc]
-        val = os.environ.get(key)
-        if val:
-            return val
-        if default is not None:
-            return default
-        raise KeyError(f"Missing env var '{key}'")
-
-
 def _client() -> MessariClient:
-    return MessariClient(api_key=secret("MESSARI_API_KEY"))
+    return MessariClient()

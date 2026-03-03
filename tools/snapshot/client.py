@@ -1,8 +1,8 @@
 """Snapshot GraphQL API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class SnapshotClient:
@@ -32,7 +32,7 @@ class SnapshotClient:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        return os.getenv("SNAPSHOT_API_KEY")
+        return secret("SNAPSHOT_API_KEY", "")
 
     def _query(self, query: str, variables: dict | None = None) -> dict:
         """Execute a GraphQL query."""
@@ -268,5 +268,5 @@ class SnapshotClient:
 
 
 def _client() -> SnapshotClient:
-    api_key = os.getenv("SNAPSHOT_API_KEY")
+    api_key = secret("SNAPSHOT_API_KEY", "")
     return SnapshotClient(api_key=api_key)

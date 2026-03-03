@@ -1,9 +1,9 @@
 """Listen Notes API client."""
 
-import os
 import subprocess
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class ListenNotesClient:
@@ -25,7 +25,7 @@ class ListenNotesClient:
         """Get API key from instance, env var, or 1Password."""
         if self._api_key:
             return self._api_key
-        key = os.getenv("LISTENNOTES_KEY")
+        key = secret("LISTENNOTES_KEY", "")
         if key:
             return key
         try:

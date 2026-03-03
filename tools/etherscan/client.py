@@ -1,8 +1,8 @@
 """Etherscan API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class EtherscanClient:
@@ -25,7 +25,7 @@ class EtherscanClient:
 
     def _get_api_key(self) -> str:
         """Get API key from instance or env var."""
-        key = self._api_key or os.getenv("ETHERSCAN_API_KEY")
+        key = self._api_key or secret("ETHERSCAN_API_KEY", "")
         if not key:
             raise RuntimeError("ETHERSCAN_API_KEY not set.")
         return key
@@ -253,7 +253,7 @@ class EtherscanClient:
 
 
 def _client() -> EtherscanClient:
-    api_key = os.getenv("ETHERSCAN_API_KEY")
+    api_key = secret("ETHERSCAN_API_KEY", "")
     if not api_key:
         raise RuntimeError("ETHERSCAN_API_KEY not set.")
     return EtherscanClient(api_key=api_key)

@@ -1,8 +1,8 @@
 """Coin Metrics API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class CoinMetricsClient:
@@ -30,7 +30,7 @@ class CoinMetricsClient:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        return os.getenv("COINMETRICS_API_KEY")
+        return secret("COINMETRICS_API_KEY", "")
 
     def _request(
         self,
@@ -248,5 +248,5 @@ class CoinMetricsClient:
 
 
 def _client() -> CoinMetricsClient:
-    api_key = os.getenv("COINMETRICS_API_KEY")
+    api_key = secret("COINMETRICS_API_KEY", "")
     return CoinMetricsClient(api_key=api_key)

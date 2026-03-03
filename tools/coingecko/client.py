@@ -1,8 +1,8 @@
 """CoinGecko Pro API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class CoinGeckoClient:
@@ -24,7 +24,7 @@ class CoinGeckoClient:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        return os.getenv("COINGECKO_API_KEY")
+        return secret("COINGECKO_API_KEY", "")
 
     def _request(
         self,
@@ -139,7 +139,7 @@ class CoinGeckoClient:
 
 
 def _client() -> CoinGeckoClient:
-    api_key = os.getenv("COINGECKO_API_KEY")
+    api_key = secret("COINGECKO_API_KEY", "")
     if not api_key:
         raise RuntimeError("COINGECKO_API_KEY not set.")
     return CoinGeckoClient(api_key=api_key)

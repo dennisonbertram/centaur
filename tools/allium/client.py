@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 import uuid
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 
 def _parse_sse_events(response_text: str) -> list[dict]:
@@ -75,7 +75,7 @@ class AlliumClient:
         """Get API key from env var."""
         if self.api_key:
             return self.api_key
-        key = os.getenv("ALLIUM_API_KEY")
+        key = secret("ALLIUM_API_KEY", "")
         if key:
             return key
         raise RuntimeError("ALLIUM_API_KEY not set.")
@@ -530,7 +530,7 @@ def get_example_queries() -> dict[str, str]:
 
 
 def _client() -> AlliumClient:
-    api_key = os.getenv("ALLIUM_API_KEY")
+    api_key = secret("ALLIUM_API_KEY", "")
     if not api_key:
         raise RuntimeError("ALLIUM_API_KEY not set.")
     return AlliumClient(api_key=api_key)

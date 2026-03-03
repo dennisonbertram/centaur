@@ -1,9 +1,9 @@
 """SensorTower API client."""
 
-import os
 from datetime import date
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class SensorTowerClient:
@@ -29,7 +29,7 @@ class SensorTowerClient:
         """Get auth token from instance or env var."""
         if self._auth_token:
             return self._auth_token
-        token = os.getenv("SENSORTOWER_AUTH_TOKEN")
+        token = secret("SENSORTOWER_AUTH_TOKEN", "")
         if not token:
             raise RuntimeError(
                 "SENSORTOWER_AUTH_TOKEN not set. "

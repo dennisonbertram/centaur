@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 BASE_URL = "https://api.sigmacomputing.com/v2"
 
@@ -26,7 +27,7 @@ class SigmaClient:
     def _get_credentials(self) -> tuple[str, str]:
         """Get client credentials from environment."""
         client_id = self._client_id or os.getenv("SIGMA_CLIENT_ID")
-        client_secret = self._client_secret or os.getenv("SIGMA_CLIENT_SECRET")
+        client_secret = self._client_secret or secret("SIGMA_CLIENT_SECRET", "")
         if not client_id or not client_secret:
             raise RuntimeError(
                 "SIGMA_CLIENT_ID and SIGMA_CLIENT_SECRET must be set.\n"
@@ -132,7 +133,7 @@ class SigmaClient:
         """Generate embed URL for a workbook using the embed secret."""
         import jwt
 
-        embed_secret = os.getenv("SIGMA_EMBED_SECRET")
+        embed_secret = secret("SIGMA_EMBED_SECRET", "")
         if not embed_secret:
             raise RuntimeError(
                 "SIGMA_EMBED_SECRET must be set.\n"
@@ -151,7 +152,7 @@ class SigmaClient:
 
         token = jwt.encode(claims, embed_secret, algorithm="HS256")
 
-        base_embed_url = os.getenv(
+        base_embed_url = os.environ.get(
             "SIGMA_EMBED_BASE_URL", "https://app.sigmacomputing.com/embed"
         )
         return f"{base_embed_url}/{workbook_id}?:jwt={token}"

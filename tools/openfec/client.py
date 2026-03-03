@@ -1,8 +1,8 @@
 """OpenFEC federal election API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class OpenFECClient:
@@ -26,7 +26,7 @@ class OpenFECClient:
         return self._client
 
     def _get_api_key(self) -> str:
-        api_key = self._api_key or os.getenv("DATAGOV_API_KEY")
+        api_key = self._api_key or secret("DATAGOV_API_KEY", "")
         if not api_key:
             raise RuntimeError("DATAGOV_API_KEY not set.")
         return api_key

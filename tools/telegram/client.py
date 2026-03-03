@@ -1,17 +1,17 @@
 """Telegram Bot API client."""
 
 import asyncio
-import os
 from functools import wraps
 from typing import Any
 
 from telegram import Bot
 from .error import TelegramError
+from shared.tool_sdk import secret
 
 
 def get_bot_token() -> str:
     """Get Telegram bot token from environment."""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    token = secret("TELEGRAM_BOT_TOKEN", "")
     if not token:
         raise RuntimeError(
             "TELEGRAM_BOT_TOKEN not set.\n"

@@ -1,8 +1,8 @@
 """Token Terminal API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class TokenTerminalClient:
@@ -158,7 +158,7 @@ class TokenTerminalClient:
 
 
 def _client() -> TokenTerminalClient:
-    api_key = os.getenv("TOKEN_TERMINAL_API_KEY")
+    api_key = secret("TOKEN_TERMINAL_API_KEY", "")
     if not api_key:
         raise RuntimeError(
             "TOKEN_TERMINAL_API_KEY not set. "

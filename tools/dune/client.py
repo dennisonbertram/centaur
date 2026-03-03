@@ -1,6 +1,5 @@
 """Dune Analytics API client."""
 
-import os
 from typing import Any
 
 import httpx
@@ -10,7 +9,7 @@ class DuneClient:
     """Dune Analytics API client."""
 
     def __init__(self, api_key: str | None = None):
-        self._api_key = api_key or os.getenv("DUNE_API_KEY")
+        self._api_key = api_key or secret("DUNE_API_KEY", "")
         if not self._api_key:
             raise RuntimeError(
                 "DUNE_API_KEY not set.\nGet your API key at https://dune.com/settings/api"

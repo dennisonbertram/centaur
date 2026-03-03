@@ -24,7 +24,7 @@ class SlackClient:
     _USER_CACHE_TTL = 600  # 10 minutes
 
     def __init__(self, bot_token: str | None = None):
-        token = bot_token or os.getenv("SLACK_BOT_TOKEN")
+        token = bot_token or secret("SLACK_BOT_TOKEN", "")
         if not token:
             raise RuntimeError(
                 "SLACK_BOT_TOKEN not set.\n"
@@ -884,7 +884,7 @@ class SlackClient:
         """Download a Slack file to local path."""
         import urllib.request
 
-        token = os.getenv("SLACK_BOT_TOKEN")
+        token = secret("SLACK_BOT_TOKEN", "")
         if not token:
             raise RuntimeError("SLACK_BOT_TOKEN not set")
 

@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class GrafanaClient:
@@ -31,14 +32,14 @@ class GrafanaClient:
 
     @property
     def base_url(self) -> str:
-        return (self._url or os.getenv("GRAFANA_URL", "http://grafana:3000")).rstrip("/")
+        return (self._url or secret("GRAFANA_URL", "URL")).rstrip("/")
 
     def _auth_headers(self) -> dict[str, str]:
-        key = self._api_key or os.getenv("GRAFANA_API_KEY")
+        key = self._api_key or secret("GRAFANA_API_KEY", "")
         if key:
             return {"Authorization": f"Bearer {key}"}
         user = self._username or os.getenv("GRAFANA_USER", "admin")
-        pw = self._password or os.getenv("GRAFANA_PASSWORD")
+        pw = self._password or secret("GRAFANA_PASSWORD", "")
         if pw:
             import base64
 

@@ -1,7 +1,6 @@
 """Databento Historical API client for stock market data."""
 
 import json
-import os
 from typing import Any
 
 import httpx
@@ -13,7 +12,7 @@ class DatabentoClient:
     """Client for the Databento Historical API."""
 
     def __init__(self, api_key: str | None = None, timeout: float = 60.0):
-        self._api_key = api_key or os.getenv("DATABENTO_API_KEY")
+        self._api_key = api_key or secret("DATABENTO_API_KEY", "")
         if not self._api_key:
             raise RuntimeError(
                 "DATABENTO_API_KEY not set.\n"

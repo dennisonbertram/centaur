@@ -1,8 +1,8 @@
 """Tokenomist API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class TokenomistClient:
@@ -13,7 +13,7 @@ class TokenomistClient:
     """
 
     def __init__(self, api_key: str | None = None, timeout: float = 30.0):
-        self._api_key = api_key or os.getenv("TOKENOMIST_API_KEY")
+        self._api_key = api_key or secret("TOKENOMIST_API_KEY", "")
         if not self._api_key:
             raise RuntimeError("TOKENOMIST_API_KEY not set.")
         self.base_url = "https://api.tokenomist.ai/v1"

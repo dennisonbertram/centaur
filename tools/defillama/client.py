@@ -1,8 +1,8 @@
 """DefiLlama API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class DefiLlamaClient:
@@ -36,7 +36,7 @@ class DefiLlamaClient:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        return os.getenv("DEFILLAMA_API_KEY")
+        return secret("DEFILLAMA_API_KEY", "")
 
     def _request(
         self,
@@ -333,5 +333,5 @@ class DefiLlamaClient:
 
 
 def _client() -> DefiLlamaClient:
-    api_key = os.getenv("DEFILLAMA_API_KEY")
+    api_key = secret("DEFILLAMA_API_KEY", "")
     return DefiLlamaClient(api_key=api_key)

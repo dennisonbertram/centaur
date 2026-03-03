@@ -9,6 +9,7 @@ import uuid
 from base64 import urlsafe_b64encode
 
 import httpx
+from shared.tool_sdk import secret
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -47,7 +48,7 @@ class BloombergClient:
         """Get the DL (Data License) number."""
         if self._dl_number:
             return self._dl_number
-        dl = os.getenv("BLOOMBERG_DL_NUMBER")
+        dl = secret("BLOOMBERG_DL_NUMBER", "")
         if dl:
             return dl
         raise RuntimeError("Bloomberg DL number not found. Set BLOOMBERG_DL_NUMBER env var.")
@@ -72,11 +73,11 @@ class BloombergClient:
             return self._client_id, self._client_secret
 
         client_id = os.getenv("BLOOMBERG_CLIENT_ID")
-        client_secret = os.getenv("BLOOMBERG_CLIENT_SECRET")
+        client_secret = secret("BLOOMBERG_CLIENT_SECRET", "")
         if client_id and client_secret:
             return client_id, client_secret
 
-        api_key = os.getenv("BLOOMBERG_API_KEY")
+        api_key = secret("BLOOMBERG_API_KEY", "")
         if api_key and ":" in api_key:
             client_id, client_secret = api_key.split(":", 1)
             return client_id, client_secret

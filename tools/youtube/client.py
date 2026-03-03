@@ -1,9 +1,9 @@
 """YouTube Data API client."""
 
-import os
 import subprocess
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class YouTubeClient:
@@ -25,7 +25,7 @@ class YouTubeClient:
         """Get API key from instance, env var, or 1Password."""
         if self._api_key:
             return self._api_key
-        key = os.getenv("YOUTUBE_API_KEY")
+        key = secret("YOUTUBE_API_KEY", "") or secret("GOOGLE_API_KEY", "")
         if key:
             return key
         try:

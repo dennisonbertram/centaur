@@ -1,9 +1,9 @@
 """Crunchbase Enterprise API client."""
 
-import os
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class CrunchbaseClient:
@@ -25,7 +25,7 @@ class CrunchbaseClient:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        return os.getenv("CRUNCHBASE_API_KEY")
+        return secret("CRUNCHBASE_API_KEY", "")
 
     def _request(
         self,
@@ -303,4 +303,4 @@ class CrunchbaseClient:
 
 def _client() -> CrunchbaseClient:
     """Factory: create a CrunchbaseClient from env vars."""
-    return CrunchbaseClient(api_key=os.getenv("CRUNCHBASE_API_KEY"))
+    return CrunchbaseClient(api_key=secret("CRUNCHBASE_API_KEY", ""))

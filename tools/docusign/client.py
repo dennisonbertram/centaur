@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 import jwt
+from shared.tool_sdk import secret
 
 DEMO_AUTH_URL = "https://account-d.docusign.com"
 DEMO_API_URL = "https://demo.docusign.net/restapi"
@@ -25,12 +26,12 @@ class DocuSignClient:
         private_key_path: str | None = None,
         env: str | None = None,
     ):
-        self.integration_key = integration_key or os.environ.get("DOCUSIGN_INTEGRATION_KEY")
+        self.integration_key = integration_key or secret("DOCUSIGN_INTEGRATION_KEY", "")
         self.user_id = user_id or os.environ.get("DOCUSIGN_USER_ID")
         self.account_id = account_id or os.environ.get("DOCUSIGN_ACCOUNT_ID")
 
         private_key_path = private_key_path or os.environ.get("DOCUSIGN_PRIVATE_KEY_PATH")
-        self.private_key = private_key or os.environ.get("DOCUSIGN_PRIVATE_KEY")
+        self.private_key = private_key or secret("DOCUSIGN_PRIVATE_KEY", "")
 
         if private_key_path and not self.private_key:
             try:

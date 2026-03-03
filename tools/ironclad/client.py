@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 DEFAULT_BASE_URL = "https://na1.ironcladapp.com"
 
@@ -30,9 +31,9 @@ class IroncladClient:
         )
         self.api_url = f"{self.base_url}/public/api/v1"
 
-        self.api_token = api_token or os.environ.get("IRONCLAD_API_TOKEN")
+        self.api_token = api_token or secret("IRONCLAD_API_TOKEN", "")
         self.client_id = client_id or os.environ.get("IRONCLAD_CLIENT_ID")
-        self.client_secret = client_secret or os.environ.get("IRONCLAD_CLIENT_SECRET")
+        self.client_secret = client_secret or secret("IRONCLAD_CLIENT_SECRET", "")
 
         if not self.api_token and not (self.client_id and self.client_secret):
             raise RuntimeError(

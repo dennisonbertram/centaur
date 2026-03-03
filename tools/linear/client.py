@@ -1,9 +1,9 @@
 """Linear GraphQL API client."""
 
-import os
 from typing import Any
 
 import httpx
+from shared.tool_sdk import secret
 
 GRAPHQL_ENDPOINT = "https://api.linear.app/graphql"
 
@@ -12,7 +12,7 @@ class LinearClient:
     """Client for Linear's GraphQL API."""
 
     def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or os.getenv("LINEAR_API_KEY")
+        self.api_key = api_key or secret("LINEAR_API_KEY", "")
         if not self.api_key:
             raise RuntimeError(
                 "LINEAR_API_KEY not set.\n"

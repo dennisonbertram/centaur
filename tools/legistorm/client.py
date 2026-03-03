@@ -1,8 +1,8 @@
 """LegiStorm Congressional API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class LegiStormClient:
@@ -26,7 +26,7 @@ class LegiStormClient:
         return self._client
 
     def _get_api_key(self) -> str:
-        api_key = self._api_key or os.getenv("LEGISTORM_API_KEY")
+        api_key = self._api_key or secret("LEGISTORM_API_KEY", "")
         if not api_key:
             raise RuntimeError("LEGISTORM_API_KEY not set.")
         return api_key

@@ -1,8 +1,8 @@
 """Harmonic.AI API client."""
 
-import os
 
 import httpx
+from shared.tool_sdk import secret
 
 
 class HarmonicClient:
@@ -24,7 +24,7 @@ class HarmonicClient:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        return os.getenv("HARMONIC_API_KEY")
+        return secret("HARMONIC_API_KEY", "")
 
     def _request(
         self,
