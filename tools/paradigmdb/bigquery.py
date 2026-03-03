@@ -82,16 +82,16 @@ def get_transactions(
     sql = f"SELECT * FROM `{GCP_PROJECT}.{DATASET}.transactions_csv` WHERE 1=1"
 
     if ticker:
-        sql += f" AND UPPER(ticker) = UPPER('{ticker}')"
+        sql += f" AND UPPER(assetName) = UPPER('{ticker}')"
     if fund:
         sql += f" AND UPPER(fund) LIKE UPPER('%{fund}%')"
     if transaction_type:
-        sql += f" AND UPPER(transaction_type) LIKE UPPER('%{transaction_type}%')"
+        sql += f" AND UPPER(type) LIKE UPPER('%{transaction_type}%')"
     if start_date:
-        sql += f" AND DATE(transaction_date) >= '{start_date}'"
+        sql += f" AND executedDate >= '{start_date}'"
     if end_date:
-        sql += f" AND DATE(transaction_date) <= '{end_date}'"
+        sql += f" AND executedDate <= '{end_date}'"
 
-    sql += f" ORDER BY transaction_date DESC LIMIT {limit}"
+    sql += f" ORDER BY executedDate DESC LIMIT {limit}"
 
     return query_bigquery(sql, limit)
