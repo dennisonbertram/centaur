@@ -138,20 +138,75 @@ export function DataTable({
   const [sortDir, setSortDir] = useState<"asc" | "desc">(defaultSort?.direction ?? "asc");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
+  const [activeFilters, setActiveFilters] = useState<Record<string, Set<string>>>({});
   const parentRef = useRef<HTMLDivElement>(null);
 
   const visibleCols = useMemo(() => columns.filter((c) => !c.hidden), [columns]);
+  const filterableCols = useMemo(() => columns.filter((c) => c.filterable), [columns]);
+
+  const filterOptions = useMemo(() => {
+    const opts: Record<string, string[]> = {};
+    for (const col of filterableCols) {
+      const values = new Set<string>();
+      for (const row of data) {
+        const v = row[col.key];
+        if (v != null) values.add(String(v));
+      }
+      opts[col.key] = Array.from(values).sort();
+    }
+    return opts;
+  }, [data, filterableCols]);
+
+  const toggleFilter = useCallback((colKey: string, value: string) => {
+    setActiveFilters((prev) => {
+      const next = { ...prev };
+      const set = new Set(prev[colKey]);
+      if (set.has(value)) {
+        set.delete(value);
+      } else {
+        set.add(value);
+      }
+      next[colKey] = set;
+      return next;
+    });
+    setPage(0);
+  }, []);
+
+  const clearFilters = useCallback(() => {
+    setActiveFilters({});
+    setPage(0);
+  }, []);
+
+  const hasActiveFilters = useMemo(
+    () => Object.values(activeFilters).some((s) => s.size > 0),
+    [activeFilters],
+  );
 
   const filtered = useMemo(() => {
-    if (!search) return data;
-    const q = search.toLowerCase();
-    return data.filter((row) =>
-      visibleCols.some((col) => {
-        const v = row[col.key];
-        return v != null && String(v).toLowerCase().includes(q);
-      }),
-    );
-  }, [data, search, visibleCols]);
+    let rows = data;
+
+    // Apply column filters
+    for (const [colKey, values] of Object.entries(activeFilters)) {
+      if (values.size === 0) continue;
+      rows = rows.filter((row) => {
+        const v = row[colKey];
+        return v != null && values.has(String(v));
+      });
+    }
+
+    // Apply search
+    if (search) {
+      const q = search.toLowerCase();
+      rows = rows.filter((row) =>
+        visibleCols.some((col) => {
+          const v = row[col.key];
+          return v != null && String(v).toLowerCase().includes(q);
+        }),
+      );
+    }
+
+    return rows;
+  }, [data, search, visibleCols, activeFilters]);
 
   const sorted = useMemo(() => {
     if (!sortKey) return filtered;
@@ -236,21 +291,62 @@ export function DataTable({
 
   return (
     <div className="overflow-hidden rounded-md border border-border bg-card">
-      {(title || searchable) && (
-        <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-          {title && <h3 className="text-sm font-medium text-foreground">{title}</h3>}
-          <div className="ml-auto flex items-center gap-2">
-            <span className="text-xs tabular-nums text-muted-foreground">{sorted.length} {sorted.length === 1 ? "row" : "rows"}</span>
-            {searchable && (
-              <Input
-                type="search"
-                placeholder="Search…"
-                value={search}
-                onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-                className="h-8 w-48 border-border bg-background px-2.5 text-sm shadow-none focus-visible:ring-1"
-              />
-            )}
+      {(title || searchable || filterableCols.length > 0) && (
+        <div className="border-b border-border px-4 py-3">
+          <div className="flex items-center gap-3">
+            {title && <h3 className="text-sm font-medium text-foreground">{title}</h3>}
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-xs tabular-nums text-muted-foreground">{sorted.length} {sorted.length === 1 ? "row" : "rows"}</span>
+              {searchable && (
+                <Input
+                  type="search"
+                  placeholder="Search…"
+                  value={search}
+                  onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+                  className="h-8 w-48 border-border bg-background px-2.5 text-sm shadow-none focus-visible:ring-1"
+                />
+              )}
+            </div>
           </div>
+          {filterableCols.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+              {filterableCols.map((col) => {
+                const options = filterOptions[col.key] ?? [];
+                const active = activeFilters[col.key];
+                return (
+                  <div key={col.key} className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{col.label}</span>
+                    {options.map((val) => {
+                      const isActive = active?.has(val);
+                      return (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => toggleFilter(col.key, val)}
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                            isActive
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+                          }`}
+                        >
+                          {val}
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="text-[10px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 

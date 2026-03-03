@@ -27,8 +27,8 @@ const SAMPLE_DASHBOARD: DashboardSpec = {
             searchable: true,
             columns: [
               { key: "name", label: "Asset", format: "text" as const, sortable: true, cell: { type: "avatar" as const } },
-              { key: "type", label: "Type", format: "text" as const, cell: { type: "badge" as const, intentMap: { "Token": "default", "Public Equity": "success", "Private": "outline" } } },
-              { key: "fund", label: "Fund", format: "text" as const, cell: { type: "pill" as const, colorMap: { "P1": "chart-1", "PF": "chart-2" } } },
+              { key: "type", label: "Type", format: "text" as const, filterable: true, cell: { type: "badge" as const, intentMap: { "Token": "default", "Public Equity": "success", "Private": "outline" } } },
+              { key: "fund", label: "Fund", format: "text" as const, filterable: true, cell: { type: "pill" as const, colorMap: { "P1": "chart-1", "PF": "chart-2" } } },
               { key: "value", label: "Market Value", format: "compact-currency" as const, sortable: true, align: "right" as const },
               { key: "weight", label: "Weight", format: "percent" as const, sortable: true, align: "right" as const },
               { key: "mtdReturn", label: "MTD Return", format: "percent" as const, sortable: true, align: "right" as const },

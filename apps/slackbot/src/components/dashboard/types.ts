@@ -36,6 +36,7 @@ export interface ColumnDef {
   label: string;
   format: CellFormat;
   sortable?: boolean;
+  filterable?: boolean; // show filter pills for this column's unique values
   cell?: CellRenderer;
   minWidth?: number; // px — prevents truncation
   align?: "left" | "right" | "center";
