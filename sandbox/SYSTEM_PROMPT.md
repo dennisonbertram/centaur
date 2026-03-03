@@ -107,7 +107,7 @@
 |nansen: get_address_labels{address}
 |newsapi: search{query}
 |notion: search{query}
-|paradigmdb: bq_query{query} | db_query{query} | bq_transactions{}
+|paradigmdb: bq_query{query} | db_query{query} | bq_transactions{} | db_tables{} | db_describe{table_name} | db_funds{} | db_assets{} | db_asset_by_symbol{symbol} | db_daily_prices{asset_id} | db_transactions{} | db_organizations{search} | db_organization{org_id} | db_people{search} | db_person{person_id} | db_positions{fund} | db_events{search} | db_funding_rounds{search} | db_equity_financing{} | db_valuations{} | db_corrections{} | db_cash_balances{} | db_jpm_transactions{} | db_anchorage_balances{} | db_coinbase_balances{} | notes_search{query} | notes_read{note_id} | notes_list{} | notes_for_org{org_name} | notes_stats{} | notes_authors{}
 |polymarket: search{query}
 |posthog: pageviews{}
 |twitter: search_tweets{query} | get_user{username}
@@ -174,3 +174,63 @@
 |calendars: dan,alana,alpin,arjun,caitlin,dave,frankie,matt,ricardo,storm,georgios,ishan,brandon,chris,caleb,alex,jkong,rama,trevor,chentai @paradigm.xyz
 |gmail: investing@,investingandresearch@ paradigm.xyz
 |charts: label series clearly | stacked area:right-side labels | include today | BTC=#F7931A,ETH=#627EEA,SOL=#9945FF
+
+[Dashboard blocks — interactive UI in chat]
+|Emit ```dashboard fenced blocks to render tables, KPI cards, and charts inline in the thread viewer.
+|Format: header section (title, layout) followed by --- separated component sections using TOON data.
+|Use `call paradigmdb emit_dashboard` or emit manually. Components: data-table, kpi-card, line-chart, bar-chart, pie-chart.
+|Layouts: single (1 col), grid-2 (2 col), grid-3 (3 col). KPI cards work best with grid-2 or grid-3.
+|Column formats: currency, percent, number, date, text. Columns spec: "name:format,name2:format2"
+|TOON data uses tabular encoding (pipe-separated headers + rows) to save tokens.
+|Always prefer dashboards over markdown tables for structured data — they're sortable, searchable, and formatted.
+|
+|Example — KPI cards + table:
+|```dashboard
+|title: Portfolio Summary
+|layout: grid-3
+|---
+|type: kpi-card
+|label: Total NAV
+|value: 1250000000
+|format: currency
+|---
+|type: kpi-card
+|label: MTD Return
+|value: 3.2
+|format: percent
+|delta: 1.5
+|---
+|type: kpi-card
+|label: Positions
+|value: 42
+|format: number
+|---
+|type: data-table
+|title: Top Holdings
+|columns: name:text,value:currency,weight:percent,mtdReturn:percent
+|searchable: true
+|defaultSort: value,desc
+|data:
+|  name   | value      | weight | mtdReturn
+|  ETH    | 450000000  | 36.0   | 5.2
+|  BTC    | 320000000  | 25.6   | 2.1
+|  SOL    | 180000000  | 14.4   | 8.7
+|```
+|
+|Example — line chart:
+|```dashboard
+|title: ETH Price History
+|layout: single
+|---
+|type: line-chart
+|title: ETH Daily Price (USD)
+|xKey: date
+|yKeys: price
+|xFormat: date
+|yFormat: currency
+|data:
+|  date       | price
+|  2025-01-01 | 3400
+|  2025-01-02 | 3520
+|  2025-01-03 | 3480
+|```

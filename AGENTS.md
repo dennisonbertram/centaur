@@ -2,7 +2,7 @@
 
 ## ⚠️ Production Box — Hands Off
 
-**NEVER SSH into, deploy to, restart, rebuild, or run any command on the production box (206.223.235.69) unless the user explicitly tells you to.** This includes `docker compose`, `systemctl`, `scp`, or any remote command. Always do work locally first and let CI handle deploys, or wait for explicit instruction.
+**NEVER SSH into, deploy to, restart, rebuild, or run any command on the production box (svc-ai.paradigm.xyz) unless the user explicitly tells you to.** This includes `docker compose`, `systemctl`, `scp`, or any remote command. Always do work locally first and let CI handle deploys, or wait for explicit instruction.
 
 ## Architecture Overview
 
@@ -178,7 +178,7 @@ Next.js app serving the agent conversation UI:
 
 ## Deployment — CI/CD (preferred)
 
-All deploys happen automatically via GitHub Actions on merge to `main`. **Never SSH to deploy** — just push to main and the self-hosted runner on `206.223.235.69` handles it.
+All deploys happen automatically via GitHub Actions on merge to `main`. **Never SSH to deploy** — just push to main and the self-hosted runner on `svc-ai.paradigm.xyz` handles it.
 
 | Change | Deploy action |
 |--------|--------------|
@@ -322,12 +322,22 @@ All installed skills across `~/.config/agents/skills/`, `~/.agents/skills/`, and
 - **No piping output through `head`, `tail`, `| python3`, `| jq`, etc.** unless the user explicitly asks. Run commands directly and let output stream naturally. If output is too long, re-run with a targeted filter.
 - **No chaining unrelated commands** with `&&`. Make separate tool calls instead.
 
+## Hostnames — NEVER use raw IPs
+
+**Always use `svc-ai.paradigm.xyz`** — never `206.223.235.69` or any IP address.
+This applies everywhere: API URLs, SSH, env vars, docs, curl commands, AGENTS.md itself.
+The hostname is the stable identifier; the IP can change.
+
+- API: `https://svc-ai.paradigm.xyz` (nginx on :443/:8000)
+- SSH: `ssh ubuntu@svc-ai.paradigm.xyz`
+- Local dev slackbot: `AI_V2_API_URL=https://svc-ai.paradigm.xyz`
+
 ## Debugging (SSH only for logs)
 
 SSH is only for reading logs and inspecting state — never for deploying:
 
 ```bash
-make ssh              # ssh ubuntu@206.223.235.69
+make ssh              # ssh ubuntu@svc-ai.paradigm.xyz
 make ps R=1           # docker compose ps on remote
 make logs-api R=1     # API logs on remote
 make logs-bot R=1     # slackbot logs on remote
