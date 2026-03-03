@@ -12,7 +12,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ChevronLeft, ChevronRight, RefreshCw, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -26,6 +26,7 @@ import { detailHrefWithEntrySource, nextListQueryString } from "@/lib/thread-nav
 import { isRunningState } from "@/lib/thread-ordering";
 import { runningSubtitle, type ThreadStatusFilter } from "@/lib/thread-selectors";
 import { isTextInputTarget } from "@/lib/thread-utils";
+import Link from "next/link";
 
 export type ThreadSidebarHandle = {
   focusSearch: () => void;
@@ -276,6 +277,21 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
             </p>
           </div>
           <div className="flex items-center gap-1.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  asChild
+                  variant="outline"
+                  size="icon-sm"
+                  className="border-border/80 bg-card/60 text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground"
+                >
+                  <Link href="/" onClick={() => onNavigate?.()}>
+                    <Plus className="size-4" />
+                  </Link>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>New Session</TooltipContent>
+            </Tooltip>
             <Button
               type="button"
               onClick={() => void refreshThreads()}
