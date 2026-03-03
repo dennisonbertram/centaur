@@ -121,6 +121,13 @@ html {
   width: 280px;
   min-width: 224px;
   max-width: 384px;
+  transition: width 200ms ease, min-width 200ms ease, max-width 200ms ease;
+}
+
+.threads-sidebar-collapsed .thread-shell-sidebar {
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
 }
 
 [data-thread-feed-scroll],

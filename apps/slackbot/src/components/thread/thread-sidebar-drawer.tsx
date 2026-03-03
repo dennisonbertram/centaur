@@ -8,7 +8,7 @@ import { StateDot } from "@/components/ui/state-dot";
 import { cn } from "@/lib/utils";
 import type { ThreadSummary } from "@/lib/types";
 import { threadName as fallbackName } from "@/lib/thread-name";
-import { timeAgo } from "@/lib/format";
+import { absoluteTime, timeAgo } from "@/lib/format";
 
 type ThreadSidebarDrawerProps = {
   open: boolean;
@@ -197,7 +197,7 @@ export function ThreadSidebarDrawer({ open, onClose, threads, activeKey }: Threa
                   <span>·</span>
                   <span>{t.turn_count}t</span>
                   <span>·</span>
-                  <span>{timeAgo(t.last_activity)}</span>
+                  <span title={absoluteTime(t.last_activity)}>{timeAgo(t.last_activity)}</span>
                 </div>
               </Link>
             );

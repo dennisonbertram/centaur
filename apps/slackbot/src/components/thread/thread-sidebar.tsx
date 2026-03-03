@@ -23,6 +23,7 @@ import { StateDot } from "@/components/ui/state-dot";
 import { useElapsed } from "@/hooks/use-elapsed";
 
 import { BASE } from "@/lib/constants";
+import { absoluteTime } from "@/lib/format";
 import { threadName } from "@/lib/thread-name";
 import { PHASES, type ThreadSummary } from "@/lib/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -71,7 +72,7 @@ function runningSubtitle(thread: ThreadSummary): string | null {
 
 function ThreadAge({ thread }: { thread: ThreadSummary }) {
   const elapsed = useElapsed(thread.last_activity, isRunningState(thread.state));
-  return <span>{elapsed}</span>;
+  return <span title={absoluteTime(thread.last_activity ?? 0)}>{elapsed}</span>;
 }
 
 type DateGroup = "Today" | "Yesterday" | "This Week" | "Older";
