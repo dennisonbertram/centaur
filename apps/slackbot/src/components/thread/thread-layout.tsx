@@ -259,8 +259,8 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <ThreadLayoutContext.Provider value={contextValue}>
-      <div className="thread-shell flex h-full md:h-[calc(100dvh-44px)]">
-        <aside className="thread-shell-sidebar hidden w-[320px] shrink-0 border-r border-border/90 bg-card/35 shadow-[inset_-1px_0_0_rgba(255,255,255,0.03)] md:flex">
+      <div className="thread-shell relative flex h-full overflow-hidden md:h-[calc(100dvh-44px)]">
+        <aside className="thread-shell-sidebar relative hidden shrink-0 border-r border-border/80 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--card)_88%,transparent),color-mix(in_oklab,var(--background)_94%,transparent))] shadow-[inset_-1px_0_0_rgba(255,255,255,0.05),0_0_0_1px_rgba(255,255,255,0.03)] md:flex">
           <Suspense fallback={<div className="h-full w-full bg-card/35" />}>
             <ThreadSidebar
               ref={desktopSidebarRef}
@@ -274,7 +274,7 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
         <section
           ref={panelRef}
           tabIndex={-1}
-          className="thread-shell-panel min-h-0 min-w-0 flex-1 bg-background outline-none"
+          className="thread-shell-panel min-h-0 min-w-0 flex-1 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_92%,transparent),var(--background))] outline-none"
         >
           {children}
         </section>
@@ -284,7 +284,7 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
         <div className="fixed inset-0 z-50 md:hidden">
           <button
             type="button"
-            className="absolute inset-0 border-0 bg-black/55 p-0 backdrop-blur-[1px] transition-opacity duration-200 ease-out motion-reduce:transition-none opacity-100"
+            className="absolute inset-0 border-0 bg-black/70 p-0 backdrop-blur-[2px] transition-opacity duration-200 ease-out motion-reduce:transition-none opacity-100"
             aria-label="Close thread sidebar"
             onClick={closeMobileSidebar}
           />
@@ -293,7 +293,7 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
             role="dialog"
             aria-modal="true"
             aria-label="Threads"
-            className="absolute inset-y-0 left-0 flex w-[320px] max-w-[88vw] flex-col overflow-y-auto overscroll-contain border-r border-border/90 bg-card shadow-[0_24px_80px_rgba(0,0,0,0.55)] transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform motion-reduce:transition-none motion-reduce:transform-none translate-x-0"
+            className="absolute inset-y-0 left-0 flex w-[320px] max-w-[88vw] flex-col overflow-y-auto overscroll-contain border-r border-border/80 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--card)_92%,transparent),color-mix(in_oklab,var(--background)_96%,transparent))] shadow-[0_24px_80px_rgba(0,0,0,0.6),inset_-1px_0_0_rgba(255,255,255,0.04)] transition-transform duration-[var(--dur-slow)] ease-[var(--ease-snappy)] motion-reduce:transition-none motion-reduce:transform-none translate-x-0"
           >
             <div className="flex items-center justify-end border-b border-border px-2 py-2">
               <button

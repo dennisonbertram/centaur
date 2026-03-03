@@ -42,27 +42,31 @@ export function ParticipantAvatars({
   participants,
   max = 3,
   size = 20,
+  decorative = true,
 }: {
   participants?: Participant[];
   max?: number;
   size?: number;
+  decorative?: boolean;
 }) {
   const resolved = (participants ?? []).filter((p) => String(p.id || "").trim().length > 0);
   if (resolved.length === 0) return null;
   const visible = resolved.slice(0, max);
   const overflow = resolved.length - visible.length;
+  const ariaSummary = resolved.map(participantLabel).join(", ");
 
   return (
-    <div className="inline-flex items-center -space-x-1.5">
+    <div
+      className="inline-flex items-center -space-x-1.5"
+      aria-hidden={decorative || undefined}
+      aria-label={decorative ? undefined : `Participants: ${ariaSummary}`}
+    >
       {visible.map((participant) => {
         const label = participantLabel(participant);
         return (
           <Tooltip key={participant.id}>
             <TooltipTrigger asChild>
               <span
-                tabIndex={0}
-                role="img"
-                aria-label={label}
                 className={cn(
                   "ring-2 ring-background rounded-full shrink-0 overflow-hidden flex items-center justify-center text-xs font-semibold",
                   !participant.avatar_url && colorForId(participant.id),
@@ -73,7 +77,7 @@ export function ParticipantAvatars({
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={participant.avatar_url}
-                    alt={label}
+                    alt=""
                     loading="lazy"
                     className="w-full h-full object-cover"
                   />
@@ -90,9 +94,6 @@ export function ParticipantAvatars({
         <Tooltip>
           <TooltipTrigger asChild>
             <span
-              tabIndex={0}
-              role="img"
-              aria-label={`${overflow} more participant${overflow === 1 ? "" : "s"}`}
               className="ring-2 ring-background rounded-full bg-secondary text-muted-foreground shrink-0 flex items-center justify-center text-xs font-semibold"
               style={{ width: size, height: size }}
             >

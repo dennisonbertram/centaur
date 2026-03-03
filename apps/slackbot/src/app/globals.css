@@ -84,6 +84,16 @@ textarea {
   body {
     background:
       radial-gradient(
+        85% 55% at 100% -10%,
+        color-mix(in oklab, var(--primary) 13%, transparent),
+        transparent 60%
+      ),
+      radial-gradient(
+        70% 45% at -10% 5%,
+        color-mix(in oklab, var(--chart-2) 11%, transparent),
+        transparent 68%
+      ),
+      radial-gradient(
         120% 80% at 50% -20%,
         color-mix(in oklab, var(--primary) 8%, transparent),
         transparent 58%
@@ -117,15 +127,65 @@ select {
 }
 
 .thread-shell {
+  position: relative;
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }
 
+.thread-shell::before {
+  content: "";
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--foreground) 2%, transparent), transparent 22%),
+    radial-gradient(60% 35% at 65% -15%, color-mix(in oklab, var(--primary) 12%, transparent), transparent 70%);
+  opacity: 0.7;
+  z-index: 0;
+}
+
+.thread-shell > * {
+  position: relative;
+  z-index: 1;
+}
+
+.thread-surface {
+  border: 1px solid color-mix(in oklab, var(--border) 82%, transparent);
+  background:
+    linear-gradient(
+      165deg,
+      color-mix(in oklab, var(--card) 88%, transparent),
+      color-mix(in oklab, var(--background) 90%, transparent)
+    );
+  box-shadow:
+    0 14px 36px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.thread-surface-soft {
+  border: 1px solid color-mix(in oklab, var(--border) 74%, transparent);
+  background:
+    linear-gradient(
+      160deg,
+      color-mix(in oklab, var(--card) 88%, transparent),
+      color-mix(in oklab, var(--background) 92%, transparent)
+    );
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.thread-action-transition {
+  transition-property: background-color, border-color, color, box-shadow, transform, opacity;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: var(--ease-standard);
+}
+
 .thread-shell-sidebar {
-  width: 280px;
-  min-width: 224px;
+  width: 308px;
+  min-width: 240px;
   max-width: 384px;
   transition:
     width var(--dur-base) var(--ease-snappy),
@@ -250,7 +310,7 @@ select {
 }
 
 .thin-scrollbar::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: color-mix(in oklab, var(--border) 70%, var(--foreground) 14%);
   border-radius: 9999px;
   border: 1px solid transparent;
   background-clip: content-box;

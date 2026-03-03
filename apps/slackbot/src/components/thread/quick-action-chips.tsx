@@ -50,20 +50,20 @@ export function QuickActionChips({ threadState, onAction, className }: QuickActi
     <div
       data-state={visibility}
       className={cn(
-        "border-t border-border/70 bg-background/95 px-3 py-2 backdrop-blur-sm md:hidden",
-        "data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom-2 data-[state=open]:fade-in data-[state=open]:duration-200",
-        "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom-2 data-[state=closed]:fade-out data-[state=closed]:duration-150",
+        "border-t border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_88%,transparent),color-mix(in_oklab,var(--card)_82%,transparent))] px-3 py-2 backdrop-blur-md md:hidden",
+        "data-[state=open]:animate-in data-[state=open]:slide-in-from-bottom-2 data-[state=open]:fade-in data-[state=open]:duration-[var(--dur-base)]",
+        "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom-2 data-[state=closed]:fade-out data-[state=closed]:duration-[var(--dur-fast)]",
         className,
       )}
     >
-      <Suggestions>
+      <Suggestions className="rounded-xl border border-border/70 bg-card/45 p-1.5 shadow-[0_12px_30px_rgba(0,0,0,0.2)]">
         {renderedChips.map((chip) => (
           <Suggestion
             key={chip.value}
             suggestion={chip.value}
             variant={chip.variant ?? "outline"}
             onClick={onAction}
-            className="min-h-[44px]"
+            className="min-h-[44px] rounded-lg border-border/70"
           >
             {chip.label}
           </Suggestion>

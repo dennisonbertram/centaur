@@ -103,7 +103,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
   return (
     <div
       className={cn(
-        "flex-shrink-0 border-t border-border/90 bg-background/95 px-3 py-2.5 backdrop-blur-sm",
+        "flex-shrink-0 border-t border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_90%,transparent),color-mix(in_oklab,var(--card)_84%,transparent))] px-3 py-2.5 backdrop-blur-md",
         className,
       )}
       style={{
@@ -115,7 +115,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
     >
       <form
         onSubmit={(e) => { e.preventDefault(); void handleSend(); }}
-        className="flex items-end gap-2.5"
+        className="thread-surface mx-auto flex max-w-[1120px] items-end gap-2.5 rounded-xl p-2"
         aria-label="Message composer"
       >
         <label htmlFor="chat-input" className="sr-only">Message</label>
@@ -136,7 +136,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
           className={cn(
             "flex-1 min-w-0 min-h-[44px] resize-none",
             "text-[16px] md:text-sm leading-[22px]",
-            "rounded-md border border-input bg-card px-3.5 py-2.5",
+            "rounded-lg border border-input/80 bg-background/85 px-3.5 py-2.5",
             "shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] focus:border-ring focus:ring-1 focus:ring-ring",
             "placeholder:text-muted-foreground text-foreground",
             "outline-none transition-colors",
@@ -152,9 +152,10 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
           <button
             type="button"
             disabled
-            className="flex size-[44px] flex-shrink-0 items-center justify-center rounded-md bg-primary/60 text-primary-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.2)]"
+            aria-label="Sending message"
+            className="flex size-[44px] flex-shrink-0 items-center justify-center rounded-lg bg-primary/60 text-primary-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.2)]"
           >
-            <Loader2 className="size-5 animate-spin" />
+            <Loader2 aria-hidden="true" className="size-5 animate-spin" />
           </button>
         ) : (
           <>
@@ -162,24 +163,24 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
               <button
                 type="button"
                 onClick={() => void handleStop()}
-                className="flex size-[44px] flex-shrink-0 items-center justify-center rounded-md bg-destructive/80 text-destructive-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.2)] transition-[background-color,color,transform,opacity] duration-200 ease-out"
+                className="flex size-[44px] flex-shrink-0 items-center justify-center rounded-lg bg-destructive/80 text-destructive-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.2)] transition-[background-color,color,transform,opacity] duration-[var(--dur-base)] ease-[var(--ease-standard)]"
                 aria-label="Stop agent"
               >
-                <Square className="size-4" />
+                <Square aria-hidden="true" className="size-4" />
               </button>
             ) : null}
             <button
               type="submit"
               disabled={!hasText}
               className={cn(
-                "flex size-[44px] flex-shrink-0 items-center justify-center rounded-md shadow-[0_0_0_1px_rgba(0,0,0,0.2)] transition-[background-color,color,transform,opacity] duration-200 ease-out",
+                "flex size-[44px] flex-shrink-0 items-center justify-center rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.2)] transition-[background-color,color,transform,opacity] duration-[var(--dur-base)] ease-[var(--ease-standard)]",
                 hasText
                   ? "bg-primary text-primary-foreground"
                   : "bg-primary/40 text-primary-foreground/40 pointer-events-none",
               )}
               aria-label="Send message"
             >
-              <ArrowUp className="size-5" />
+              <ArrowUp aria-hidden="true" className="size-5" />
             </button>
           </>
         )}

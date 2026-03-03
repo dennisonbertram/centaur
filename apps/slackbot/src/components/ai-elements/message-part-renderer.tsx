@@ -225,7 +225,7 @@ export function MessagePartRenderer({
       <Terminal
         output={combinedOutput}
         isStreaming={Boolean(step.streaming)}
-        className={isFailed ? "border-destructive/30" : ""}
+        className={isFailed ? "border-destructive/30" : "border-border/70"}
       >
         <TerminalHeader>
           <TerminalTitle>{step.description}</TerminalTitle>
@@ -298,7 +298,7 @@ export function MessagePartRenderer({
     const displayName = participantDisplayName(participant, step.userId, "User");
     const turnDuration = step.turnId ? turnDurationsById[step.turnId] : undefined;
     return (
-      <div className="rounded-md border-l-[3px] border-l-primary bg-primary/5 px-3 py-2.5">
+      <div className="rounded-xl border border-primary/20 bg-[linear-gradient(160deg,color-mix(in_oklab,var(--primary)_9%,transparent),color-mix(in_oklab,var(--card)_84%,transparent))] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
         <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
           {participant?.avatar_url ? (
             <img src={participant.avatar_url} alt={displayName} className="size-[18px] rounded-full" />
@@ -314,7 +314,7 @@ export function MessagePartRenderer({
               {formatDuration(turnDuration)}
             </span>
           ) : null}
-          <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs">
+          <span className="rounded-md border border-border/70 bg-background/70 px-1.5 py-0.5 text-xs">
             {sourceLabel(step.source)}
           </span>
         </div>
@@ -325,7 +325,7 @@ export function MessagePartRenderer({
 
   if (step.type === "context-group") {
     return (
-      <details className="group rounded-md border border-border/50 bg-card/45">
+      <details className="group rounded-xl border border-border/60 bg-card/45">
         <summary className="flex min-h-[44px] list-none cursor-pointer items-center gap-2 px-3 py-2 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
           <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
           {step.items.length} message{step.items.length === 1 ? "" : "s"} in thread
@@ -355,7 +355,7 @@ export function MessagePartRenderer({
 
   if (step.type === "result") {
     return (
-      <div className="rounded-md border border-border bg-card px-3 py-2">
+      <div className="rounded-xl border border-border/70 bg-[linear-gradient(160deg,color-mix(in_oklab,var(--card)_92%,transparent),color-mix(in_oklab,var(--background)_90%,transparent))] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
         <MessageActions className="mb-1">
           <MessageAction
             tooltip="Copy result"
@@ -385,7 +385,7 @@ export function MessagePartRenderer({
     return (
       <div
         className={cn(
-          "rounded-md border px-3 py-2 text-xs",
+          "rounded-xl border px-3 py-2 text-xs",
           step.tone === "warn" ? "border-primary/30 bg-primary/10" : "border-border/60 bg-card/40",
         )}
       >

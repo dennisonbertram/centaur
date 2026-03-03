@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   forwardRef,
@@ -13,27 +12,19 @@ import {
   useRef,
   useState,
 } from "react";
-import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
-import { ParticipantAvatars } from "@/components/thread/participant-avatars";
-import { Progress } from "@/components/ui/progress";
+import { ChevronLeft, ChevronRight, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { HarnessBadge } from "@/components/ui/harness-badge";
-import { StateDot } from "@/components/ui/state-dot";
-import { useElapsed } from "@/hooks/use-elapsed";
+import { ThreadStatusTabs } from "@/components/thread/thread-status-tabs";
+import { ThreadSummaryCard } from "@/components/thread/thread-summary-card";
+import { type VisibleThreadStatusFilter } from "@/components/thread/thread-ui-constants";
 import { useThreadList } from "@/hooks/use-thread-list";
 import { useThreadPresence } from "@/hooks/use-thread-presence";
-import { PHASES, type ThreadSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { detailHrefWithEntrySource, nextListQueryString } from "@/lib/thread-navigation";
 import { isRunningState } from "@/lib/thread-ordering";
-import {
-  getThreadDisplayName,
-  parseActivePhase,
-  runningSubtitle,
-  type ThreadStatusFilter,
-} from "@/lib/thread-selectors";
+import { runningSubtitle, type ThreadStatusFilter } from "@/lib/thread-selectors";
 import { isTextInputTarget } from "@/lib/thread-utils";
 
 export type ThreadSidebarHandle = {
@@ -49,11 +40,6 @@ type ThreadSidebarProps = {
   showCollapseToggle?: boolean;
   active?: boolean;
 };
-
-function ThreadAge({ thread }: { thread: ThreadSummary }) {
-  const elapsed = useElapsed(thread.last_activity, isRunningState(thread.state));
-  return <span>{elapsed}</span>;
-}
 
 export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>(function ThreadSidebar(
   {
@@ -77,6 +63,8 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
   const detailPrefetchAtRef = useRef<Record<string, number>>({});
   const initialQuery = searchParams.get("q") ?? "";
   const initialStatus = (searchParams.get("status") as ThreadStatusFilter | null) ?? "all";
+  const normalizedInitialStatus: VisibleThreadStatusFilter =
+    initialStatus === "active" || initialStatus === "error" ? initialStatus : "all";
   const {
     threads,
     filteredThreads: sortedThreads,
@@ -91,8 +79,10 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
     refreshThreads,
   } = useThreadList({
     query: initialQuery,
-    statusFilter: initialStatus,
+    statusFilter: normalizedInitialStatus,
   });
+  const visibleStatusFilter: VisibleThreadStatusFilter =
+    statusFilter === "active" || statusFilter === "error" ? statusFilter : "all";
   const sidebarQueryString = useMemo(() => {
     return nextListQueryString(new URLSearchParams(searchParams.toString()), {
       query,
@@ -107,6 +97,19 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
     const next = sidebarQueryString ? `${pathname}?${sidebarQueryString}` : pathname;
     router.replace(next, { scroll: false });
   }, [pathname, router, searchParams, shouldSyncUrl, sidebarQueryString]);
+
+  useEffect(() => {
+    const nextQuery = searchParams.get("q") ?? "";
+    const nextStatusRaw = (searchParams.get("status") as ThreadStatusFilter | null) ?? "all";
+    const nextStatus: VisibleThreadStatusFilter =
+      nextStatusRaw === "active" || nextStatusRaw === "error" ? nextStatusRaw : "all";
+    if (nextQuery !== query) {
+      setQuery(nextQuery);
+    }
+    if (nextStatus !== visibleStatusFilter) {
+      setStatusFilter(nextStatus);
+    }
+  }, [query, searchParams, setQuery, setStatusFilter, visibleStatusFilter]);
 
   useEffect(() => {
     if (sortedThreads.length === 0) {
@@ -156,19 +159,6 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
     sortedThreads.slice(0, 5).forEach((thread) => prefetchThread(thread.slack_thread_key));
   }, [active, prefetchThread, sortedThreads]);
 
-  const openThread = useCallback(
-    (threadKey: string) => {
-      const href = detailHrefWithEntrySource(threadKey, {
-        source: "threads",
-        listQuery: sidebarQueryString,
-        anchor: threadKey,
-      });
-      router.push(href);
-      onNavigate?.();
-    },
-    [onNavigate, router, sidebarQueryString],
-  );
-
   const focusThreadAt = useCallback(
     (nextIndex: number) => {
       const next = sortedThreads[nextIndex];
@@ -211,15 +201,8 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
         focusThreadAt(sortedThreads.length - 1);
         return;
       }
-      if (event.key === "Enter") {
-        const target = event.target instanceof HTMLElement ? event.target : null;
-        if (!target?.closest("[role='option']")) return;
-        event.preventDefault();
-        const current = sortedThreads[currentIndex];
-        if (current) openThread(current.slack_thread_key);
-      }
     },
-    [focusThreadAt, focusedThreadKey, openThread, sortedThreads],
+    [focusThreadAt, focusedThreadKey, sortedThreads],
   );
 
   useImperativeHandle(
@@ -269,7 +252,7 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
                 aria-label="Expand sidebar"
                 variant="outline"
                 size="icon"
-                className="size-9 border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+                className="size-9 border-border text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground"
               >
                 <ChevronRight className="size-4" />
               </Button>
@@ -283,12 +266,13 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col" onKeyDown={handleListKeyDown}>
-      <div className="border-b border-border/80 bg-background/70 px-3 py-2.5 backdrop-blur-sm">
+      <div className="border-b border-border/70 bg-background/70 px-3 py-3 backdrop-blur-md">
+        <div className="thread-surface-soft rounded-xl p-2.5">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold text-foreground">Threads</h2>
+            <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">Threads</h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {activeCount} active agent{activeCount === 1 ? "" : "s"}
+              {activeCount} live agent{activeCount === 1 ? "" : "s"}
             </p>
           </div>
           <div className="flex items-center gap-1.5">
@@ -298,7 +282,7 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
               disabled={isRefreshing || !active}
               variant="outline"
               size="xs"
-              className="gap-1 border-border px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
+              className="gap-1 border-border/80 bg-card/60 px-2 text-xs text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
               aria-busy={isRefreshing}
             >
               <RefreshCw className={cn("size-3", isRefreshing ? "animate-spin" : "")} />
@@ -312,17 +296,18 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
                 aria-label="Collapse sidebar"
                 variant="outline"
                 size="icon-sm"
-                className="border-border text-muted-foreground hover:bg-accent hover:text-foreground"
+                className="border-border/80 bg-card/60 text-muted-foreground transition-colors duration-[var(--dur-fast)] ease-[var(--ease-standard)] hover:bg-accent hover:text-foreground"
               >
                 <ChevronLeft className="size-4" />
               </Button>
             ) : null}
           </div>
         </div>
-        <div className="mt-2">
+        <div className="mt-2.5 relative">
           <label htmlFor={filterId} className="sr-only">
             Filter threads
           </label>
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             ref={searchRef}
             id={filterId}
@@ -331,34 +316,23 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Filter threads… (/)"
             autoComplete="off"
-            className="h-9 border-input bg-card px-2.5 text-sm shadow-none focus-visible:ring-1"
+            className="h-9 border-input/80 bg-background/80 pl-8 pr-7 text-sm shadow-none focus-visible:ring-1"
           />
+          <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-border/80 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
+            /
+          </span>
         </div>
-        <div className="mt-2 inline-flex w-full rounded-md border border-border bg-card p-0.5 text-xs">
-          {([
-            { id: "all", label: `All ${counts.all}` },
-            { id: "active", label: `Run ${counts.active}` },
-            { id: "error", label: `Err ${counts.error}` },
-          ] as const).map((item) => (
-            <Button
-              key={item.id}
-              type="button"
-              onClick={() => setStatusFilter(item.id)}
-              aria-pressed={statusFilter === item.id}
-              variant="ghost"
-              size="xs"
-              className={cn(
-                "h-auto flex-1 rounded-[4px] px-1.5 py-1 text-center text-muted-foreground transition-colors duration-150",
-                statusFilter === item.id && "bg-accent text-foreground",
-              )}
-            >
-              {item.label}
-            </Button>
-          ))}
+        <ThreadStatusTabs
+          className="mt-2.5"
+          density="compact"
+          value={visibleStatusFilter}
+          counts={{ all: counts.all, active: counts.active, error: counts.error }}
+          onChange={setStatusFilter}
+        />
         </div>
       </div>
 
-      <div className="thread-sidebar-list flex-1 min-h-0 overflow-y-auto px-2.5 py-2.5" role="listbox" aria-label="Thread list">
+      <nav className="thread-sidebar-list thin-scrollbar flex-1 min-h-0 overflow-y-auto px-2.5 py-2.5" aria-label="Thread list">
         {loading ? (
           <div className="space-y-2 py-1">
             {[0, 1, 2].map((index) => (
@@ -387,96 +361,48 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
             No threads match your filter.
           </div>
         ) : (
-          <div className="space-y-2">
+          <ul className="space-y-2" role="list">
             {sortedThreads.map((thread) => {
-              const name = getThreadDisplayName(thread);
               const href = detailHrefWithEntrySource(thread.slack_thread_key, {
                 source: "threads",
                 listQuery: sidebarQueryString,
                 anchor: thread.slack_thread_key,
               });
-              const rawTask =
-                thread.last_user_message || thread.first_message || thread.last_result || "";
-              const taskPreview = rawTask.replace(/^\[[\w]+\]\s*/, "").replace(/\s+/g, " ").slice(0, 120);
-              const activeState = isRunningState(thread.state);
               const statusSubtitle = liveStatusByThread[thread.slack_thread_key] ?? runningSubtitle(thread);
-              const activePhase = parseActivePhase(thread);
-              const phaseIndex = activePhase
-                ? PHASES.indexOf(activePhase as (typeof PHASES)[number])
-                : -1;
-              const progress = phaseIndex >= 0 ? ((phaseIndex + 1) / PHASES.length) * 100 : 0;
               const isSelected = selectedThreadKey === thread.slack_thread_key;
               const isFocused = focusedThreadKey === thread.slack_thread_key;
 
               return (
-                <Link
-                  key={thread.slack_thread_key}
-                  ref={(node) => {
-                    cardRefs.current[thread.slack_thread_key] = node;
-                  }}
-                  href={href}
-                  prefetch={false}
-                  role="option"
-                  aria-selected={isSelected}
-                  aria-current={isSelected ? "page" : undefined}
-                  tabIndex={isFocused ? 0 : -1}
-                  onMouseEnter={() => prefetchThread(thread.slack_thread_key)}
-                  onFocus={() => {
-                    setFocusedThreadKey(thread.slack_thread_key);
-                    prefetchThread(thread.slack_thread_key);
-                  }}
-                  onClick={() => {
-                    setFocusedThreadKey(thread.slack_thread_key);
-                    onNavigate?.();
-                  }}
-                  className={cn(
-                    "thread-sidebar-card group block rounded-md border border-border/90 bg-card px-2.5 py-2.5 no-underline outline-none select-none shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition-[transform,background-color,border-color,box-shadow] duration-200 ease-out hover:bg-accent/65 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.06)] active:scale-[0.995] focus-visible:ring-1 focus-visible:ring-ring",
-                    isSelected && "border-l-2 border-l-primary bg-accent/85",
-                    activeState && "border-l-2 border-l-primary/70",
-                  )}
-                >
-                  <div className="flex min-w-0 items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <HarnessBadge harness={thread.harness} className="h-5 px-1.5 text-xs" />
-                        <span className="truncate text-xs font-medium text-foreground">{name}</span>
-                      </div>
-                      <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                        <span>
-                          {thread.turn_count} turn{thread.turn_count === 1 ? "" : "s"}
-                        </span>
-                        <span>·</span>
-                        <ThreadAge thread={thread} />
-                        {thread.participants && thread.participants.length > 0 ? (
-                          <>
-                            <span>·</span>
-                            <span className="hidden lg:inline-flex">
-                              <ParticipantAvatars participants={thread.participants} size={16} />
-                            </span>
-                          </>
-                        ) : null}
-                      </div>
-                    </div>
-                    <div className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                      <StateDot state={thread.state} className="size-2.5" />
-                    </div>
-                  </div>
-
-                  {statusSubtitle ? (
-                    <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">{statusSubtitle}</div>
-                  ) : null}
-                  {taskPreview ? (
-                    <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground/90">
-                      {taskPreview}
-                    </div>
-                  ) : null}
-                  {activePhase ? <Progress value={progress} className="mt-2 h-0.5 bg-muted" /> : null}
-                </Link>
+                <li key={thread.slack_thread_key}>
+                  <ThreadSummaryCard
+                    thread={thread}
+                    href={href}
+                    density="compact"
+                    isSelected={isSelected}
+                    statusSubtitle={statusSubtitle}
+                    linkRef={(node) => {
+                      cardRefs.current[thread.slack_thread_key] = node;
+                    }}
+                    linkProps={{
+                      "aria-current": isSelected ? "page" : undefined,
+                      tabIndex: isFocused ? 0 : -1,
+                      onMouseEnter: () => prefetchThread(thread.slack_thread_key),
+                      onFocus: () => {
+                        setFocusedThreadKey(thread.slack_thread_key);
+                        prefetchThread(thread.slack_thread_key);
+                      },
+                      onClick: () => {
+                        setFocusedThreadKey(thread.slack_thread_key);
+                        onNavigate?.();
+                      },
+                    }}
+                  />
+                </li>
               );
             })}
-          </div>
+          </ul>
         )}
-      </div>
+      </nav>
     </div>
   );
 });

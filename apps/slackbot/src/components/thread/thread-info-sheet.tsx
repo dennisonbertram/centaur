@@ -263,7 +263,7 @@ export function ThreadInfoSheet({
           {thread.participants && thread.participants.length > 0 && (
             <div className="mt-5 border-t border-border pt-4">
               <h3 className="mb-2 text-xs font-medium text-muted-foreground">Participants</h3>
-              <ParticipantAvatars participants={thread.participants} size={28} max={10} />
+              <ParticipantAvatars participants={thread.participants} size={28} max={10} decorative={false} />
             </div>
           )}
 

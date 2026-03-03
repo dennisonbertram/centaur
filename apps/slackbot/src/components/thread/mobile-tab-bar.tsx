@@ -21,6 +21,7 @@ export function MobileTabBar({ activeThreadHref, hasRunningAgent, hasError }: Mo
 
   const isThreads = pathname === "/";
   const isActive = pathname.length > 1 && !pathname.startsWith("/api/");
+  if (keyboardOpen) return null;
 
   function scrollCurrentViewToTop() {
     const behavior: ScrollBehavior = reduceMotion ? "auto" : "smooth";
@@ -56,23 +57,27 @@ export function MobileTabBar({ activeThreadHref, hasRunningAgent, hasError }: Mo
   }
 
   const threadsClassName = cn(
-    "relative flex min-w-[72px] flex-col items-center justify-center gap-0.5 rounded-md px-2 py-2 transition-colors duration-150",
-    isThreads ? "bg-accent/70 text-primary" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+    "relative flex min-w-[88px] flex-col items-center justify-center gap-0.5 rounded-lg px-2.5 py-2.5 transition-colors duration-150",
+    isThreads
+      ? "border border-primary/40 bg-primary/14 text-primary"
+      : "border border-transparent text-muted-foreground hover:bg-accent/40 hover:text-foreground",
   );
   const activeClassName = cn(
-    "relative flex min-w-[72px] flex-col items-center justify-center gap-0.5 rounded-md px-2 py-2 transition-colors duration-150",
-    isActive ? "bg-accent/70 text-primary" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+    "relative flex min-w-[88px] flex-col items-center justify-center gap-0.5 rounded-lg px-2.5 py-2.5 transition-colors duration-150",
+    isActive
+      ? "border border-primary/40 bg-primary/14 text-primary"
+      : "border border-transparent text-muted-foreground hover:bg-accent/40 hover:text-foreground",
   );
   const activeHref = activeThreadHref || "/";
 
   return (
     <nav
       className={cn(
-        "md:hidden flex-shrink-0 flex items-center justify-around border-t border-border bg-background/95 px-2 backdrop-blur-md min-h-[58px] pb-[max(0.5rem,env(safe-area-inset-bottom))] transition-[opacity,transform] duration-200 ease-out",
-        keyboardOpen && "min-h-0 h-0 overflow-hidden border-t-0 p-0 opacity-0 pointer-events-none",
+        "md:hidden flex-shrink-0 flex items-center justify-center border-t border-border/70 bg-[linear-gradient(180deg,color-mix(in_oklab,var(--background)_88%,transparent),color-mix(in_oklab,var(--card)_82%,transparent))] px-3 backdrop-blur-xl min-h-[66px] pb-[max(0.5rem,env(safe-area-inset-bottom))] transition-[opacity,transform] duration-[var(--dur-base)] ease-[var(--ease-standard)]",
       )}
       aria-label="Thread navigation"
     >
+      <div className="thread-surface-soft flex w-full max-w-[360px] items-center justify-around rounded-xl p-1.5">
       {isThreads ? (
         <button
           type="button"
@@ -115,6 +120,7 @@ export function MobileTabBar({ activeThreadHref, hasRunningAgent, hasError }: Mo
           <span className="text-xs font-medium">Active</span>
         </Link>
       )}
+      </div>
     </nav>
   );
 }
