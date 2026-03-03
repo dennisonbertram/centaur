@@ -11,7 +11,7 @@
 
 import { createClient, type RedisClientType } from "redis";
 import { execute, interrupt, type FileAttachment } from "./harness";
-import { truncateSlackText } from "./slack-text";
+import { markdownToSlack, truncateSlackText } from "./slack-text";
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "https://svc-ai.paradigm.xyz";
@@ -202,7 +202,7 @@ async function runShadow(
     await postSlackMessage({
       channel: AI_V2_CHANNEL,
       thread_ts: shadowTs,
-      text: truncateSlackText(result),
+      text: truncateSlackText(markdownToSlack(result)),
       unfurl_links: false,
     });
   }
