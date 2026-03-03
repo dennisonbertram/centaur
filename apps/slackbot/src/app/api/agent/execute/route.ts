@@ -1,4 +1,4 @@
-/** Proxy POST /api/agent/execute -> FastAPI /agent/execute */
+/** Proxy POST /api/agent/execute -> FastAPI /agent/execute-kickoff */
 
 import { resilientFetch, API_URL, ApiError } from "@/lib/api-client";
 
@@ -10,6 +10,10 @@ export async function POST(request: Request) {
   const slackThreadKey = String(body.slack_thread_key ?? "").trim();
   const message = String(body.message ?? "").trim();
   const harness = typeof body.harness === "string" ? body.harness.trim() : "";
+  const requestId =
+    typeof body.request_id === "string" && body.request_id.trim().length > 0
+      ? body.request_id.trim()
+      : crypto.randomUUID();
 
   if (!slackThreadKey || !message) {
     return Response.json(
@@ -19,15 +23,16 @@ export async function POST(request: Request) {
   }
 
   try {
-    const upstream = await resilientFetch(`${API_URL}/agent/execute`, {
+    const upstream = await resilientFetch(`${API_URL}/agent/execute-kickoff`, {
       method: "POST",
       body: JSON.stringify({
         slack_thread_key: slackThreadKey,
         message,
+        request_id: requestId,
         ...(harness ? { harness } : {}),
         source: "thread_ui",
       }),
-      signal: request.signal,
+      maxAttempts: 1,
     });
 
     const text = await upstream.text();

@@ -29,8 +29,13 @@ async function readErrorMessage(response: Response, fallback: string): Promise<s
 async function openUiStream(
   threadKey: string,
   abortSignal: AbortSignal | undefined,
+  options?: { liveOnly?: boolean },
 ): Promise<ReadableStream<UIMessageChunk>> {
-  const response = await fetch(`${BASE}/api/threads/stream-ui?key=${encodeURIComponent(threadKey)}`, {
+  const params = new URLSearchParams({ key: threadKey });
+  if (options?.liveOnly) {
+    params.set("live_only", "1");
+  }
+  const response = await fetch(`${BASE}/api/threads/stream-ui?${params.toString()}`, {
     headers: { Accept: "text/event-stream" },
     signal: abortSignal,
   });
@@ -105,7 +110,6 @@ export class AgentThreadTransport<UI_MESSAGE extends UIMessage = UIMessage>
       const executeRes = await fetch(`${BASE}/api/agent/execute`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        signal: options.abortSignal,
         body: JSON.stringify({
           slack_thread_key: this.threadKey,
           message: text,
@@ -122,7 +126,7 @@ export class AgentThreadTransport<UI_MESSAGE extends UIMessage = UIMessage>
       }
     }
 
-    return openUiStream(this.threadKey, options.abortSignal);
+    return openUiStream(this.threadKey, options.abortSignal, { liveOnly: true });
   }
 
   async reconnectToStream(options: {

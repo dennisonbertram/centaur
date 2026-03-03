@@ -8,7 +8,7 @@ import queue
 import threading
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -82,6 +82,30 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
         req.model,
         req.engine,
     )
+
+
+@router.post("/execute-kickoff", status_code=202)
+async def execute_kickoff(req: ExecuteRequest) -> dict[str, Any]:
+    """Kick off execution asynchronously for UI callers."""
+    agent = get_agent()
+    files = [{"url": f.url, "name": f.name} for f in req.files] if req.files else None
+    result = agent.execute_kickoff(
+        req.slack_thread_key,
+        req.message,
+        req.harness,
+        req.source,
+        req.repo,
+        req.request_id,
+        files,
+        req.user_id,
+        req.model,
+        req.engine,
+    )
+    if result.get("status") == "busy":
+        raise HTTPException(status_code=409, detail=str(result.get("error") or "Run already in progress"))
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=str(result["error"]))
+    return result
 
 
 @router.post("/execute_stream")
