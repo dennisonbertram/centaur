@@ -97,9 +97,9 @@ function participantDisplayName(
 }
 
 function fileChangeIcon(kind: string): string {
-  if (kind === "add") return "text-emerald-500";
+  if (kind === "add") return "text-primary";
   if (kind === "delete") return "text-destructive";
-  return "text-amber-500";
+  return "text-muted-foreground";
 }
 
 function looksLikeStackTrace(text: string): boolean {
@@ -138,7 +138,7 @@ export function MessagePartRenderer({
     return (
       <Checkpoint>
         <CheckpointIcon className="size-3 text-primary" />
-        <span className="shrink-0 px-2 text-[10px] font-medium uppercase tracking-wider">
+        <span className="shrink-0 px-2 text-xs font-medium uppercase tracking-wider">
           {step.phase}
         </span>
       </Checkpoint>
@@ -176,13 +176,13 @@ export function MessagePartRenderer({
     }
 
     return (
-      <Agent className={isFailed ? "border-destructive/30" : isDone ? "border-emerald-500/30" : ""}>
+      <Agent className={isFailed ? "border-destructive/30" : isDone ? "border-primary/30" : ""}>
         <AgentHeader name={step.name || "Subagent"} model={step.model} />
         <AgentContent>
-          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
             <Badge
               variant={isFailed ? "destructive" : isDone ? "default" : "secondary"}
-              className="text-[10px]"
+              className="text-xs"
             >
               {normalizedStatus.replace(/_/g, " ") || "update"}
             </Badge>
@@ -232,7 +232,7 @@ export function MessagePartRenderer({
           <div className="flex items-center gap-1">
             <TerminalStatus />
             {typeof step.exitCode === "number" && (
-              <Badge variant={isFailed ? "destructive" : "secondary"} className="text-[10px]">
+              <Badge variant={isFailed ? "destructive" : "secondary"} className="text-xs">
                 exit {step.exitCode}
               </Badge>
             )}
@@ -298,23 +298,23 @@ export function MessagePartRenderer({
     const displayName = participantDisplayName(participant, step.userId, "User");
     const turnDuration = step.turnId ? turnDurationsById[step.turnId] : undefined;
     return (
-      <div className="rounded-sm border-l-[3px] border-l-primary bg-primary/5 px-3 py-2.5">
+      <div className="rounded-md border-l-[3px] border-l-primary bg-primary/5 px-3 py-2.5">
         <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
           {participant?.avatar_url ? (
             <img src={participant.avatar_url} alt={displayName} className="size-[18px] rounded-full" />
           ) : (
-            <div className="flex size-[18px] items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
+            <div className="flex size-[18px] items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
               {initials(displayName)}
             </div>
           )}
           <span className="text-sm font-medium text-foreground">{displayName}</span>
           {typeof turnDuration === "number" ? (
-            <span className="ml-auto inline-flex items-center gap-1 rounded bg-background/70 px-1.5 py-0.5 text-[10px] font-mono tabular-nums text-muted-foreground">
+            <span className="ml-auto inline-flex items-center gap-1 rounded-md bg-background/70 px-1.5 py-0.5 text-xs font-mono tabular-nums text-muted-foreground">
               <Timer className="size-3" />
               {formatDuration(turnDuration)}
             </span>
           ) : null}
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px]">
+          <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs">
             {sourceLabel(step.source)}
           </span>
         </div>
@@ -325,7 +325,7 @@ export function MessagePartRenderer({
 
   if (step.type === "context-group") {
     return (
-      <details className="group rounded-lg border border-border/40 bg-card/40">
+      <details className="group rounded-md border border-border/50 bg-card/45">
         <summary className="flex min-h-[44px] list-none cursor-pointer items-center gap-2 px-3 py-2 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
           <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
           {step.items.length} message{step.items.length === 1 ? "" : "s"} in thread
@@ -339,8 +339,8 @@ export function MessagePartRenderer({
               "Thread participant",
             );
             return (
-              <div key={item.id} className="rounded border border-border/50 bg-background px-2 py-1.5">
-                <div className="mb-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+              <div key={item.id} className="rounded-md border border-border/50 bg-background px-2 py-1.5">
+                <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="text-foreground">{displayName}</span>
                   <span>{sourceLabel(item.source)}</span>
                 </div>
@@ -386,7 +386,7 @@ export function MessagePartRenderer({
       <div
         className={cn(
           "rounded-md border px-3 py-2 text-xs",
-          step.tone === "warn" ? "border-amber-500/30 bg-amber-500/10" : "border-border/60 bg-card/40",
+          step.tone === "warn" ? "border-primary/30 bg-primary/10" : "border-border/60 bg-card/40",
         )}
       >
         <div className="mb-1 font-medium uppercase tracking-wide text-muted-foreground">{step.title}</div>

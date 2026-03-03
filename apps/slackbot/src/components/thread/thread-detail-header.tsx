@@ -112,7 +112,7 @@ export function ThreadDetailHeader({
   const showError = !!error && !(thread.state === "error" && error.startsWith("Stream disconnected."));
   const statusSummary = useMemo(() => {
     if (thread.state === "error") return { icon: Bot, text: error || "Agent encountered an error" };
-  if (thread.state === "stopping") return { icon: Bot, text: "Stopping run…" };
+    if (thread.state === "stopping") return { icon: Bot, text: "Stopping run…" };
     if (isRunning) return categorizeStatus(stableStatus);
     return { icon: Bot, text: "Idle" };
   }, [error, isRunning, stableStatus, thread.state]);
@@ -127,13 +127,13 @@ export function ThreadDetailHeader({
   }, [isReconnecting, thread.state]);
 
   return (
-    <div className="relative shrink-0 border-b border-border bg-background/90 backdrop-blur-md">
+    <div className="relative shrink-0 border-b border-border/90 bg-background/95 backdrop-blur-md">
       {showReconnectBar ? <div className="reconnect-bar" aria-hidden="true" /> : null}
-      <div className="h-[48px] px-3 flex items-center gap-2">
+      <div className="flex h-11 items-center gap-2 px-3">
         <button
           type="button"
           onClick={onOpenDrawer}
-          className="size-9 flex items-center justify-center rounded-md active:bg-accent md:hidden"
+          className="flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground md:hidden"
           aria-label="Open thread list"
         >
           <Menu className="size-5" />
@@ -143,7 +143,7 @@ export function ThreadDetailHeader({
           type="button"
           onClick={onBack}
           aria-label="Back to source"
-          className="inline-flex items-center text-muted-foreground text-xs hover:text-foreground transition-colors mr-1 rounded-sm"
+          className="mr-1 inline-flex items-center rounded-md p-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
         >
           <ArrowLeft className="size-4" />
         </button>
@@ -152,27 +152,27 @@ export function ThreadDetailHeader({
           href={upHref}
           scroll={false}
           aria-label="Up to threads"
-          className="hidden md:inline-flex items-center text-muted-foreground text-xs hover:text-foreground transition-colors rounded-sm"
+          className="hidden rounded-md p-1 md:inline-flex items-center text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
         >
           <ArrowUp className="size-3.5" />
         </Link>
 
         <HarnessBadge harness={thread.harness} className="flex-shrink-0" />
 
-        <span className="text-sm font-medium truncate flex-1 min-w-0">{humanName}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium tracking-tight">{humanName}</span>
 
         <StateDot state={thread.state} className="flex-shrink-0" />
-        <span className="text-[10px] text-muted-foreground hidden min-[380px]:inline">{thread.state}</span>
+        <span className="hidden text-xs text-muted-foreground min-[380px]:inline">{thread.state}</span>
 
         <span className="hidden md:inline-flex">
           <ParticipantAvatars participants={thread.participants} size={20} />
         </span>
-        <span className="text-[11px] text-muted-foreground hidden md:inline">
+        <span className="hidden text-xs text-muted-foreground lg:inline">
           {thread.turns.length} turn{thread.turns.length === 1 ? "" : "s"}
         </span>
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="text-[11px] text-muted-foreground font-mono hidden md:inline">
+            <span className="hidden text-xs font-mono tabular-nums text-muted-foreground xl:inline">
               {tokenTicker}
             </span>
           </TooltipTrigger>
@@ -185,18 +185,18 @@ export function ThreadDetailHeader({
             </div>
           </TooltipContent>
         </Tooltip>
-        <span className="text-[11px] text-muted-foreground items-center gap-1 hidden md:inline-flex">
+        <span className="hidden items-center gap-1 text-xs font-mono tabular-nums text-muted-foreground lg:inline-flex">
           <Timer className="size-3.5" />
           {liveElapsed}
         </span>
-        <span className="text-[10px] text-muted-foreground font-mono hidden md:inline" title="Open command palette">
+        <span className="hidden text-xs font-mono text-muted-foreground xl:inline" title="Open command palette">
           Cmd+K
         </span>
 
         <button
           type="button"
           onClick={onOpenInfo}
-          className="size-9 flex items-center justify-center rounded-md active:bg-accent md:hidden"
+          className="flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground md:hidden"
           aria-label="Thread info"
         >
           <Info className="size-4" />
@@ -206,7 +206,7 @@ export function ThreadDetailHeader({
           <PopoverTrigger asChild>
             <button
               type="button"
-              className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer hidden md:block"
+              className="hidden rounded-md p-1 text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground md:block"
               aria-label="Show thread metadata"
             >
               <Info className="size-3.5" />
@@ -230,7 +230,7 @@ export function ThreadDetailHeader({
                 type="button"
                 onClick={onInterrupt}
                 disabled={isInterrupting}
-                className="hidden md:inline-flex items-center gap-1 text-[11px] text-destructive hover:opacity-80 disabled:opacity-60 transition-colors cursor-pointer bg-transparent border-none p-0 rounded-sm"
+                className="hidden rounded-md px-1 py-0.5 md:inline-flex items-center gap-1 text-xs text-destructive transition-colors duration-150 hover:bg-destructive/10 disabled:opacity-60"
               >
                 <CircleStop className={isInterrupting ? "size-3.5 animate-pulse" : "size-3.5"} />
                 {isInterrupting ? "Stopping…" : "Stop"}
@@ -244,7 +244,7 @@ export function ThreadDetailHeader({
             <button
               type="button"
               onClick={onRefresh}
-              className="hidden md:inline-flex text-muted-foreground text-[11px] hover:text-foreground transition-colors cursor-pointer bg-transparent border-none p-0 rounded-sm items-center gap-1"
+              className="hidden rounded-md px-1 py-0.5 md:inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
             >
               <RefreshCw className="size-3.5" />
               Refresh
@@ -254,8 +254,8 @@ export function ThreadDetailHeader({
         </Tooltip>
       </div>
 
-      <div className="h-[24px] px-3 text-[11px] border-t border-border/50 flex items-center gap-2 animate-in fade-in duration-200 motion-reduce:animate-none">
-        <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+      <div className="flex h-7 items-center gap-2 border-t border-border/50 px-3 text-xs">
+        <span className="rounded-md bg-secondary px-1.5 py-0.5 text-xs text-muted-foreground">
           {sourceLabel}
         </span>
         <statusSummary.icon className="size-3.5 text-muted-foreground" />
@@ -263,17 +263,17 @@ export function ThreadDetailHeader({
           {statusSummary.text}
         </span>
         {isReconnecting ? (
-          <span className="ml-auto text-[10px] text-amber-500">Reconnecting…</span>
+          <span className="ml-auto text-xs text-primary">Reconnecting…</span>
         ) : null}
         {isRunning && tokenUsage?.model ? (
-          <span className="hidden sm:inline text-[10px] font-mono text-muted-foreground">
+          <span className="hidden font-mono text-xs text-muted-foreground md:inline">
             {tokenUsage.model}
           </span>
         ) : null}
       </div>
 
       {(showError || !!interruptError) && (
-        <div role="alert" className="px-3 py-1.5 text-[11px] text-amber-700 dark:text-amber-300 inline-flex items-center gap-1.5 border-t border-border/50">
+        <div role="alert" className="inline-flex items-center gap-1.5 border-t border-border/50 px-3 py-1.5 text-xs text-destructive">
           <RefreshCw className="size-3.5" />
           {interruptError ??
             (thread.state === "error" && error?.startsWith("Stream disconnected.") ? null : error)}

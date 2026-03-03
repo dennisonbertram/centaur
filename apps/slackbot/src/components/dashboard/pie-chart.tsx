@@ -10,7 +10,13 @@ import {
 } from "recharts";
 import type { PieChartProps } from "./types";
 
-const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#f43f5e", "#8b5cf6"];
+const COLORS = [
+  "var(--chart-1)",
+  "var(--chart-2)",
+  "var(--chart-3)",
+  "var(--chart-4)",
+  "var(--chart-5)",
+];
 
 export function DashboardPieChart({
   title,
@@ -19,8 +25,8 @@ export function DashboardPieChart({
   data,
 }: Omit<PieChartProps, "type">) {
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <h3 className="mb-3 text-sm font-medium text-foreground">{title}</h3>
+    <div className="rounded-md border border-border bg-card p-4">
+      <h3 className="mb-3 text-sm font-medium tracking-tight text-foreground">{title}</h3>
       <ResponsiveContainer width="100%" height={300}>
         <RechartsPieChart>
           <Pie

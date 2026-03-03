@@ -5,11 +5,11 @@ import type { Participant } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const FALLBACK_COLORS = [
-  "bg-blue-500/20 text-blue-300",
-  "bg-violet-500/20 text-violet-300",
-  "bg-emerald-500/20 text-emerald-300",
-  "bg-amber-500/20 text-amber-300",
-  "bg-pink-500/20 text-pink-300",
+  "bg-primary/20 text-primary",
+  "bg-secondary text-foreground",
+  "bg-muted text-foreground",
+  "bg-accent text-foreground",
+  "bg-primary/12 text-primary",
 ] as const;
 const SLACK_USER_ID_RE = /^U[A-Z0-9]+$/;
 
@@ -64,7 +64,7 @@ export function ParticipantAvatars({
                 role="img"
                 aria-label={label}
                 className={cn(
-                  "ring-2 ring-background rounded-full shrink-0 overflow-hidden flex items-center justify-center text-[10px] font-semibold",
+                  "ring-2 ring-background rounded-full shrink-0 overflow-hidden flex items-center justify-center text-xs font-semibold",
                   !participant.avatar_url && colorForId(participant.id),
                 )}
                 style={{ width: size, height: size }}
@@ -93,7 +93,7 @@ export function ParticipantAvatars({
               tabIndex={0}
               role="img"
               aria-label={`${overflow} more participant${overflow === 1 ? "" : "s"}`}
-              className="ring-2 ring-background rounded-full bg-secondary text-muted-foreground shrink-0 flex items-center justify-center text-[10px] font-semibold"
+              className="ring-2 ring-background rounded-full bg-secondary text-muted-foreground shrink-0 flex items-center justify-center text-xs font-semibold"
               style={{ width: size, height: size }}
             >
               +{overflow}

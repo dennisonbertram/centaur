@@ -52,9 +52,9 @@ function Stat({ label, children }: { label: string; children: React.ReactNode })
 }
 
 function ContextBar({ percent }: { percent: number }) {
-  const color = percent > 80 ? "bg-destructive" : percent > 50 ? "bg-amber-500" : "bg-green-500";
+  const color = percent > 80 ? "bg-destructive" : percent > 50 ? "bg-primary/70" : "bg-primary";
   return (
-    <div className="h-1.5 rounded-full bg-secondary mt-1 overflow-hidden">
+    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-secondary">
       <div className={cn("h-full rounded-full transition-[width] duration-200 ease-out", color)} style={{ width: `${percent}%` }} />
     </div>
   );
@@ -202,12 +202,12 @@ export function ThreadInfoSheet({
 
   return (
     <div className="fixed inset-0 z-50 md:hidden" aria-modal="true" role="dialog" aria-label="Thread details">
-      <div className="absolute inset-0 bg-black/40 animate-in fade-in duration-200 motion-reduce:animate-none" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/55 backdrop-blur-[1px] animate-in fade-in duration-200 motion-reduce:animate-none" onClick={onClose} />
       <div
         ref={sheetRef}
         tabIndex={-1}
         className={cn(
-          "absolute inset-x-0 bottom-0 bg-background border-t border-border rounded-t-2xl max-h-[70dvh] overflow-y-auto will-change-transform animate-in slide-in-from-bottom duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none",
+          "absolute inset-x-0 bottom-0 max-h-[70dvh] overflow-y-auto overscroll-contain rounded-t-2xl border-t border-border/90 bg-card shadow-[0_-24px_80px_rgba(0,0,0,0.5)] will-change-transform animate-in slide-in-from-bottom duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:animate-none",
           dragY > 0 ? "transition-none" : "transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)]",
         )}
         style={{ transform: dragY > 0 ? `translateY(${dragY}px)` : undefined }}
@@ -227,14 +227,14 @@ export function ThreadInfoSheet({
             <button
               type="button"
               onClick={onClose}
-              className="size-8 flex items-center justify-center rounded-md text-muted-foreground"
+              className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
               aria-label="Close"
             >
               <X className="size-4" />
             </button>
           </div>
 
-          <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
+          <div className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
             <HarnessBadge harness={thread.harness} />
             <span>·</span>
             <StateDot state={thread.state} />
@@ -243,7 +243,7 @@ export function ThreadInfoSheet({
             <span>{elapsed}</span>
           </div>
 
-          <dl className="grid grid-cols-2 gap-y-3 gap-x-4 mt-5">
+          <dl className="mt-5 grid grid-cols-2 gap-x-4 gap-y-3">
             <Stat label="Tokens in">{tokenUsage?.input_tokens.toLocaleString() ?? "--"}</Stat>
             <Stat label="Tokens out">{tokenUsage?.output_tokens.toLocaleString() ?? "--"}</Stat>
             <Stat label="Cost">
@@ -262,18 +262,18 @@ export function ThreadInfoSheet({
 
           {thread.participants && thread.participants.length > 0 && (
             <div className="mt-5 border-t border-border pt-4">
-              <h3 className="text-xs text-muted-foreground font-medium mb-2">Participants</h3>
+              <h3 className="mb-2 text-xs font-medium text-muted-foreground">Participants</h3>
               <ParticipantAvatars participants={thread.participants} size={28} max={10} />
             </div>
           )}
 
-          <div className="mt-5 border-t border-border pt-4 space-y-1">
-            <h3 className="text-xs text-muted-foreground font-medium mb-2">Actions</h3>
+          <div className="mt-5 space-y-1 border-t border-border pt-4">
+            <h3 className="mb-2 text-xs font-medium text-muted-foreground">Actions</h3>
 
             <button
               type="button"
               onClick={() => { onRefresh(); onClose(); }}
-              className="w-full flex items-center gap-3 py-3 px-2 rounded-lg text-sm text-foreground active:bg-accent transition-colors"
+              className="flex w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-foreground transition-colors duration-150 hover:bg-accent/70 active:bg-accent"
             >
               <RefreshCw className="size-5 text-muted-foreground" />
               Refresh thread
@@ -283,7 +283,7 @@ export function ThreadInfoSheet({
               <button
                 type="button"
                 onClick={() => { onStop(); onClose(); }}
-                className="w-full flex items-center gap-3 py-3 px-2 rounded-lg text-sm text-destructive active:bg-accent transition-colors"
+                className="flex w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-destructive transition-colors duration-150 hover:bg-destructive/10 active:bg-accent"
               >
                 <CircleStop className="size-5" />
                 Stop agent
@@ -293,7 +293,7 @@ export function ThreadInfoSheet({
             <button
               type="button"
               onClick={copyLink}
-              className="w-full flex items-center gap-3 py-3 px-2 rounded-lg text-sm text-foreground active:bg-accent transition-colors"
+              className="flex w-full items-center gap-3 rounded-md px-2 py-3 text-left text-sm text-foreground transition-colors duration-150 hover:bg-accent/70 active:bg-accent"
             >
               <Copy className="size-5 text-muted-foreground" />
               Copy link
@@ -302,7 +302,7 @@ export function ThreadInfoSheet({
             {slackUrl ? (
               <a
                 href={slackUrl}
-                className="w-full flex items-center gap-3 py-3 px-2 rounded-lg text-sm text-foreground active:bg-accent transition-colors no-underline"
+                className="flex w-full items-center gap-3 rounded-md px-2 py-3 text-sm text-foreground no-underline transition-colors duration-150 hover:bg-accent/70 active:bg-accent"
               >
                 <ExternalLink className="size-5 text-muted-foreground" />
                 Open in Slack

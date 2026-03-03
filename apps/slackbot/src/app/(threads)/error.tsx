@@ -1,5 +1,7 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+
 export default function ThreadsError({
   error,
   reset,
@@ -12,12 +14,14 @@ export default function ThreadsError({
       <div className="text-center" role="alert" aria-live="assertive">
         <p className="mb-3 text-sm text-destructive">Something went wrong</p>
         <p className="mb-4 max-w-sm text-xs text-muted-foreground">{error.message}</p>
-        <button
+        <Button
           onClick={reset}
-          className="cursor-pointer rounded-sm border border-border bg-transparent px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          variant="outline"
+          size="xs"
+          className="border-border text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           Try again
-        </button>
+        </Button>
       </div>
     </div>
   );

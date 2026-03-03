@@ -7,6 +7,8 @@ import { LoaderCircle, RefreshCw } from "lucide-react";
 import { timeAgo } from "@/lib/format";
 import { HarnessBadge } from "@/components/ui/harness-badge";
 import { StateDot } from "@/components/ui/state-dot";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ParticipantAvatars } from "@/components/thread/participant-avatars";
 import { Progress } from "@/components/ui/progress";
 import { PHASES } from "@/lib/types";
@@ -104,34 +106,36 @@ function ThreadsPageContent() {
     <div className="h-full flex flex-col bg-background text-foreground font-sans overflow-hidden">
     <div
       data-thread-list-scroll="true"
-      className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 md:px-8 py-4 md:py-8 max-w-[1200px] mx-auto w-full"
+      className="mx-auto flex-1 min-h-0 w-full max-w-[1200px] overflow-y-auto overscroll-contain px-4 py-4 md:px-8 md:py-8"
       style={{ WebkitOverflowScrolling: "touch" }}
     >
-      <div className="flex justify-between items-center mb-6 pb-4 border-b border-border">
+      <div className="mb-6 flex items-center justify-between border-b border-border/80 pb-4">
         <div>
-          <h1 className="text-base font-semibold text-foreground tracking-tight">
+          <h1 className="text-lg font-semibold tracking-tight text-foreground">
             Threads
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
+          <p className="mt-0.5 text-xs text-muted-foreground">
             {`${activeCount} active agent${activeCount !== 1 ? "s" : ""}`}
           </p>
         </div>
-        <button
+        <Button
           type="button"
           onClick={() => void refreshThreads()}
           disabled={isRefreshing}
           aria-busy={isRefreshing}
-          className="inline-flex items-center gap-1.5 bg-transparent border border-border rounded-sm text-muted-foreground px-3 py-1 text-xs font-medium cursor-pointer hover:text-foreground transition-colors disabled:opacity-60 disabled:cursor-default"
+          variant="outline"
+          size="sm"
+          className="h-8 gap-1.5 border-border text-xs text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-default disabled:opacity-60"
         >
           <RefreshCw className={isRefreshing ? "size-3.5 animate-spin" : "size-3.5"} />
           {isRefreshing ? "Refreshing…" : "Refresh"}
-        </button>
+        </Button>
       </div>
       <div className="mb-4">
         <label htmlFor="thread-filter" className="sr-only">
           Filter threads
         </label>
-        <input
+        <Input
           id="thread-filter"
           name="thread-filter"
           aria-label="Filter threads"
@@ -140,47 +144,53 @@ function ThreadsPageContent() {
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Filter threads… (/)"
           autoComplete="off"
-          className="w-full max-w-[420px] bg-card border border-input rounded-sm px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          className="h-9 w-full max-w-[420px] bg-card shadow-none focus-visible:ring-1"
         />
       </div>
       <div className="mb-4 overflow-x-auto">
-        <div className="inline-flex items-center gap-2 min-w-max">
-          <button
+        <div className="inline-flex min-w-max items-center gap-2">
+          <Button
             type="button"
             onClick={() => setStatusFilter("all")}
             aria-pressed={statusFilter === "all"}
-            className={`rounded-full px-3 min-h-[36px] text-xs font-medium border transition-colors ${
+            variant="outline"
+            size="sm"
+            className={`min-h-[36px] rounded-md px-3 text-xs font-medium transition-colors duration-150 ${
               statusFilter === "all"
                 ? "bg-primary text-primary-foreground border-primary"
                 : "bg-secondary text-secondary-foreground border-border/50"
             }`}
           >
             All {counts.all}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             onClick={() => setStatusFilter("active")}
             aria-pressed={statusFilter === "active"}
-            className={`rounded-full px-3 min-h-[36px] text-xs font-medium border transition-colors ${
+            variant="outline"
+            size="sm"
+            className={`min-h-[36px] rounded-md px-3 text-xs font-medium transition-colors duration-150 ${
               statusFilter === "active"
                 ? "bg-primary text-primary-foreground border-primary"
                 : "bg-secondary text-secondary-foreground border-border/50"
             }`}
           >
             Active {counts.active}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
             onClick={() => setStatusFilter("error")}
             aria-pressed={statusFilter === "error"}
-            className={`rounded-full px-3 min-h-[36px] text-xs font-medium border transition-colors ${
+            variant="outline"
+            size="sm"
+            className={`min-h-[36px] rounded-md px-3 text-xs font-medium transition-colors duration-150 ${
               statusFilter === "error"
                 ? "bg-primary text-primary-foreground border-primary"
                 : "bg-secondary text-secondary-foreground border-border/50"
             }`}
           >
             Error {counts.error}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -192,13 +202,15 @@ function ThreadsPageContent() {
       ) : error && filteredThreads.length === 0 ? (
         <div className="text-center py-16">
           <p className="text-destructive text-sm mb-3">{error}</p>
-          <button
+          <Button
             type="button"
             onClick={() => void refreshThreads()}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer bg-transparent border border-border rounded-sm px-3 py-1"
+            variant="outline"
+            size="xs"
+            className="border-border text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             Retry
-          </button>
+          </Button>
         </div>
       ) : filteredThreads.length === 0 ? (
         <div className="text-center py-20">
@@ -210,7 +222,7 @@ function ThreadsPageContent() {
           </p>
         </div>
       ) : (
-        <div className="flex flex-col gap-2 md:grid md:grid-cols-[repeat(auto-fill,minmax(360px,1fr))] md:gap-2.5">
+        <div className="flex flex-col gap-2.5 md:grid md:grid-cols-[repeat(auto-fill,minmax(360px,1fr))] md:gap-3">
           {filteredThreads.map((t) => {
             const name = getThreadDisplayName(t);
             const href = detailHrefWithEntrySource(t.slack_thread_key, {
@@ -235,27 +247,24 @@ function ThreadsPageContent() {
                 onMouseEnter={() => router.prefetch(href)}
                 aria-label={`View thread ${name}, ${t.state}, ${t.turn_count} turns`}
                 data-thread-key={t.slack_thread_key}
-                className={`block bg-card border border-border rounded-sm p-4 no-underline text-inherit hover:bg-accent transition-colors ${
+                className={`block rounded-md border border-border/90 bg-card p-4 no-underline text-inherit shadow-[0_0_0_1px_rgba(255,255,255,0.02)] transition-[background-color,border-color,box-shadow,transform] duration-200 ease-out hover:bg-accent/65 hover:shadow-[0_0_0_1px_rgba(255,255,255,0.06)] active:scale-[0.997] ${
                   isActive ? "border-l-2 border-l-primary" : ""
                 }`}
               >
-                <div className="flex items-center justify-between mb-2 min-w-0">
-                  <div className="flex items-center gap-2 min-w-0">
+                <div className="mb-2 flex min-w-0 items-center justify-between">
+                  <div className="flex min-w-0 items-center gap-2">
                     <HarnessBadge harness={t.harness} />
                     <span className="text-sm text-foreground font-medium truncate">
                       {name}
                     </span>
-                    <ParticipantAvatars participants={t.participants} size={20} />
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <StateDot state={t.state} />
-                    <span className="text-[11px] text-muted-foreground">
-                      {t.state}
+                    <span className="hidden lg:inline-flex">
+                      <ParticipantAvatars participants={t.participants} size={20} />
                     </span>
                   </div>
+                  <StateDot state={t.state} />
                 </div>
 
-                <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mb-1.5">
+                <div className="mb-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span>
                     {t.turn_count} turn{t.turn_count !== 1 ? "s" : ""}
                   </span>
@@ -263,7 +272,7 @@ function ThreadsPageContent() {
                   <ThreadAge thread={t} />
                 </div>
                 {statusSubtitle ? (
-                  <div className="text-xs text-muted-foreground mb-1.5">{statusSubtitle}</div>
+                  <div className="mb-1.5 text-xs text-muted-foreground">{statusSubtitle}</div>
                 ) : null}
 
                 {taskPreview && (
@@ -292,7 +301,7 @@ function ThreadsPageFallback() {
     <div className="h-full flex flex-col bg-background text-foreground font-sans overflow-hidden">
       <div
         data-thread-list-scroll="true"
-        className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 md:px-8 py-4 md:py-8 max-w-[1200px] mx-auto w-full"
+        className="mx-auto flex-1 min-h-0 w-full max-w-[1200px] overflow-y-auto overscroll-contain px-4 py-4 md:px-8 md:py-8"
         style={{ WebkitOverflowScrolling: "touch" }}
       >
         <div className="text-muted-foreground text-center py-16 text-sm inline-flex items-center justify-center gap-2 w-full">

@@ -49,7 +49,7 @@ function parseDashboardSpec(raw: string): DashboardSpec | null {
 
 function ErrorCard({ raw }: { raw: string }) {
   return (
-    <div className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
+    <div className="rounded-md border border-border bg-card p-4 text-sm text-muted-foreground">
       <p className="mb-2 text-xs font-medium text-destructive">Failed to render dashboard</p>
       <pre className="overflow-x-auto whitespace-pre-wrap break-all text-xs">{raw}</pre>
     </div>

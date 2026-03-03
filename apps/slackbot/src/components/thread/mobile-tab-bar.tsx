@@ -56,19 +56,19 @@ export function MobileTabBar({ activeThreadHref, hasRunningAgent, hasError }: Mo
   }
 
   const threadsClassName = cn(
-    "flex flex-col items-center justify-center gap-0.5 py-2 min-w-[64px] relative",
-    isThreads ? "text-primary" : "text-muted-foreground",
+    "relative flex min-w-[72px] flex-col items-center justify-center gap-0.5 rounded-md px-2 py-2 transition-colors duration-150",
+    isThreads ? "bg-accent/70 text-primary" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
   );
   const activeClassName = cn(
-    "flex flex-col items-center justify-center gap-0.5 py-2 min-w-[64px] relative",
-    isActive ? "text-primary" : "text-muted-foreground",
+    "relative flex min-w-[72px] flex-col items-center justify-center gap-0.5 rounded-md px-2 py-2 transition-colors duration-150",
+    isActive ? "bg-accent/70 text-primary" : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
   );
   const activeHref = activeThreadHref || "/";
 
   return (
     <nav
       className={cn(
-        "md:hidden flex-shrink-0 flex items-center justify-around border-t border-border bg-background/90 backdrop-blur-md min-h-[56px] pb-[max(0.5rem,env(safe-area-inset-bottom))] transition-[opacity,transform] duration-200 ease-out",
+        "md:hidden flex-shrink-0 flex items-center justify-around border-t border-border bg-background/95 px-2 backdrop-blur-md min-h-[58px] pb-[max(0.5rem,env(safe-area-inset-bottom))] transition-[opacity,transform] duration-200 ease-out",
         keyboardOpen && "min-h-0 h-0 overflow-hidden border-t-0 p-0 opacity-0 pointer-events-none",
       )}
       aria-label="Thread navigation"
@@ -81,7 +81,7 @@ export function MobileTabBar({ activeThreadHref, hasRunningAgent, hasError }: Mo
           className={threadsClassName}
         >
           <LayoutList className="size-5" />
-          <span className="text-[10px] font-medium">Threads</span>
+          <span className="text-xs font-medium">Threads</span>
         </button>
       ) : (
         <Link href="/" scroll={false} aria-current={undefined} className={threadsClassName}>
@@ -89,7 +89,7 @@ export function MobileTabBar({ activeThreadHref, hasRunningAgent, hasError }: Mo
             <span className="absolute top-1.5 right-3 size-1.5 rounded-full bg-destructive" />
           )}
           <LayoutList className="size-5" />
-          <span className="text-[10px] font-medium">Threads</span>
+          <span className="text-xs font-medium">Threads</span>
         </Link>
       )}
 
@@ -101,18 +101,18 @@ export function MobileTabBar({ activeThreadHref, hasRunningAgent, hasError }: Mo
           className={activeClassName}
         >
           {hasRunningAgent && (
-            <span className="absolute top-1.5 right-3 size-2 rounded-full bg-green-500 animate-pulse" />
+            <span className="absolute top-1.5 right-3 size-2 rounded-full bg-primary animate-pulse motion-reduce:animate-none" />
           )}
           <Zap className="size-5" />
-          <span className="text-[10px] font-medium">Active</span>
+          <span className="text-xs font-medium">Active</span>
         </button>
       ) : (
         <Link href={activeHref} scroll={false} aria-current={undefined} className={activeClassName}>
           {hasRunningAgent && (
-            <span className="absolute top-1.5 right-3 size-2 rounded-full bg-green-500 animate-pulse" />
+            <span className="absolute top-1.5 right-3 size-2 rounded-full bg-primary animate-pulse motion-reduce:animate-none" />
           )}
           <Zap className="size-5" />
-          <span className="text-[10px] font-medium">Active</span>
+          <span className="text-xs font-medium">Active</span>
         </Link>
       )}
     </nav>

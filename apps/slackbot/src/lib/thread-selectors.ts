@@ -17,8 +17,8 @@ export function parseActivePhase(thread: ThreadSummary): string | null {
 export function runningSubtitle(thread: ThreadSummary): string | null {
   if (!isRunningState(thread.state)) return null;
   const phase = parseActivePhase(thread);
-  if (phase) return `Working on ${phase}...`;
-  return "Working...";
+  if (phase) return `Working on ${phase}…`;
+  return "Working…";
 }
 
 export function getThreadDisplayName(thread: ThreadSummary): string {

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { DataTableProps, ColumnDef } from "./types";
 import { formatValue } from "./format-value";
+import { Input } from "@/components/ui/input";
 
 const PAGE_SIZE = 25;
 
@@ -64,27 +65,27 @@ export function DataTable({
   function cellClass(col: ColumnDef, value: unknown) {
     if (col.format === "percent" && typeof value === "number") {
       const n = Math.abs(value) < 1 ? value * 100 : value;
-      if (n > 0) return "text-emerald-500";
-      if (n < 0) return "text-red-500";
+      if (n > 0) return "text-primary";
+      if (n < 0) return "text-destructive";
     }
     return "";
   }
 
   return (
-    <div className="rounded-lg border border-border bg-card overflow-hidden">
+    <div className="overflow-hidden rounded-md border border-border bg-card">
       {(title || searchable) && (
-        <div className="flex items-center gap-3 border-b border-border px-4 py-2.5">
+        <div className="flex items-center gap-3 border-b border-border px-4 py-3">
           {title && <h3 className="text-sm font-medium text-foreground">{title}</h3>}
           {searchable && (
-            <input
-              type="text"
+            <Input
+              type="search"
               placeholder="Search…"
               value={search}
               onChange={(e) => {
                 setSearch(e.target.value);
                 setPage(0);
               }}
-              className="ml-auto rounded-md border border-border bg-background px-2.5 py-1 text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-ring w-48"
+              className="ml-auto h-8 w-48 border-border bg-background px-2.5 text-sm shadow-none focus-visible:ring-1"
             />
           )}
         </div>
@@ -98,7 +99,7 @@ export function DataTable({
                 <th
                   key={col.key}
                   onClick={() => toggleSort(col)}
-                  className={`px-4 py-2 text-left text-xs font-medium text-muted-foreground ${
+                className={`px-4 py-2.5 text-left text-xs font-medium text-muted-foreground ${
                     col.sortable ? "cursor-pointer select-none hover:text-foreground" : ""
                   }`}
                 >
@@ -121,7 +122,7 @@ export function DataTable({
                 {columns.map((col) => (
                   <td
                     key={col.key}
-                    className={`px-4 py-2 text-foreground ${cellClass(col, row[col.key])}`}
+                    className={`px-4 py-2.5 text-foreground ${cellClass(col, row[col.key])}`}
                   >
                     {formatValue(row[col.key], col.format)}
                   </td>
@@ -133,7 +134,7 @@ export function DataTable({
       </div>
 
       {totalPages > 1 && (
-        <div className="flex items-center justify-between border-t border-border px-4 py-2 text-xs text-muted-foreground">
+        <div className="flex items-center justify-between border-t border-border px-4 py-2.5 text-xs text-muted-foreground">
           <span>
             {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, sorted.length)} of{" "}
             {sorted.length}

@@ -7,7 +7,11 @@ const SIDEBAR_BOOTSTRAP_SCRIPT = `
 (() => {
   try {
     var collapsed = window.localStorage.getItem("${STORAGE_KEY}") === "1";
-    document.documentElement.classList.toggle("${COLLAPSE_CLASS}", collapsed);
+    if (document.body) {
+      document.body.classList.toggle("${COLLAPSE_CLASS}", collapsed);
+    }
+    // Legacy cleanup: previous versions applied this class on <html>.
+    document.documentElement.classList.remove("${COLLAPSE_CLASS}");
   } catch (_) {}
 })();
 `;

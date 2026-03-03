@@ -102,7 +102,10 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
 
   return (
     <div
-      className={cn("flex-shrink-0 border-t border-border bg-background px-3 py-2", className)}
+      className={cn(
+        "flex-shrink-0 border-t border-border/90 bg-background/95 px-3 py-2.5 backdrop-blur-sm",
+        className,
+      )}
       style={{
         paddingBottom:
           effectiveKeyboardHeight > 0
@@ -112,7 +115,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
     >
       <form
         onSubmit={(e) => { e.preventDefault(); void handleSend(); }}
-        className="flex items-end gap-2"
+        className="flex items-end gap-2.5"
         aria-label="Message composer"
       >
         <label htmlFor="chat-input" className="sr-only">Message</label>
@@ -133,8 +136,8 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
           className={cn(
             "flex-1 min-w-0 min-h-[44px] resize-none",
             "text-[16px] md:text-sm leading-[22px]",
-            "bg-secondary/50 rounded-xl px-4 py-2.5",
-            "border border-border/50 focus:border-ring focus:ring-1 focus:ring-ring",
+            "rounded-md border border-input bg-card px-3.5 py-2.5",
+            "shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] focus:border-ring focus:ring-1 focus:ring-ring",
             "placeholder:text-muted-foreground text-foreground",
             "outline-none transition-colors",
             submitting && "opacity-50",
@@ -149,7 +152,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
           <button
             type="button"
             disabled
-            className="size-[44px] flex-shrink-0 rounded-xl flex items-center justify-center bg-primary/60 text-primary-foreground"
+            className="flex size-[44px] flex-shrink-0 items-center justify-center rounded-md bg-primary/60 text-primary-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.2)]"
           >
             <Loader2 className="size-5 animate-spin" />
           </button>
@@ -159,7 +162,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
               <button
                 type="button"
                 onClick={() => void handleStop()}
-                className="size-[44px] flex-shrink-0 rounded-xl flex items-center justify-center bg-destructive/80 text-destructive-foreground transition-[background-color,color,transform,opacity] duration-200 ease-out"
+                className="flex size-[44px] flex-shrink-0 items-center justify-center rounded-md bg-destructive/80 text-destructive-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.2)] transition-[background-color,color,transform,opacity] duration-200 ease-out"
                 aria-label="Stop agent"
               >
                 <Square className="size-4" />
@@ -169,7 +172,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
               type="submit"
               disabled={!hasText}
               className={cn(
-                "size-[44px] flex-shrink-0 rounded-xl flex items-center justify-center transition-[background-color,color,transform,opacity] duration-200 ease-out",
+                "flex size-[44px] flex-shrink-0 items-center justify-center rounded-md shadow-[0_0_0_1px_rgba(0,0,0,0.2)] transition-[background-color,color,transform,opacity] duration-200 ease-out",
                 hasText
                   ? "bg-primary text-primary-foreground"
                   : "bg-primary/40 text-primary-foreground/40 pointer-events-none",

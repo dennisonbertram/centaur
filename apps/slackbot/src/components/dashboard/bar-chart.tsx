@@ -17,8 +17,8 @@ export function DashboardBarChart({
   data,
 }: Omit<BarChartProps, "type">) {
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
-      <h3 className="mb-3 text-sm font-medium text-foreground">{title}</h3>
+    <div className="rounded-md border border-border bg-card p-4">
+      <h3 className="mb-3 text-sm font-medium tracking-tight text-foreground">{title}</h3>
       <ResponsiveContainer width="100%" height={300}>
         <RechartsBarChart data={data}>
           <XAxis
@@ -39,7 +39,7 @@ export function DashboardBarChart({
               color: "var(--color-foreground)",
             }}
           />
-          <Bar dataKey={valueKey} fill="#3b82f6" radius={[4, 4, 0, 0]} />
+          <Bar dataKey={valueKey} fill="var(--chart-1)" radius={[6, 6, 0, 0]} />
         </RechartsBarChart>
       </ResponsiveContainer>
     </div>

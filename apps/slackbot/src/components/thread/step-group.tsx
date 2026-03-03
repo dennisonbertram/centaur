@@ -48,7 +48,7 @@ function looksLikeStackTrace(text: string): boolean {
 function PillStatusIcon({ loading, error }: { loading: number; error: number }) {
   if (error > 0) return <XIcon className="size-4 text-destructive flex-shrink-0" />;
   if (loading > 0) return <LoaderCircle className="size-4 text-muted-foreground animate-spin flex-shrink-0" />;
-  return <Check className="size-4 text-green-500 flex-shrink-0" />;
+  return <Check className="size-4 text-primary flex-shrink-0" />;
 }
 
 function shouldAutoExpandTool(call: ToolCall): boolean {
@@ -222,16 +222,13 @@ export function StepGroup({
       open={isOpen}
       onOpenChange={handleToggle}
       className={cn(
-        "group rounded-lg md:rounded-none",
-        isMobile
-          ? "bg-secondary/30 border border-border/30"
-          : "border-0 border-l-2 border-l-border/70 bg-transparent pl-1",
+        "group rounded-md border border-border/70 bg-card/45 shadow-[0_0_0_1px_rgba(255,255,255,0.02)]",
       )}
     >
       <CollapsibleTrigger
         className={cn(
-          "w-full flex items-center gap-2 px-3 py-2 cursor-pointer transition-colors",
-          isMobile ? "min-h-[44px] active:bg-secondary/60" : "hover:bg-accent/50",
+          "flex w-full cursor-pointer items-center gap-2 px-3 py-2 transition-colors",
+          isMobile ? "min-h-[44px] active:bg-accent/60" : "hover:bg-accent/50",
         )}
       >
         {isMobile ? (
@@ -259,7 +256,7 @@ export function StepGroup({
             <CircleCheck className="ml-auto size-3.5 text-primary" />
           )
         )}
-        <span className="text-[10px] font-mono text-muted-foreground tabular-nums flex-shrink-0">
+        <span className="text-xs font-mono text-muted-foreground tabular-nums flex-shrink-0">
           {doneCount}/{calls.length}
         </span>
         {isMobile && (
@@ -271,7 +268,7 @@ export function StepGroup({
           />
         )}
       </CollapsibleTrigger>
-      <CollapsibleContent className="px-3 pb-2 pl-4 md:pl-6 space-y-2">
+      <CollapsibleContent className="space-y-2 px-3 pb-2.5 pl-4 md:pl-5">
         {calls.map((call) => (
           <ToolCallItem key={call.id} call={call} />
         ))}

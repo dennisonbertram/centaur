@@ -35,8 +35,8 @@ export function PhaseProgress({ phases }: { phases: string[] }) {
   const percent = activeIndex >= 0 ? ((activeIndex + 1) / PHASES.length) * 100 : 0;
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 overflow-x-auto">
+    <div className="space-y-2.5">
+      <div className="flex items-center gap-2.5 overflow-x-auto">
       {PHASES.map((phase) => {
         const isActive = phase === activePhase;
         const isDone = completedPhases.has(phase) && !isActive;
@@ -48,13 +48,13 @@ export function PhaseProgress({ phases }: { phases: string[] }) {
             {isDone ? (
               <CircleCheck className="size-3.5 text-primary shrink-0" />
             ) : isActive ? (
-              <LoaderCircle className="size-3.5 text-primary shrink-0 animate-spin" />
+              <LoaderCircle className="size-3.5 text-primary shrink-0 animate-spin motion-reduce:animate-none" />
             ) : (
               <Icon className="size-3.5 text-muted-foreground shrink-0" />
             )}
               <span
                 className={cn(
-                  "text-[10px] font-medium uppercase tracking-wider whitespace-nowrap",
+                  "text-xs font-medium uppercase tracking-wide whitespace-nowrap",
                   isDone && "text-primary",
                   isActive && "text-foreground",
                   isFuture && "text-muted-foreground",

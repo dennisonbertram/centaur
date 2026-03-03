@@ -62,11 +62,11 @@ export function ConnectivityBanner({
       aria-live="polite"
       data-state={visibility}
       className={cn(
-        "flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-medium",
+        "mx-3 my-1 flex items-center justify-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium",
         "data-[state=open]:animate-in data-[state=open]:slide-in-from-top-1 data-[state=open]:fade-in data-[state=open]:duration-200",
         "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-top-1 data-[state=closed]:fade-out data-[state=closed]:duration-150",
-        renderedState === "offline" && "bg-destructive/10 text-destructive",
-        renderedState === "reconnecting" && "bg-amber-500/10 text-amber-700 dark:text-amber-400",
+        renderedState === "offline" && "border-destructive/30 bg-destructive/10 text-destructive",
+        renderedState === "reconnecting" && "border-primary/30 bg-primary/10 text-primary",
       )}
     >
       {renderedState === "offline" ? (
@@ -76,7 +76,7 @@ export function ConnectivityBanner({
         </>
       ) : (
         <>
-          <RefreshCw className="size-3.5 animate-spin" />
+          <RefreshCw className="size-3.5 animate-spin motion-reduce:animate-none" />
           Reconnecting…
         </>
       )}

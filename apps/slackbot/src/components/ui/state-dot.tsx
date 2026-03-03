@@ -6,7 +6,7 @@ export function StateDot({ state, className }: { state: string; className?: stri
     return <LoaderCircle aria-hidden="true" className={cn("size-3 text-primary animate-spin", className)} />;
   }
   if (state === "stopping") {
-    return <CircleStop aria-hidden="true" className={cn("size-3 text-amber-400 animate-pulse", className)} />;
+    return <CircleStop aria-hidden="true" className={cn("size-3 text-muted-foreground animate-pulse", className)} />;
   }
   if (state === "error") {
     return <CircleX aria-hidden="true" className={cn("size-3 text-destructive", className)} />;

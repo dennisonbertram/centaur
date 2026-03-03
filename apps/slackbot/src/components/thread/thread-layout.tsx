@@ -16,7 +16,6 @@ import { X } from "lucide-react";
 import { ThreadSidebar, type ThreadSidebarHandle } from "@/components/thread/thread-sidebar";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { isTextInputTarget } from "@/lib/thread-utils";
-import { cn } from "@/lib/utils";
 
 export const THREAD_SIDEBAR_COLLAPSE_STORAGE_KEY = "threads.sidebar.collapsed.v1";
 export const THREAD_SIDEBAR_COLLAPSE_CLASS = "threads-sidebar-collapsed";
@@ -31,8 +30,10 @@ type ThreadLayoutContextValue = {
 const ThreadLayoutContext = createContext<ThreadLayoutContextValue | null>(null);
 
 function readSidebarCollapsedSnapshot(): boolean {
-  if (typeof document !== "undefined" && document.documentElement.classList.contains(THREAD_SIDEBAR_COLLAPSE_CLASS)) {
-    return true;
+  if (typeof document !== "undefined") {
+    if (document.body?.classList.contains(THREAD_SIDEBAR_COLLAPSE_CLASS)) return true;
+    // Legacy fallback for sessions that still have the class on <html>.
+    if (document.documentElement.classList.contains(THREAD_SIDEBAR_COLLAPSE_CLASS)) return true;
   }
   if (typeof window === "undefined") return false;
   try {
@@ -62,7 +63,9 @@ function updateSidebarCollapsed(next: boolean): void {
   } catch {
     // Ignore storage failures (private mode, quota, etc).
   }
-  document.documentElement.classList.toggle(THREAD_SIDEBAR_COLLAPSE_CLASS, next);
+  document.body?.classList.toggle(THREAD_SIDEBAR_COLLAPSE_CLASS, next);
+  // Keep <html> clean to avoid hydration attribute mismatches.
+  document.documentElement.classList.remove(THREAD_SIDEBAR_COLLAPSE_CLASS);
   window.dispatchEvent(new Event(THREAD_SIDEBAR_COLLAPSE_EVENT));
 }
 
@@ -256,9 +259,9 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <ThreadLayoutContext.Provider value={contextValue}>
-      <div className="thread-shell flex h-full md:h-[calc(100dvh-41px)]">
-        <aside className="thread-shell-sidebar hidden w-[320px] shrink-0 border-r border-border bg-card/20 md:flex">
-          <Suspense fallback={<div className="h-full w-full bg-card/20" />}>
+      <div className="thread-shell flex h-full md:h-[calc(100dvh-44px)]">
+        <aside className="thread-shell-sidebar hidden w-[320px] shrink-0 border-r border-border/90 bg-card/35 shadow-[inset_-1px_0_0_rgba(255,255,255,0.03)] md:flex">
+          <Suspense fallback={<div className="h-full w-full bg-card/35" />}>
             <ThreadSidebar
               ref={desktopSidebarRef}
               selectedThreadKey={selectedThreadKey}
@@ -281,7 +284,7 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
         <div className="fixed inset-0 z-50 md:hidden">
           <button
             type="button"
-            className="absolute inset-0 border-0 bg-black/50 p-0 transition-opacity duration-200 ease-out motion-reduce:transition-none opacity-100"
+            className="absolute inset-0 border-0 bg-black/55 p-0 backdrop-blur-[1px] transition-opacity duration-200 ease-out motion-reduce:transition-none opacity-100"
             aria-label="Close thread sidebar"
             onClick={closeMobileSidebar}
           />
@@ -290,14 +293,14 @@ export function ThreadLayout({ children }: { children: React.ReactNode }) {
             role="dialog"
             aria-modal="true"
             aria-label="Threads"
-            className="absolute inset-y-0 left-0 flex w-[320px] max-w-[88vw] flex-col overflow-y-auto overscroll-contain border-r border-border bg-background shadow-2xl transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform motion-reduce:transition-none motion-reduce:transform-none translate-x-0"
+            className="absolute inset-y-0 left-0 flex w-[320px] max-w-[88vw] flex-col overflow-y-auto overscroll-contain border-r border-border/90 bg-card shadow-[0_24px_80px_rgba(0,0,0,0.55)] transition-transform duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-transform motion-reduce:transition-none motion-reduce:transform-none translate-x-0"
           >
             <div className="flex items-center justify-end border-b border-border px-2 py-2">
               <button
                 type="button"
                 onClick={closeMobileSidebar}
                 aria-label="Close thread sidebar"
-                className="inline-flex size-8 items-center justify-center rounded-sm border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="inline-flex size-9 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 <X className="size-4" />
               </button>

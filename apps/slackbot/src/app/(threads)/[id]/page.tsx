@@ -18,6 +18,7 @@ import { useElapsed } from "@/hooks/use-elapsed";
 import { useStableStatus } from "@/hooks/use-stable-status";
 import { BASE } from "@/lib/constants";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { useThreadList } from "@/hooks/use-thread-list";
 import {
   entrySourceLabel,
@@ -323,18 +324,20 @@ export default function ThreadDetailPage() {
         <div className="text-center">
           <p className="text-destructive text-sm mb-4">{error}</p>
           <div className="flex items-center justify-center gap-3">
-            <button
+            <Button
               type="button"
               onClick={() => {
                 void fetchThread();
               }}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer bg-transparent border border-border rounded-sm px-3 py-1"
+              variant="outline"
+              size="xs"
+              className="border-border text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               Retry
-            </button>
+            </Button>
             <Link
               href={backHref}
-              className="text-muted-foreground text-xs hover:text-foreground transition-colors rounded-sm"
+              className="rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent hover:text-foreground"
             >
               Back to threads
             </Link>
@@ -350,7 +353,7 @@ export default function ThreadDetailPage() {
         <div className="text-center">
           <p className="text-muted-foreground text-sm inline-flex items-center gap-2">
             <LoaderCircle className="size-4 animate-spin text-primary" />
-            Connecting...
+            Connecting…
           </p>
           <p className="text-muted-foreground text-xs font-mono mt-2">{threadName(threadKey)}</p>
         </div>
@@ -387,7 +390,7 @@ export default function ThreadDetailPage() {
       <ConnectivityBanner isReconnecting={isReconnecting} threadState={thread.state} />
 
       {/* Activity feed - the only scrollable area */}
-      <div className="flex-1 min-h-0 max-w-[960px] mx-auto w-full flex flex-col">
+      <div className="mx-auto flex min-h-0 w-full max-w-[960px] flex-1 flex-col px-2 md:px-0">
         <ActivityFeed
           steps={liveSteps}
           state={thread.state}

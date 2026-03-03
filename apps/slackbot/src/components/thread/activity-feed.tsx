@@ -55,8 +55,8 @@ export function ActivityFeed({
       <ConversationContent
         className={
           compactMode
-            ? "gap-2 px-3 py-2 md:gap-2.5 md:px-4 md:py-3"
-            : "gap-2.5 px-4 py-3 md:gap-3 md:px-5 md:py-4"
+            ? "gap-2.5 px-3 py-2.5 md:gap-3 md:px-4 md:py-3"
+            : "gap-3 px-4 py-3 md:gap-3.5 md:px-5 md:py-4"
         }
       >
         {isEmpty ? (
@@ -80,11 +80,11 @@ export function ActivityFeed({
             <Message
               key={group.groupKey}
               from="assistant"
-              className="max-w-full rounded-sm border border-border/70 bg-card/50 [content-visibility:auto] [contain-intrinsic-size:220px]"
+              className="max-w-full rounded-md border border-border/80 bg-card/55 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] [content-visibility:auto] [contain-intrinsic-size:220px]"
               data-turn={group.turnId === null ? "context" : String(group.turnId)}
             >
               <MessageContent className={compactMode ? "space-y-1.5 px-2.5 py-2" : "space-y-2 px-3 py-2.5"}>
-                <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   {group.label}
                 </div>
                 <div className="space-y-2">

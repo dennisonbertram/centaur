@@ -36,21 +36,21 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           >
             Skip to main content
           </a>
-          <nav aria-label="Main" className="hidden md:flex items-center gap-6 px-6 py-2.5 border-b border-border bg-background/95 backdrop-blur-sm font-sans z-50 shrink-0">
+          <nav aria-label="Main" className="z-50 hidden h-11 shrink-0 items-center gap-6 border-b border-border/90 bg-background/95 px-6 font-sans backdrop-blur-sm md:flex">
             <Link
               href="/"
-              className="text-foreground no-underline font-semibold text-[13px] tracking-tight rounded-sm"
+              className="rounded-md px-1.5 py-1 text-[13px] font-semibold tracking-tight text-foreground no-underline transition-colors duration-150 hover:bg-accent/55"
             >
               AI2
             </Link>
             <Link
               href="/"
-              className="text-muted-foreground no-underline text-[13px] font-medium hover:text-foreground transition-colors rounded-sm"
+              className="rounded-md px-1.5 py-1 text-[13px] font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-accent/55 hover:text-foreground"
             >
               Threads
             </Link>
           </nav>
-          <main id="main-content" className="h-full md:h-[calc(100%-41px)] overflow-hidden">
+          <main id="main-content" className="h-full overflow-hidden md:h-[calc(100%-44px)]">
             {children}
           </main>
           <Toaster position="top-right" richColors closeButton />

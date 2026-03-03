@@ -8,15 +8,15 @@ import { CopyIcon } from "lucide-react";
 import { toast } from "sonner";
 
 const LANGUAGE_CLASSES: Record<string, string> = {
-  ts: "bg-blue-500/10 text-blue-400",
-  tsx: "bg-blue-500/10 text-blue-400",
-  js: "bg-yellow-500/10 text-yellow-400",
-  jsx: "bg-yellow-500/10 text-yellow-400",
-  py: "bg-green-500/10 text-green-400",
-  css: "bg-purple-500/10 text-purple-400",
-  json: "bg-amber-500/10 text-amber-400",
+  ts: "bg-primary/10 text-primary",
+  tsx: "bg-primary/10 text-primary",
+  js: "bg-primary/10 text-primary",
+  jsx: "bg-primary/10 text-primary",
+  py: "bg-primary/10 text-primary",
+  css: "bg-primary/10 text-primary",
+  json: "bg-primary/10 text-primary",
   md: "bg-secondary text-muted-foreground",
-  sh: "bg-green-500/10 text-green-400",
+  sh: "bg-primary/10 text-primary",
 };
 
 export function DiffCard({
@@ -70,12 +70,12 @@ export function DiffCard({
   const hiddenCount = Math.max(0, rows.length - visibleRows.length);
 
   return (
-    <div className={`overflow-hidden rounded-md border ${didFail ? "border-destructive/30" : ""}`}>
-      <div className="flex items-center justify-between border-b bg-muted/50 px-3 py-2">
+    <div className={`overflow-hidden rounded-md border border-border/80 bg-card/55 shadow-[0_0_0_1px_rgba(255,255,255,0.02)] ${didFail ? "border-destructive/30" : ""}`}>
+      <div className="flex items-center justify-between border-b border-border/80 bg-background/60 px-3 py-2">
         <div className="flex items-center gap-2 min-w-0">
           <Badge className={LANGUAGE_CLASSES[lang] ?? "bg-secondary text-muted-foreground"}>{lang}</Badge>
           <span className="font-mono text-xs text-foreground truncate">{file}</span>
-          {didFail && <Badge variant="destructive" className="text-[10px]">failed</Badge>}
+          {didFail && <Badge variant="destructive" className="text-xs">failed</Badge>}
         </div>
         <MessageActions>
           <MessageAction
@@ -91,19 +91,19 @@ export function DiffCard({
           </MessageAction>
         </MessageActions>
       </div>
-      <pre className="p-3 text-[11px] font-mono overflow-auto overscroll-contain max-h-[360px]">
+      <pre className="max-h-[360px] overflow-auto overscroll-contain p-3 text-xs font-mono">
         {visibleRows.map((row, i) => (
           <span
             key={`${i}-${row.oldLine ?? "x"}-${row.newLine ?? "x"}`}
             className={
               row.kind === "add"
-                ? "grid grid-cols-[52px_1fr] bg-green-500/10 text-green-300"
+                ? "grid grid-cols-[52px_1fr] bg-primary/10 text-foreground"
                 : row.kind === "remove"
-                  ? "grid grid-cols-[52px_1fr] bg-red-500/10 text-red-300"
+                  ? "grid grid-cols-[52px_1fr] bg-destructive/10 text-destructive"
                   : "grid grid-cols-[52px_1fr] text-muted-foreground"
             }
           >
-            <span className="select-none pr-2 text-right text-[10px] text-muted-foreground">
+            <span className="select-none pr-2 text-right text-xs text-muted-foreground/70">
               {row.newLine ?? row.oldLine ?? ""}
             </span>
             <span>{row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " "} {row.text}</span>
@@ -115,7 +115,7 @@ export function DiffCard({
           type="button"
           onClick={() => setExpanded((value) => !value)}
           aria-expanded={expanded}
-          className="w-full border-t border-border px-3 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground cursor-pointer"
+          className="w-full cursor-pointer border-t border-border/80 px-3 py-1.5 text-left text-xs text-muted-foreground transition-colors duration-150 hover:bg-accent/50 hover:text-foreground"
         >
           {expanded ? "Show less context" : `Show ${hiddenCount} more lines`}
         </button>
