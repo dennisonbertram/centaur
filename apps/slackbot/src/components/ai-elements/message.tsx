@@ -22,7 +22,9 @@ import { mermaid } from "@streamdown/mermaid";
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import {
   createContext,
+  lazy,
   memo,
+  Suspense,
   useCallback,
   useContext,
   useEffect,
@@ -30,6 +32,7 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
+import { extractDashboardBlocks } from "@/lib/dashboard-parser";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -324,18 +327,58 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>;
 
 const streamdownPlugins = { cjk, code, math, mermaid };
 
+const DashboardLayout = lazy(() =>
+  import("@/components/dashboard/layout").then((m) => ({ default: m.DashboardLayout })),
+);
+
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
-    <Streamdown
-      className={cn(
-        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
-        className
-      )}
-      plugins={streamdownPlugins}
-      {...props}
-    />
-  ),
-  (prevProps, nextProps) => prevProps.children === nextProps.children
+  ({ className, children, ...props }: MessageResponseProps) => {
+    const text = typeof children === "string" ? children : "";
+    const dashboardBlocks = useMemo(
+      () => (text ? extractDashboardBlocks(text) : []),
+      [text],
+    );
+
+    const mergedClassName = cn(
+      "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+      className,
+    );
+
+    if (dashboardBlocks.length === 0) {
+      return (
+        <Streamdown className={mergedClassName} plugins={streamdownPlugins} {...props}>
+          {children}
+        </Streamdown>
+      );
+    }
+
+    return (
+      <div className={cn(mergedClassName, "space-y-4")}>
+        {dashboardBlocks.map((block, i) => (
+          <div key={i}>
+            {block.before.trim() && (
+              <Streamdown plugins={streamdownPlugins} {...props}>
+                {block.before}
+              </Streamdown>
+            )}
+            <Suspense
+              fallback={
+                <div className="h-32 rounded-lg border border-border bg-card animate-pulse" />
+              }
+            >
+              <DashboardLayout spec={block.spec} />
+            </Suspense>
+            {block.after.trim() && (
+              <Streamdown plugins={streamdownPlugins} {...props}>
+                {block.after}
+              </Streamdown>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  },
+  (prevProps, nextProps) => prevProps.children === nextProps.children,
 );
 
 MessageResponse.displayName = "MessageResponse";
