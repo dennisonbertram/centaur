@@ -99,7 +99,7 @@ jobs:
         if: steps.changes.outputs.scope != 'all' && contains(steps.changes.outputs.scope, 'slackbot')
         run: |
           test ! -f apps/slackbot/package-lock.json
-          docker compose up -d --build slackbot
+          docker compose up -d --build --no-deps slackbot
 
       - name: Build sandbox image
         if: steps.changes.outputs.scope != 'all' && contains(steps.changes.outputs.scope, 'sandbox')
