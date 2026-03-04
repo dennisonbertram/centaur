@@ -22,6 +22,7 @@ dependencies = [
     "toon-format @ git+https://github.com/toon-format/toon-python.git",
     "docker>=7.0.0",
     "onepassword-sdk>=0.4.0",
+    "psycopg2-binary>=2.9.11",
 ]
 
 [project.scripts]
