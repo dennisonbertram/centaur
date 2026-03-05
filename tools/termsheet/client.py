@@ -9,6 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from .clause_db import build_clause_plan
+from .closing_docs import (
+    generate_board_consent_docx,
+    generate_compliance_certificate_docx,
+    generate_mrl_docx,
+    generate_secretary_certificate_docx,
+    generate_stockholder_consent_docx,
+)
 from .doc_store import (
     create_document,
     create_version,
@@ -248,6 +255,126 @@ class TermsheetClient:
             },
             "delivery_ready": bool(fidelity_report.get("passed")) and all_sendable,
         }
+
+    def generate_board_consent(
+        self,
+        term_sheet: TermSheet | dict,
+        effective_date: str | None = None,
+        additional_resolutions: list[str] | None = None,
+        output_dir: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate a Board Consent DOCX for a preferred stock financing."""
+        ts = self._coerce_term_sheet(term_sheet)
+        docx_bytes = generate_board_consent_docx(ts, effective_date, additional_resolutions)
+        return self._write_closing_doc(ts, docx_bytes, "Board_Consent", output_dir)
+
+    def generate_stockholder_consent(
+        self,
+        term_sheet: TermSheet | dict,
+        effective_date: str | None = None,
+        output_dir: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate a Stockholder Consent DOCX for a preferred stock financing."""
+        ts = self._coerce_term_sheet(term_sheet)
+        docx_bytes = generate_stockholder_consent_docx(ts, effective_date)
+        return self._write_closing_doc(ts, docx_bytes, "Stockholder_Consent", output_dir)
+
+    def generate_mrl(
+        self,
+        term_sheet: TermSheet | dict,
+        fund_name: str = "Paradigm Fund LP",
+        effective_date: str | None = None,
+        output_dir: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate a Management Rights Letter DOCX."""
+        ts = self._coerce_term_sheet(term_sheet)
+        docx_bytes = generate_mrl_docx(ts, fund_name, effective_date)
+        return self._write_closing_doc(
+            ts, docx_bytes, f"MRL_{fund_name.replace(' ', '_')}", output_dir,
+        )
+
+    def generate_secretary_certificate(
+        self,
+        term_sheet: TermSheet | dict,
+        secretary_name: str = "",
+        effective_date: str | None = None,
+        output_dir: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate a Secretary's Certificate DOCX."""
+        ts = self._coerce_term_sheet(term_sheet)
+        docx_bytes = generate_secretary_certificate_docx(ts, secretary_name, effective_date)
+        return self._write_closing_doc(ts, docx_bytes, "Secretary_Certificate", output_dir)
+
+    def generate_compliance_certificate(
+        self,
+        term_sheet: TermSheet | dict,
+        officer_name: str = "",
+        officer_title: str = "Chief Executive Officer",
+        effective_date: str | None = None,
+        output_dir: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate an Officer's Compliance Certificate DOCX."""
+        ts = self._coerce_term_sheet(term_sheet)
+        docx_bytes = generate_compliance_certificate_docx(
+            ts, officer_name, officer_title, effective_date,
+        )
+        return self._write_closing_doc(ts, docx_bytes, "Compliance_Certificate", output_dir)
+
+    def generate_closing_set(
+        self,
+        term_sheet: TermSheet | dict,
+        output_dir: str = "/home/agent/workspace/output",
+        effective_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate the full closing document set (Board Consent, Stockholder Consent,
+        MRLs for both Paradigm entities, Secretary Certificate, Compliance Certificate).
+        """
+        ts = self._coerce_term_sheet(term_sheet)
+        results: dict[str, Any] = {}
+        results["board_consent"] = self.generate_board_consent(ts, effective_date, output_dir=output_dir)
+        results["stockholder_consent"] = self.generate_stockholder_consent(
+            ts, effective_date, output_dir=output_dir,
+        )
+        results["mrl_paradigm_fund"] = self.generate_mrl(
+            ts, "Paradigm Fund LP", effective_date, output_dir=output_dir,
+        )
+        results["mrl_paradigm_two"] = self.generate_mrl(
+            ts, "Paradigm Two LP", effective_date, output_dir=output_dir,
+        )
+        results["secretary_certificate"] = self.generate_secretary_certificate(
+            ts, effective_date=effective_date, output_dir=output_dir,
+        )
+        results["compliance_certificate"] = self.generate_compliance_certificate(
+            ts, effective_date=effective_date, output_dir=output_dir,
+        )
+        return {
+            "documents": results,
+            "output_dir": output_dir,
+            "company_name": ts.company_name,
+            "series": ts.effective_series,
+        }
+
+    def _write_closing_doc(
+        self,
+        ts: TermSheet,
+        docx_bytes: bytes,
+        doc_label: str,
+        output_dir: str | None,
+    ) -> dict[str, Any]:
+        stem = self._safe_artifact_stem(ts.company_name)
+        filename = f"{stem}_{doc_label}.docx"
+        result: dict[str, Any] = {"filename": filename, "size_bytes": len(docx_bytes)}
+        if output_dir:
+            out = Path(output_dir).resolve()
+            out.mkdir(parents=True, exist_ok=True)
+            path = self._artifact_path(out, filename)
+            path.write_bytes(docx_bytes)
+            result["path"] = str(path)
+        else:
+            import base64
+
+            result["content_base64"] = base64.b64encode(docx_bytes).decode("ascii")
+        return result
 
     def generate_email(self, term_sheet: TermSheet, dri_name: str | None = None) -> str:
         """Generate a draft email for a term sheet."""

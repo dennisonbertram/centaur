@@ -42,6 +42,9 @@ else
 fi
 
 # ── Select system prompt based on persona ────────────────────────────────────
+# All harnesses read AGENTS.md from the workspace root (amp, codex). Claude-code
+# also receives the persona prompt via --system-prompt flag from the API.
+# Always place the correct prompt in workspace/AGENTS.md so every harness sees it.
 PERSONA_UPPER="$(echo "${AGENT_PERSONA:-}" | tr '[:lower:]' '[:upper:]')"
 BASE_PROMPT="$HOME_DIR/AGENTS.md"
 PERSONA_PROMPT="$HOME_DIR/AGENTS_${PERSONA_UPPER}.md"

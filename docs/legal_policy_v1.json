@@ -367,5 +367,99 @@
     "template_docx": ["Template includes 1x non-participating liquidation preference and 45-day no-shop baseline.", "Template includes legal fee cap convention and standard NVCA framing."],
     "handoff_txt": ["Red-line framing for BBWA, blocking rights, major investor qualification, and token controls.", "Review order and rights-parity guidance."],
     "checklist_docx_and_gunderson_pptx": ["Regulatory diligence emphasis: Rule 506/Bad Actor, blue sky, HSR, CFIUS, OISP.", "Definitive doc package order and closing checklist discipline."]
-  }
+  },
+  "paradigm_redlines_by_document": {
+    "charter": [
+      {"provision": "Dividends", "nvca_default": "Cumulative or non-cumulative, fixed rate", "paradigm_position": "Non-cumulative, discretionary (not fixed)", "severity": "STANDARD"},
+      {"provision": "Liquidation Preference", "nvca_default": "1x-2x, participating or non-participating", "paradigm_position": "1x non-participating only", "severity": "RED_LINE"},
+      {"provision": "Redemption Rights", "nvca_default": "Optional after 5 years", "paradigm_position": "Exclude entirely", "severity": "STANDARD"},
+      {"provision": "Pay-to-Play", "nvca_default": "Optional, converts to common on failure", "paradigm_position": "Exclude entirely", "severity": "STANDARD"},
+      {"provision": "Anti-Dilution", "nvca_default": "BBWA or full ratchet", "paradigm_position": "BBWA only. Never full ratchet. Narrow carveouts. Waivable only by majority of series.", "severity": "RED_LINE"},
+      {"provision": "Protective Provisions", "nvca_default": "Majority of preferred, standard list", "paradigm_position": "Token issuance requires Paradigm consent. Paradigm blocking rights when leading. Indebtedness cap ($1M threshold).", "severity": "RED_LINE"},
+      {"provision": "Board Burn-Off", "nvca_default": "Varies, often 50%+", "paradigm_position": "10-40% of original shares, lower the better", "severity": "STANDARD"},
+      {"provision": "Deemed Liquidation Events", "nvca_default": "Merger, acquisition, asset sale", "paradigm_position": "Include IP/token transfer as deemed liquidation event", "severity": "RED_LINE"},
+      {"provision": "Qualified IPO Threshold", "nvca_default": "$50M-$100M+ net proceeds", "paradigm_position": ">$100M net proceeds", "severity": "STANDARD"},
+      {"provision": "Founder Preferred Stock", "nvca_default": "Not standard", "paradigm_position": "OK with Paradigm DRI approval, ideally tied to service", "severity": "STANDARD"},
+      {"provision": "Authorized Common Buffer", "nvca_default": "Board discretion", "paradigm_position": "Minimize (<5% buffer)", "severity": "NICE_TO_HAVE"}
+    ],
+    "spa": [
+      {"provision": "Sanctions Compliance Rep", "nvca_default": "Optional", "paradigm_position": "Required. Define Restricted Countries, Designated Parties, Sanctioned Parties.", "severity": "RED_LINE"},
+      {"provision": "OISP Rep", "nvca_default": "Not standard", "paradigm_position": "Required. 31 C.F.R. Part 850 - company not person of country of concern.", "severity": "RED_LINE"},
+      {"provision": "QSBS Rep", "nvca_default": "Optional", "paradigm_position": "Include", "severity": "STANDARD"},
+      {"provision": "FCPA Rep", "nvca_default": "Optional", "paradigm_position": "Include", "severity": "STANDARD"},
+      {"provision": "Generative AI Rep", "nvca_default": "Not standard", "paradigm_position": "Company uses AI tools in compliance with licenses, no sensitive data in prompts", "severity": "NICE_TO_HAVE"},
+      {"provision": "Materiality Thresholds", "nvca_default": "Varies or none", "paradigm_position": "$25K individual, $50K aggregate for indebtedness disclosure", "severity": "STANDARD"},
+      {"provision": "Materiality Scrape", "nvca_default": "Optional, often included", "paradigm_position": "Exclude for indemnification", "severity": "STANDARD"},
+      {"provision": "Counsel Fee Cap", "nvca_default": "Varies or uncapped", "paradigm_position": "$75K cap on investor counsel fees", "severity": "STANDARD"},
+      {"provision": "Survival Period", "nvca_default": "12-24 months typical", "paradigm_position": "No limitation. Reps survive indefinitely.", "severity": "STANDARD"},
+      {"provision": "Payment", "nvca_default": "Wire transfer in USD", "paradigm_position": "Allow USDC / stablecoin payment", "severity": "STANDARD"},
+      {"provision": "MRL Closing Condition", "nvca_default": "Standard conditions", "paradigm_position": "MRLs naming Paradigm Fund LP AND Paradigm Two LP", "severity": "RED_LINE"},
+      {"provision": "Legal Opinion", "nvca_default": "Standard conditions", "paradigm_position": "Legal opinion with unqualified cap rep", "severity": "STANDARD"},
+      {"provision": "Indemnification Agreements", "nvca_default": "Optional", "paradigm_position": "Required, covering future board members", "severity": "STANDARD"}
+    ],
+    "ira": [
+      {"provision": "Major Investor Status", "nvca_default": "Defined by share threshold", "paradigm_position": "Always qualify as Major Investor. Set threshold so Paradigm qualifies.", "severity": "RED_LINE"},
+      {"provision": "Competitor Carve-Out", "nvca_default": "Optional, varies", "paradigm_position": "in no event shall Paradigm or its Affiliates be a Competitor", "severity": "RED_LINE"},
+      {"provision": "Section 220 Rights", "nvca_default": "May include waiver", "paradigm_position": "Never waive DGCL Section 220 inspection rights for Paradigm", "severity": "RED_LINE"},
+      {"provision": "Amendment Veto", "nvca_default": "Majority of holders can amend", "paradigm_position": "Paradigm-specific provisions require Paradigm written consent to amend", "severity": "RED_LINE"},
+      {"provision": "Rights Parity", "nvca_default": "Not addressed", "paradigm_position": "Flag any rights other investors receive that Paradigm does not", "severity": "RED_LINE"},
+      {"provision": "Pro Rata Rights", "nvca_default": "Standard, holder-specific", "paradigm_position": "Required. Can apportion among Paradigm affiliates.", "severity": "STANDARD"},
+      {"provision": "D&O Insurance", "nvca_default": "Optional", "paradigm_position": "Required", "severity": "STANDARD"},
+      {"provision": "Observer Rights", "nvca_default": "Varies", "paradigm_position": "Required if any other investor gets observer rights", "severity": "STANDARD"},
+      {"provision": "Registration Rights", "nvca_default": "S-1 demand, S-3 piggyback", "paradigm_position": "S-1 demand (5yr/$20M min), S-3 ($5M min). Include Direct Listing provisions.", "severity": "STANDARD"},
+      {"provision": "Sanctioned Party Suspension", "nvca_default": "Not standard", "paradigm_position": "Info rights, registration rights, pro rata suspended if holder becomes Sanctioned Party", "severity": "RED_LINE"},
+      {"provision": "QSBS Covenant", "nvca_default": "Not standard", "paradigm_position": "Include", "severity": "STANDARD"},
+      {"provision": "FCPA Covenant", "nvca_default": "Not standard", "paradigm_position": "Include", "severity": "STANDARD"},
+      {"provision": "Protocol Veto (crypto only)", "nvca_default": "Not addressed", "paradigm_position": "Company cannot use competing blockchain without Paradigm consent", "severity": "RED_LINE"}
+    ],
+    "voting": [
+      {"provision": "Board Size & Composition", "nvca_default": "Variable, negotiated", "paradigm_position": "Fixed size (typically 3 early stage). Paradigm: 1 designated seat. Services requirement on directors.", "severity": "STANDARD"},
+      {"provision": "Drag-Along", "nvca_default": "Varies", "paradigm_position": "Majority of Preferred + majority of Key Holders. Services requirement.", "severity": "STANDARD"},
+      {"provision": "Amendment", "nvca_default": "Majority of parties", "paradigm_position": "Paradigm written consent required for board seat, drag-along, and voting provisions", "severity": "RED_LINE"},
+      {"provision": "Sanctioned Party Shares", "nvca_default": "Not standard", "paradigm_position": "Disregarded for voting thresholds", "severity": "RED_LINE"},
+      {"provision": "Irrevocable Proxy", "nvca_default": "Optional", "paradigm_position": "Include if stockholder fails to vote per agreement", "severity": "STANDARD"}
+    ],
+    "rofr": [
+      {"provision": "Company ROFR", "nvca_default": "Standard, may be assignable", "paradigm_position": "Not assignable by Company. ROFR supersedes Bylaws.", "severity": "STANDARD"},
+      {"provision": "Founder Carveout", "nvca_default": "5% of holdings typical", "paradigm_position": "2% preferred, 5% acceptable", "severity": "NICE_TO_HAVE"},
+      {"provision": "Pledge Carve-Out", "nvca_default": "Often included", "paradigm_position": "Exclude. Do not allow pledge carve-out.", "severity": "STANDARD"},
+      {"provision": "Token ROFR", "nvca_default": "Not addressed", "paradigm_position": "Include", "severity": "STANDARD"},
+      {"provision": "Competitor Carve-Out", "nvca_default": "Optional", "paradigm_position": "in no event shall Paradigm or its Affiliates be a Competitor", "severity": "RED_LINE"},
+      {"provision": "ROFR Window", "nvca_default": "30-45 days", "paradigm_position": "30 days preferred, 45 acceptable", "severity": "NICE_TO_HAVE"},
+      {"provision": "Competitor List Consent", "nvca_default": "Board discretion", "paradigm_position": "Require Series H consent to add new Competitors", "severity": "NICE_TO_HAVE"}
+    ],
+    "token_warrant": [
+      {"provision": "Exercise Timing", "nvca_default": "N/A", "paradigm_position": "Any time after Token Structuring Event, before Expiration Date", "severity": "STANDARD"},
+      {"provision": "Expiration", "nvca_default": "N/A", "paradigm_position": "Earlier of: 10 years, 60 days post-TSE notice, or abandonment", "severity": "STANDARD"},
+      {"provision": "Exercise Price", "nvca_default": "N/A", "paradigm_position": "Nominal. Initial: lesser of $1K or (Pre-Launch Valuation x Tokens)", "severity": "STANDARD"},
+      {"provision": "Net Exercise", "nvca_default": "N/A", "paradigm_position": "Default and required", "severity": "RED_LINE"},
+      {"provision": "Token Allocation", "nvca_default": "N/A", "paradigm_position": "Pro rata x Company Reserve. Min 50% of Total Network Tokens in reserve.", "severity": "STANDARD"},
+      {"provision": "Lockup Duration", "nvca_default": "N/A", "paradigm_position": "Min 1 year from Token Launch. Max 4 years.", "severity": "STANDARD"},
+      {"provision": "Lockup MFN", "nvca_default": "N/A", "paradigm_position": "Cannot be more onerous than Insider lockups. Board waiver parity.", "severity": "RED_LINE"},
+      {"provision": "Smart Contract Restrictions", "nvca_default": "N/A", "paradigm_position": "Require Paradigm written consent. Must be immutable.", "severity": "RED_LINE"},
+      {"provision": "Lockup Permitted Activities", "nvca_default": "N/A", "paradigm_position": "Transfers to affiliates, voting/governance, staking", "severity": "STANDARD"}
+    ]
+  },
+  "diligence_red_flags": [
+    {"flag": "Cap table doesn't reconcile or missing instruments", "severity": "critical", "category": "corporate_cap_table"},
+    {"flag": "Token commitments not reflected in cap table", "severity": "critical", "category": "token_specific"},
+    {"flag": "No smart contract audit or unresolved critical findings", "severity": "critical", "category": "token_specific"},
+    {"flag": "Founder IP assignment gaps (especially protocol-related)", "severity": "critical", "category": "ip_and_technology"},
+    {"flag": "Regulatory inquiries not disclosed", "severity": "critical", "category": "regulatory_compliance"},
+    {"flag": "Missing 83(b) elections on founder restricted stock", "severity": "high", "category": "corporate_cap_table"},
+    {"flag": "Stale 409A valuation (>12 months or pre-material event)", "severity": "high", "category": "corporate_cap_table"},
+    {"flag": "Key employees without signed IP assignment or PIIA", "severity": "high", "category": "ip_and_technology"},
+    {"flag": "Outstanding convertibles with unclear conversion terms", "severity": "high", "category": "corporate_cap_table"},
+    {"flag": "Board minutes with long gaps or missing for material events", "severity": "high", "category": "corporate_cap_table"},
+    {"flag": "Side letters granting other investors superior rights", "severity": "high", "category": "corporate_cap_table"},
+    {"flag": "Unusual acceleration provisions in founder vesting", "severity": "high", "category": "corporate_cap_table"},
+    {"flag": "Protocol governance controlled by insiders without lockup", "severity": "high", "category": "token_specific"},
+    {"flag": "Contracts signed by unauthorized individuals", "severity": "high", "category": "corporate_cap_table"},
+    {"flag": "Employee classification risk (contractors doing employee work)", "severity": "medium", "category": "employment"},
+    {"flag": "Related party transactions without board approval", "severity": "medium", "category": "corporate_cap_table"},
+    {"flag": "Insurance coverage gaps (no D&O, no cyber)", "severity": "medium", "category": "insurance"},
+    {"flag": "IP developed before incorporation with no assignment", "severity": "medium", "category": "ip_and_technology"},
+    {"flag": "Non-standard terms in prior round documents that carry forward", "severity": "medium", "category": "corporate_cap_table"},
+    {"flag": "Change of control provisions in material contracts", "severity": "medium", "category": "contracts"}
+  ]
 }

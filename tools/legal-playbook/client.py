@@ -366,6 +366,26 @@ class LegalPlaybookClient:
         precedents = self._policy.get("deal_precedents", [])
         return [dict(item) for item in precedents if isinstance(item, dict)]
 
+    def get_paradigm_redlines(self, document_type: str = "") -> dict[str, Any] | list[dict[str, Any]]:
+        """Return Paradigm's redlines mapped against NVCA defaults, by document type.
+
+        If document_type is provided (charter, spa, ira, voting, rofr, token_warrant),
+        returns redlines for that document only. Otherwise returns all documents.
+        """
+        all_redlines = self._policy.get("paradigm_redlines_by_document", {})
+        if not document_type or document_type.strip().lower() in {"", "all"}:
+            return dict(all_redlines)
+        doc_type = document_type.strip().lower()
+        return list(all_redlines.get(doc_type, []))
+
+    def get_diligence_red_flags(self, category: str = "") -> list[dict[str, Any]]:
+        """Return diligence red flags, optionally filtered by category."""
+        flags = self._policy.get("diligence_red_flags", [])
+        if not category or category.strip().lower() in {"", "all"}:
+            return [dict(f) for f in flags if isinstance(f, dict)]
+        cat = category.strip().lower()
+        return [dict(f) for f in flags if isinstance(f, dict) and f.get("category") == cat]
+
     def get_paradigm_checks(self) -> list[dict[str, str]]:
         """Return the 16 Paradigm-specific compliance checks for every review."""
         return [

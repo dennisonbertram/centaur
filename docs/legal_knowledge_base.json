@@ -88,6 +88,396 @@
       ]
     }
   },
+  "document_structure_patterns": {
+    "topic": "document_structures",
+    "source": "Extracted from executed Paradigm portfolio company documents (Corsali/Vana, Opyn, Exponential DeFi, Yield)",
+    "description": "Section structure, conventions, and exemplar opening language from real closing sets. Load via get_knowledge(topics=\"document_structures\") before drafting any document.",
+    "charter": {
+      "structure": [
+        "FIRST — Name",
+        "SECOND — Registered Agent",
+        "THIRD — Purpose",
+        "FOURTH — Authorized Stock (subsections: General, Voting, Dividends, Liquidation, Conversion, Anti-Dilution, Protective Provisions, Deemed Liquidation Events)"
+      ],
+      "conventions": "Delaware statutory format. Articles use ordinal numbers (FIRST, SECOND). Share authorization in FOURTH article with subdivided subsections. Dual-class common stock (Class A/B) if applicable.",
+      "exemplar_opening": "AMENDED AND RESTATED CERTIFICATEOF INCORPORATIONOF CORSALI, INC. (Pursuantto Sections 242 and 245 of the General Corporation Law of the Stateof Delaware) Corsali, Inc., a corporation organized and existing under and by virtueof the provisionsof the General Corporation Law of the Stateof Delaware (the “General Corporation Law”), DOES HEREBY CERTIFY: 1. That the nameof this corporationis Corsali, Inc., and that this corporation was originally incorporated pursuantto the General Corporation Law on July 22, 2020 under the name Toca Labs, Inc. 2. That the Boardof Directors duly adopted resolutions proposingto amend and restate the Certificateof Incorporationof this corporation, declaring said amendment and restatementto be advisableble and in the best interestsof this corporation and its stockholders, and authorizing the appropriate officersof this corporationto solicit the consentof the stockholders therefor, which resolution setting forth the proposed amendment and restatementis as follows: RESOLVED, that the Certificateof Incorporationof this corporationbe amended and restatedin its entiretyto readas follows: FIRST: The nameof this corporationis Corsali, Inc. (the “Corporation”). SECOND: The addressof the registered officeof the Corporationin the Stateof Delawareis 651N Broad St, Suite 206, in the Cityof Middletown, Countyof New Castle 19709. The nameof its registered agentat such addressis Legalinc Corporate Services, Inc. THIRD: The nature..."
+    },
+    "spa": {
+      "structure": [
+        "1. Purchase and Sale of Preferred Stock (1.1 Sale and Issuance, 1.2 Closing; Delivery)",
+        "2. Representations and Warranties of the Company",
+        "3. Representations and Warranties of the Purchasers",
+        "4. Conditions to Closing",
+        "5. Miscellaneous"
+      ],
+      "conventions": "NVCA-style SPA. Schedule of Purchasers as Exhibit A. Restated Certificate as Exhibit B. Numbered sections with lettered subsections.",
+      "exemplar_opening": "Execution Version1 SERIES SEED PREFERRED STOCK PURCHASE AGREEMENT THIS SERIES SEED PREFERRED STOCK PURCHASE AGREEMENT (this “Agreement”), is madeas of January 25, 2022by and among Exponential DeFi Inc., a Delaware corporation (the “Company”) and the investors listedon ExhibitA attachedto this Agreement (eacha “Purchaser” and together the “Purchasers”). The parties hereby agreeas follows: 1. Purchase and Saleof Preferred Stock and Common Stock. 1.1 Sale and Issuanceof Preferred Stock. (a) The Company shall have adopted and filed with the Secretaryof Stateof the Stateof Delawareon or before the Initial Closing (as defined below) the Amended and Restated Certificateof Incorporationin the formof ExhibitB attachedto this Agreement (the “Restated Certificate”). (b) Subjectto the terms and conditionsof this Agreement, each Purchaser agreesto purchaseat the Closing (as defined below), and the Company agreesto sell and issueto each Purchaserat the Closing , that numberof sharesof Series Seed Preferred Stock, $0.0001 par value per share (the “ Series Seed Preferred Stock ”) set forth opposite each Purchaser’s nameon ExhibitA . The sharesof Series Seed Preferred Stock issuableto the Purchasers pursuantto this Agreement are referredto hereinas the “Shares” (in each case including any shares issuedat the Initial Closing and any Additional Shares, as defined below). The purchase price per Share shallbe $7.5833, payablein cashor wire transferof imme..."
+    },
+    "ira": {
+      "structure": [
+        "1. Definitions",
+        "2. Registration Rights",
+        "3. Information and Observer Rights",
+        "4. Right of First Offer",
+        "5. Additional Covenants",
+        "6. Miscellaneous"
+      ],
+      "conventions": "Three-party agreement (Company + Investors + Founders). Detailed definitions section before substantive provisions. Major Investor defined early.",
+      "exemplar_opening": "OPYN INC. INVESTORS’ RIGHTS AGREEMENT THIS INVESTORS’ RIGHTS AGREEMENT (this “ Agreement”), is madeas of December 21, 2020, by and among Opyn INC., a Delaware corporation (the “ Company”), eachof the investors listedon ScheduleA hereto, eachof whichis referredto in this Agreementas an “Investor”, and eachof the stockholders listedon ScheduleB hereto, eachof whomis referredto hereinas a “ Founder” and any additional investor that becomesa partyto this Agreementin accordance with Section 7.9 hereof. RECITALS WHEREAS, the Company and the Investors are partiesto the Series A, Series A- 1, Series A-2, Series A-3, Series A-4, Series A-5 and Series A-6 Preferred Stock Purchase Agreementof even date herewith (the “Purchase Agreement”); and WHEREAS, in orderto induce the Companyto enter into the Purchase Agreement and to induce the Investorsto invest fundsin the Company pursuantto the Purchase Agreement, the Investors, the Founders and the Company hereby agree that this Agreement shall govern the rightsof the Investorsto cause the Companyto re gister sharesof Common Stock issuableto the Investors, to receive certain information from the Company, andto participatein future equity offeringsby the Company, and shall govern certain other mattersas set forthin this Agreement; NOW, THEREFORE, the parties hereby agreeas follows: 1. Definitions. For purposesof this Agreement: 1.1 “Affiliate” means, with respectto any specified Person, any other Person w..."
+    },
+    "voting": {
+      "structure": [
+        "1. Voting Provisions Regarding Board of Directors",
+        "2. Vote to Increase Authorized Shares",
+        "3. Drag-Along",
+        "4. Remedies",
+        "5. Miscellaneous"
+      ],
+      "conventions": "Multi-series preferred enumeration in preamble. Board composition provisions as Section 1. Services requirement on director seats.",
+      "exemplar_opening": "OPYN INC. VOTING AGREEMENT THIS VOTING AGREEMENT (this “ Agreement”), is made and entered intoas of December 21, 2020, by and among Opyn INC., a Delaware corporation (the “ Company”), each holderof the Company’s SeriesA Pref erred Stock, $0.0001 par value per share (“ SeriesA Preferred Stock ”), Series A-1 Preferred Stock, $0.0001 par value per share (“ Series A-1 Preferred Stock ”), Series A-2 Preferred Stock, $0.0001 par value per share (“ Series A-2 Preferred Stock ”), Series A-3 PreferredSt ock, $0.0001 par value per share (“ Series A-3 Preferred Stock ”), Series A-4 Preferred Stock, $0.0001 par value per share (“ Series A-4 Preferred Stock ”), Series A-5 Preferred Stock, $0.0001 par value per share (“ Series A-5 Preferred Stock ”) and Series A-6 Preferred Stock, $0.0001 par value per share (“ Series A-6 Preferred Stock”) (referredto herein, as the “Preferred Stock”), listedon ScheduleA (together with any subsequent investors, or transferees, who become parties heretoas “Investors” pursuantto Subsections 7.1(a) or 7.2 below, the “ Investors”), and those certain stockholdersof the Company listedon ScheduleB (t ogether with any subsequentst ockholders, or any transferees, who become parties heretoas “Key Holders” pu rsuantto Subsections 7.1(b) or 7.2 below, the “Key Holders,” and together collectively with the Investors, the “Stockholders”). RECITALS A. Concurrently with the executionof this Agreement, the Company and the Investors are entering intoa Serie..."
+    },
+    "rofr": {
+      "structure": [
+        "1. Definitions",
+        "2. Right of First Refusal",
+        "3. Right of Co-Sale",
+        "4. Exempt Transfers",
+        "5. Prohibited Transfers",
+        "6. Legend",
+        "7. Lock-Up",
+        "8. Miscellaneous"
+      ],
+      "conventions": "Three-party agreement. Company ROFR first, then Investor ROFR. Key Holder defined to include founders. Founder carveout in exempt transfers.",
+      "exemplar_opening": "OPYN INC. RIGHTOF FIRST REFUSAL AND CO-SALE AGREEMENT THIS RIGHTOF FIRST REFUSAL AND CO-SALE AGREEMENT (this “Agreement”), is madeas of December 21, 2020, by and among Opyn INC., a Delaware corporation (the “Company”), the Investors listedon ScheduleA and the Key Holders listedon Schedule B. WHEREAS, each Stockholderis the beneficial ownerof the numberof sharesof Capital Stock set forth opposite the nameof such Stockholderon ScheduleA and Schedule B, as applicable; WHEREAS, the Company and the Investors are partiesto the Series A, Series A-1, Series A-2, Series A-3, Series A-4, Series A-5 and Series A-6 Preferred Stock Purchase Agreement, of even date herewith (the “Purchase Agreement”), pursuantto which the Investors have agreedto purchase sharesof the Company’s SeriesA Preferred Stock, $0.0001 par value per share (“SeriesA Preferred Stock ”), Series A-1 Preferred Stock, $0.0001 par value per share (“ Series A-1 Preferred Stock ”), Series A-2 Preferred Stock, $0.0001 par value per share (“ Series A-2 Preferred Stock ”), Series A-3 PreferredSt ock, $0.0001 par value per share (“ Series A-3 Preferred Stock ”), Series A-4 Preferred Stock, $0.0001 par value per share (“ Series A-4 Preferred Stock ”), Series A-5 Preferred Stock, $0.0001 par value per share (“ Series A-5 Preferred Stock ”) and Series A-6 Preferred Stock, $0.0001 par value per share (“ Series A-6 Preferred Stock”); and WHEREAS, the Key Holders and the Company desireto further induce the Investo..."
+    },
+    "token_warrant": {
+      "structure": [
+        "1. DEFINITIONS",
+        "2. EXERCISE OF WARRANT",
+        "3. TOKEN LAUNCH AND DELIVERY",
+        "4. LOCKUP",
+        "5. REPRESENTATIONS AND WARRANTIES",
+        "6. TRANSFER RESTRICTIONS",
+        "7. MISCELLANEOUS"
+      ],
+      "conventions": "Crypto-specific. Opens with SEC exemption legend. All-caps section headers. Net exercise as default. Lockup with MFN vs insiders. Smart contract restrictions.",
+      "exemplar_opening": "THIS WARRANT HAS NOT BEEN REGISTERED WITH THE SECURITIES AND EXCHANGE COMMISSIONOR THE SECURITIES COMMISSIONOF ANY STATEIN RELIANCE UPONAN EXEMPTION FROM REGISTRATION UNDER THE SECURITIES ACT OF 1933, AS AMENDED (THE “SECURITIES ACT”), AND STATE SECURITIES LAWS AND, ACCORDINGLY, MAY NOT BE OFFEREDOR SOLD WITHIN THE UNITED STATES (AS SUCH TERMIS DEFINEDIN REGULATIONS UNDER THE SECURITIES ACT) EXCEPT PURSUANTTO AN EFFECTIVE REGISTRATION STATEMENTOR PURSUANTTO A QUALIFIED OFFERING STATEMENT PURSUANTTO REGULATIONA OF THE SECURITIES ACT UNDER THE SECURITIES ACT OR PURSUANTTO AN AVAILABLE EXEMPTION FROM, ORIN A TRANSACTION NOT SUBJECT TO, THE REGISTRATION REQUIREMENTSOF THE SECURITIES ACT ANDIN ACCORDANCE WITH APPLICABLE STATE SECURITIES LAWSAS EVIDENCEDBY A LEGAL OPINIONOF COUNSELTO THE TRANSFERORTO SUCH EFFECT, THE FORM AND SUBSTANCEOF WHICH SHALLBE ACCEPTABLETO THE COMPANY. CORSALI, INC. WARRANTTO PURCHASE TOKENS Issuedon April 4, 2022 (the “Issue Date”) Purchase Price $540.00 This certifies thatin considerationof the sum set forth above (the “Purchase Price”) andpa idon the date hereofto Corsali, Inc., a Delaware corporation (the “ Company”), receiptof whichis hereby acknowledged, the undersigned holderor its permitted assignee (“Holder” and, together with all holdersof substantially similar warrantsto purchase Tokens (as defined below), “ Holders”) is entitled, subjectto the terms and conditionsof this Warrant, to purchaseat the appl ic..."
+    },
+    "board_consent": {
+      "structure": [
+        "Approval of Restated Certificate",
+        "Approval of Financing / Transaction Documents",
+        "Issuance of Preferred Stock",
+        "Option Pool Amendment",
+        "Officer Authorization",
+        "Ratification"
+      ],
+      "conventions": "Written consent format (not meeting minutes). WHEREAS / NOW, THEREFORE, BE IT RESOLVED / RESOLVED FURTHER pairs for each agenda item.",
+      "exemplar_opening": "ACTIONBY WRITTEN CONSENTOF THE BOARDOF DIRECTORSOF EXPONENTIAL DEFI INC., a Delaware corporation The undersigned, constituting the membersof the Boardof Directors (the “Board”) of Exponential DeFi Inc. , a Delaware corporation (the “ Company”), pursuantto Sections 141(f) and 242 of the Delaware General Corporation Law, hereby take the following actions and adopt the following resolutionsby written consent withouta formal meeting and without prior notice, effectiveas of January 25, 2022: 1. Approvalof Amended and Restated Certificateof Incorporation. WHEREAS, the membersof the Board deemit reasonable, advisable, fair and in the best interestsof the Company and the Company’s stockholdersto amend and restate the Company’s Certificateof Incorporation to: (i) increase the numberof authorized sharesof Common Stock, par value $0.0001 per share, toa totalof Eleven Million (11,000,000) shares; (ii) authorizea totalof One Million Eight Hundred Forty -Six Thousand One Hundred Fifty -Four (1,846,154) sharesof Series Seed Preferred Stock, par value $0.0001 per share (the “ Series Seed Preferred Stock ”); (iii) establish the rights, preferences, privileges and restrictionsof the Common Stock and Series Seed Preferred Stock; and (iv) make certain otherch anges, allas more fully set forthin the Amended and Restated Certificateof Incorporation (the “ Restated Certificate ”), in substantially the form attached heretoas Exhibit A; NOW, THEREFORE, BEIT RESOLVED,..."
+    },
+    "mrl": {
+      "opening": "Date → Fund name → Re: Management Rights → Dear ...",
+      "structure": [
+        "(a) Consultation and advice rights",
+        "(b) Books and records access",
+        "(c) Board observer rights (if applicable)",
+        "ERISA/VCOC qualification statement",
+        "Termination"
+      ],
+      "conventions": "Letter format (not formal agreement). One per fund entity. References ERISA 29 C.F.R. § 2510.3-101(d)(3)(ii)."
+    }
+  },
+  "nvca_provision_reference": {
+    "topic": "nvca_provisions",
+    "source": "NVCA Model Legal Documents (October 2025 update)",
+    "charter": {
+      "terms": [
+        {
+          "term": "Dividends",
+          "standard": "Non-cumulative, when and if declared by the Board",
+          "notes": "Cumulative dividends are founder-unfavorable and rarely seen in early-stage"
+        },
+        {
+          "term": "Liquidation Preference",
+          "standard": "1x non-participating preferred",
+          "notes": "Participating preferred is investor-favorable but increasingly rare at early stage"
+        },
+        {
+          "term": "Conversion",
+          "standard": "Optional at any time at holder's election; automatic on Qualified IPO or majority vote"
+        },
+        {
+          "term": "Qualified IPO Threshold",
+          "standard": "$50M-$150M net proceeds typical",
+          "notes": "Higher = more investor protection against small IPOs"
+        },
+        {
+          "term": "Anti-Dilution",
+          "standard": "Broad-based weighted average (BBWA)",
+          "notes": "Full ratchet is aggressive/non-standard; narrow-based weighted average less common"
+        },
+        {
+          "term": "Protective Provisions",
+          "standard": "Standard list requiring preferred majority consent",
+          "notes": "Two-tier (series-specific) provisions increasingly common for multi-series"
+        },
+        {
+          "term": "Redemption",
+          "standard": "Rarely included; if present, 5+ year trigger",
+          "notes": "Most modern deals exclude redemption entirely"
+        },
+        {
+          "term": "Pay-to-Play",
+          "standard": "Optional; converts non-participating investors to common",
+          "notes": "Uncommon in most early-stage deals"
+        },
+        {
+          "term": "Board Burn-Off",
+          "standard": "Preferred director seat extinguishes below ownership threshold",
+          "notes": "Threshold varies (10%-50% of original shares)"
+        },
+        {
+          "term": "Deemed Liquidation Events",
+          "standard": "Merger, asset sale, exclusive license of substantially all IP",
+          "notes": "Should include appropriate carve-outs"
+        }
+      ],
+      "protective_provisions_standard": [
+        "Amend charter to adversely affect preferred rights",
+        "Authorize or issue senior or pari passu securities",
+        "Redeem or repurchase shares (except employee repurchase at cost)",
+        "Declare dividends",
+        "Increase or decrease board size",
+        "Liquidate, dissolve, or wind up the company",
+        "Create indebtedness above a threshold",
+        "Acquire another entity above a threshold",
+        "Change principal business or enter new line of business"
+      ],
+      "protective_provisions_optional": [
+        "Issue equity compensation beyond pool",
+        "Hire/fire CEO",
+        "Approve annual budget",
+        "Change auditors",
+        "Enter related-party transactions",
+        "Token issuance (crypto companies)"
+      ]
+    },
+    "spa": {
+      "terms": [
+        {
+          "term": "Purchase Price",
+          "standard": "Per-share price at agreed pre-money valuation"
+        },
+        {
+          "term": "Closing Conditions",
+          "standard": "Legal opinion, compliance certificate, board/stockholder approvals"
+        },
+        {
+          "term": "Knowledge Qualifier",
+          "standard": "To the Company's knowledge acceptable on certain reps"
+        },
+        {
+          "term": "Materiality Qualifier",
+          "standard": "Material qualifiers on reps are standard"
+        },
+        {
+          "term": "Survival of Reps",
+          "standard": "12-24 months is standard; some deals have no limitation"
+        },
+        {
+          "term": "Counsel Fee Cap",
+          "standard": "$50K-$100K typical for investor counsel fees"
+        },
+        {
+          "term": "HSR Filing",
+          "standard": "Required if transaction exceeds Hart-Scott-Rodino thresholds"
+        }
+      ],
+      "standard_company_reps": [
+        "Organization and good standing",
+        "Authorization and enforceability",
+        "Capitalization",
+        "Subsidiaries",
+        "Financial statements",
+        "Absence of changes",
+        "IP ownership",
+        "Compliance with laws",
+        "Litigation",
+        "Tax compliance",
+        "Employee matters",
+        "Insurance coverage",
+        "Material contracts",
+        "Data privacy compliance"
+      ],
+      "increasingly_common_reps_2025": [
+        "Sanctions compliance (OFAC, SDN)",
+        "FCPA / anti-corruption",
+        "QSBS eligibility",
+        "Outbound investment screening (31 C.F.R. Part 850)",
+        "Generative AI usage",
+        "Crypto asset disclosures",
+        "Cybersecurity practices"
+      ]
+    },
+    "ira": {
+      "terms": [
+        {
+          "term": "Major Investor Definition",
+          "standard": "Holders above a share/dollar threshold"
+        },
+        {
+          "term": "Information Rights",
+          "standard": "Annual audited, quarterly unaudited, monthly informal; Major Investors only; terminates at IPO"
+        },
+        {
+          "term": "Pro Rata Rights",
+          "standard": "Major Investors can purchase pro rata share of new issuances"
+        },
+        {
+          "term": "S-1 Demand Registration",
+          "standard": "2 demands, 3-5 year lockout post-IPO, $5M-$25M minimum"
+        },
+        {
+          "term": "S-3 Registration",
+          "standard": "Unlimited, $3M-$10M minimum per registration"
+        },
+        {
+          "term": "D&O Insurance",
+          "standard": "Company shall maintain"
+        },
+        {
+          "term": "Competitor Definition",
+          "standard": "Entities engaged in same business; carve-outs for investment funds are standard"
+        },
+        {
+          "term": "Market Standoff",
+          "standard": "180 days post-IPO"
+        },
+        {
+          "term": "QSBS Covenant",
+          "standard": "Company shall use commercially reasonable efforts to qualify"
+        },
+        {
+          "term": "FCPA Covenant",
+          "standard": "Company shall comply with anti-corruption laws"
+        }
+      ],
+      "carve_outs_from_pro_rata": [
+        "Employee equity compensation plan",
+        "Stock splits and dividends",
+        "Conversion of preferred stock",
+        "Strategic transactions approved by Board",
+        "Equipment financing / bank lending",
+        "Shares to consultants/advisors (up to cap)"
+      ]
+    },
+    "voting": {
+      "terms": [
+        {
+          "term": "Board Composition",
+          "standard": "Investor director(s), founder/common director(s), independent director(s)"
+        },
+        {
+          "term": "Series Director",
+          "standard": "Designated by holders of specific series; burn-off provisions common"
+        },
+        {
+          "term": "Drag-Along",
+          "standard": "Majority preferred + majority common/key holders can compel sale"
+        },
+        {
+          "term": "Irrevocable Proxy",
+          "standard": "Backup enforcement if party fails to vote"
+        }
+      ],
+      "board_composition_by_stage": {
+        "seed_series_a": "3 directors: 1 investor, 1 founder, 1 independent (or 2 founders + 1 investor)",
+        "series_b": "5 directors: 2 investors, 2 common, 1 independent",
+        "series_c_plus": "5-7 directors: investor representation proportional to ownership"
+      }
+    },
+    "rofr": {
+      "terms": [
+        {
+          "term": "Company ROFR",
+          "standard": "Company has first right to purchase shares proposed for transfer; often 30 days"
+        },
+        {
+          "term": "Investor ROFR",
+          "standard": "If Company declines, Major Investors can purchase pro rata"
+        },
+        {
+          "term": "Co-Sale (Tag-Along)",
+          "standard": "If ROFR not fully exercised, investors can participate pro rata"
+        },
+        {
+          "term": "Founder Carveout",
+          "standard": "5% of holdings typical; some deals 1-5%"
+        },
+        {
+          "term": "Permitted Transfers",
+          "standard": "Family trusts, estate plans, affiliates; transferee assumes obligations"
+        },
+        {
+          "term": "ROFR Period",
+          "standard": "30 days Company, 15 days investors; 45 total common"
+        }
+      ],
+      "transfer_restriction_carveouts": [
+        "Estate planning transfers (trusts, family members)",
+        "Transfers by operation of law (divorce, death)",
+        "Transfers to affiliates",
+        "Employee repurchase at termination",
+        "Pledges to financial institutions (negotiable)"
+      ]
+    },
+    "mrl": {
+      "terms": [
+        {
+          "term": "Management Rights",
+          "standard": "Right to consult with and advise management; must be contractual (binding)"
+        },
+        {
+          "term": "Information Access",
+          "standard": "Access to books, records, facilities"
+        },
+        {
+          "term": "Named Entities",
+          "standard": "Each fund LP that needs VCOC qualification should have its own MRL"
+        },
+        {
+          "term": "Termination",
+          "standard": "Company ceases to exist or by mutual agreement; should survive IPO if fund still holds shares"
+        }
+      ],
+      "erisa_vcoc_requirements": [
+        "Must obtain contractual management rights in portfolio companies",
+        "Must exercise those rights (at least annually)",
+        "50%+ of fund assets must be in operating companies with management rights",
+        "MRL is the standard mechanism to satisfy this requirement"
+      ]
+    },
+    "indemnification": {
+      "terms": [
+        {
+          "term": "Scope",
+          "standard": "Indemnification for all proceedings arising from service as director/officer; broadest permissible under DGCL 145"
+        },
+        {
+          "term": "Advancement",
+          "standard": "Mandatory advancement of expenses upon undertaking to repay"
+        },
+        {
+          "term": "D&O Insurance",
+          "standard": "Company shall maintain for duration of service + tail"
+        },
+        {
+          "term": "Survival",
+          "standard": "Survives resignation, removal, merger; successor entity must assume obligations"
+        }
+      ]
+    }
+  },
   "market_norms": {
     "topic": "market_norms",
     "sources": [

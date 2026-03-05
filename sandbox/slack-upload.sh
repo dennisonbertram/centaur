@@ -30,7 +30,12 @@ BODY=$(jq -nc \
   --arg thread_ts "$THREAD" \
   '{content_base64: $content_base64, filename: $filename, comment: $comment, channel: $channel, thread_ts: $thread_ts}')
 
-RESP=$(curl -sf -H "Content-Type: application/json" -d "$BODY" "$U/tools/slack/upload_file") || {
+AUTH_ARGS=()
+if [ -n "${AI_V2_API_KEY:-}" ]; then
+  AUTH_ARGS=(-H "Authorization: Bearer ${AI_V2_API_KEY}")
+fi
+
+RESP=$(curl -sf "${AUTH_ARGS[@]}" -H "Content-Type: application/json" -d "$BODY" "$U/tools/slack/upload_file") || {
   echo "Error: upload failed" >&2
   exit 1
 }
