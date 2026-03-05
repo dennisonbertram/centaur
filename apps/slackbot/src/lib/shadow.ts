@@ -11,7 +11,7 @@
 
 import { createClient, type RedisClientType } from "redis";
 import { execute, interrupt, type FileAttachment } from "./harness";
-import { markdownToSlack, truncateSlackText } from "./slack-text";
+import { postMarkdownToSlack } from "./slack-post";
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "https://svc-ai.paradigm.xyz";
@@ -27,56 +27,16 @@ const AI_V2_CHANNEL = "C0AJ07U8Z1N"; // #ai-v2
 // Redis key prefix for shadow thread mappings
 const SHADOW_MAP_PREFIX = "shadow_thread:";
 const SHADOW_MAP_TTL = 60 * 60 * 24 * 7; // 7 days
-const SLACK_RETRY_ATTEMPTS = 3;
-const DEFAULT_SLACK_RETRY_MS = 1000;
 
 // In-memory fallback when Redis is unavailable
 const shadowThreadMapFallback = new Map<string, string>();
 
 let _redis: RedisClientType | null = null;
 
-type SlackPostResponse = { ok: boolean; ts?: string; error?: string };
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function retryAfterMs(response: Response): number {
-  const retryAfter = response.headers.get("Retry-After");
-  const parsed = Number(retryAfter);
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_SLACK_RETRY_MS;
-  return Math.max(DEFAULT_SLACK_RETRY_MS, Math.min(parsed * 1000, 30_000));
-}
-
-async function postSlackMessage(payload: Record<string, unknown>): Promise<SlackPostResponse> {
-  for (let attempt = 0; attempt < SLACK_RETRY_ATTEMPTS; attempt += 1) {
-    const res = await fetch("https://slack.com/api/chat.postMessage", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${SLACK_BOT_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    if (res.status === 429 && attempt + 1 < SLACK_RETRY_ATTEMPTS) {
-      await sleep(retryAfterMs(res));
-      continue;
-    }
-    if (!res.ok) {
-      throw new Error(`chat.postMessage failed (${res.status})`);
-    }
-    const data = (await res.json()) as SlackPostResponse;
-    if (data.ok === true) {
-      return data;
-    }
-    if (data.error === "ratelimited" && attempt + 1 < SLACK_RETRY_ATTEMPTS) {
-      await sleep(retryAfterMs(res));
-      continue;
-    }
-    throw new Error(`chat.postMessage failed: ${data.error ?? "unknown_error"}`);
-  }
-  throw new Error(`chat.postMessage failed after ${SLACK_RETRY_ATTEMPTS} attempts`);
-}
 
 async function getRedis(): Promise<RedisClientType | null> {
   if (!REDIS_URL) return null;
@@ -129,26 +89,20 @@ async function runShadow(
 
   if (existingShadowTs) {
     // Continue existing shadow thread — post follow-up quote
-    await postSlackMessage({
-      channel: AI_V2_CHANNEL,
-      thread_ts: existingShadowTs,
-      text: truncateSlackText(
-        `📝 *Follow-up* (<https://paradigm-ops.slack.com/archives/${AI_AGENT_CHANNEL}/p${originTs.replace(".", "")}|original>):\n>${cleanedText.split("\n").join("\n>")}`
-      ),
-      unfurl_links: false,
-    });
+    await postMarkdownToSlack(
+      AI_V2_CHANNEL,
+      `📝 **Follow-up** ([original](https://paradigm-ops.slack.com/archives/${AI_AGENT_CHANNEL}/p${originTs.replace(".", "")})):\n>${cleanedText.split("\n").join("\n>")}`,
+      existingShadowTs
+    );
     shadowTs = existingShadowTs;
   } else {
     // New shadow thread
-    let postData: SlackPostResponse;
+    let postData: { ts?: string } | null;
     try {
-      postData = await postSlackMessage({
-        channel: AI_V2_CHANNEL,
-        text: truncateSlackText(
-          `🔄 *Shadow* from <#${AI_AGENT_CHANNEL}> (<https://paradigm-ops.slack.com/archives/${AI_AGENT_CHANNEL}/p${parentTs.replace(".", "")}|original>):\n>${cleanedText.split("\n").join("\n>")}`
-        ),
-        unfurl_links: false,
-      });
+      postData = await postMarkdownToSlack(
+        AI_V2_CHANNEL,
+        `🔄 **Shadow** from <#${AI_AGENT_CHANNEL}> ([original](https://paradigm-ops.slack.com/archives/${AI_AGENT_CHANNEL}/p${parentTs.replace(".", "")})):\n>${cleanedText.split("\n").join("\n>")}`
+      );
     } catch (error) {
       console.log(
         JSON.stringify({
@@ -158,7 +112,7 @@ async function runShadow(
       );
       return null;
     }
-    if (!postData.ts) {
+    if (!postData?.ts) {
       console.log(JSON.stringify({ event: "shadow_post_failed", error: "missing_ts" }));
       return null;
     }
@@ -168,12 +122,7 @@ async function runShadow(
 
     // Post thread viewer link
     const viewerUrl = `${THREAD_VIEWER_URL}/${encodeURIComponent(shadowThreadKey)}`;
-    await postSlackMessage({
-      channel: AI_V2_CHANNEL,
-      thread_ts: shadowTs,
-      text: `<${viewerUrl}|🔗 Thread Viewer>`,
-      unfurl_links: false,
-    });
+    await postMarkdownToSlack(AI_V2_CHANNEL, `[🔗 Thread Viewer](${viewerUrl})`, shadowTs);
   }
 
   // Interrupt any prior execution and retry with backoff
@@ -199,12 +148,7 @@ async function runShadow(
 
   // Post the result as a thread reply in #ai-v2 (skip if agent already posted via slack-upload)
   if (result.trim()) {
-    await postSlackMessage({
-      channel: AI_V2_CHANNEL,
-      thread_ts: shadowTs,
-      text: truncateSlackText(markdownToSlack(result)),
-      unfurl_links: false,
-    });
+    await postMarkdownToSlack(AI_V2_CHANNEL, result, shadowTs);
   }
 
   console.log(
