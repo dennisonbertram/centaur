@@ -160,6 +160,26 @@ jobs:
           echo "API health check failed after 60s"
           exit 1
 
+      - name: Verify tools loaded
+        if: steps.changes.outputs.scope != 'none'
+        continue-on-error: true
+        run: |
+          if [ -z "${API_SECRET_KEY:-}" ]; then
+            echo "::warning::Skipping tool health verification: API_SECRET_KEY not configured"
+            exit 0
+          fi
+
+          TOOLS_HEALTH_JSON=$(curl -sf http://localhost:8000/health/tools \
+            -H "Authorization: Bearer $API_SECRET_KEY")
+          export TOOLS_HEALTH_JSON
+
+          FAILED_COUNT=$(python3 -c 'import json, os; print(json.loads(os.environ["TOOLS_HEALTH_JSON"]).get("summary", {}).get("failed_count", 0))')
+          if [ "$FAILED_COUNT" != "0" ]; then
+            echo "::warning::$FAILED_COUNT tools failed to load. Check /health/tools for details."
+          else
+            echo "All tools loaded successfully"
+          fi
+
       - name: Secrets health check
         if: steps.changes.outputs.scope == 'all' || contains(steps.changes.outputs.scope, 'api')
         run: |

@@ -243,6 +243,7 @@ class ToolManager:
     ):
         self.tools_dir = tools_dir
         self.tools: dict[str, LoadedTool] = {}
+        self.load_failures: list[dict[str, str]] = []
         self._reload_lock = threading.Lock()
         # Load root .env once — all tools inherit these secrets
         self._root_secrets: dict[str, str] = {}
@@ -290,6 +291,7 @@ class ToolManager:
     ) -> list[LoadedTool]:
         """Discover and load all tools."""
         if not self.tools_dir.exists():
+            self.load_failures = []
             log.info("tools_dir_missing", path=str(self.tools_dir))
             return []
 
@@ -308,19 +310,29 @@ class ToolManager:
 
         # Now load each tool
         loaded = []
+        load_failures: list[dict[str, str]] = []
         for tool_dir, meta in tool_entries:
             try:
                 lt = self._load_tool(tool_dir, meta)
                 if lt:
                     loaded.append(lt)
             except Exception as exc:
+                tool_name = str(meta.get("name", tool_dir.name))
+                load_failures.append({"name": tool_name, "error": str(exc)})
                 log.warning(
                     "tool_load_failed",
-                    tool=meta.get("name", tool_dir.name),
+                    tool=tool_name,
                     error=str(exc),
                 )
 
+        self.load_failures = load_failures
         self.tools = {p.name: p for p in loaded}
+        log.info(
+            "tools_discovery_complete",
+            loaded=len(loaded),
+            failed=len(load_failures),
+            failed_tools=[f["name"] for f in load_failures],
+        )
         return loaded
 
     def reload(self) -> dict[str, Any]:

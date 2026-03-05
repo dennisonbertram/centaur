@@ -187,6 +187,10 @@ app.include_router(tool_manager.create_rest_router())
 _mcp_starlette = mcp.streamable_http_app()
 
 
+def get_tool_manager() -> ToolManager:
+    return tool_manager
+
+
 def _is_localhost_ip(client_ip: str) -> bool:
     if not client_ip:
         return False
