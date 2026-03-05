@@ -120,7 +120,7 @@
 |twitter: search_tweets{query} | get_user{username}
 |sensortower: search_apps{query}
 |similarweb: get_visits{domain}
-|slack: get_channel_history{channel,limit} | search_messages{query} | get_thread_replies{channel,thread_ts} | list_channels{} | send_message{channel,text}
+|slack: get_channel_history{channel,limit} | search_messages{query} | get_thread_replies{channel,thread_ts} | list_channels{} | send_message{channel,text} | upload_file{channel_id,file_path,thread_ts,initial_comment,title} | get_message_files{channel_id,message_ts} | download_file{url,output_path}
 |unit410: get_balances{}
 |browser: navigate{url,profile} | screenshot{} | click{selector} | type{selector,text} | text{} | console{} | network{} | evaluate{javascript} | save_cookies{profile} | load_cookies{profile} | import_cookies{cookies_json,profile} | list_profiles{} | close{}
 |unlisted: GET /tools/{name} to discover
@@ -136,6 +136,11 @@
 |trade orders → paradigmdb/db_query on "Order"
 |staking overrides → paradigmdb/db_query on "StakingOverride"
 |rules: live APIs=current | BQ views=historical | staking=check Anchorage AND Coinbase AND StakingOverride
+
+[Slack files]
+|Files attached to the current user message are auto-downloaded to /home/agent/uploads/.
+|For files in other Slack messages, call get_message_files (channel_id + message_ts) first, then
+|download_file (url + output_path) to save them locally.
 
 [Staking]
 |anchorage → anchorage staking tools or BQ anchorage_balances_view.stakedBalanceQuantity

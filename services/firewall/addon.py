@@ -58,6 +58,7 @@ class CredentialInjector:
         self._cache: dict[str, tuple[str | None, float]] = {}
         self._lock = threading.Lock()
         self._known_keys: set[str] = set()
+        self._canonicalize_google_key = False
         self._keys_lock = threading.Lock()
         log.info("credential injector started (stateless header-value replacement)")
         self._start_health_server()
@@ -119,8 +120,18 @@ class CredentialInjector:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 data = json.loads(resp.read().decode())
             keys = set(data.get("keys", []))
+            canonicalize_google_key = False
+            if {"GOOGLE_API_KEY", "GEMINI_API_KEY"}.issubset(keys):
+                google_key = self._get_secret("GOOGLE_API_KEY")
+                gemini_key = self._get_secret("GEMINI_API_KEY")
+                canonicalize_google_key = bool(
+                    google_key and gemini_key and google_key == gemini_key
+                )
             with self._keys_lock:
                 self._known_keys = keys
+                self._canonicalize_google_key = canonicalize_google_key
+            if canonicalize_google_key:
+                log.info("canonicalizing GOOGLE_API_KEY to GEMINI_API_KEY for header injection")
             log.info("refreshed known keys: %d keys", len(keys))
         except Exception:
             log.warning("failed to refresh known keys from secret manager")
@@ -158,6 +169,10 @@ class CredentialInjector:
         """Replace any known key names in a header value with real secrets."""
         with self._keys_lock:
             keys = self._known_keys
+            canonicalize_google_key = self._canonicalize_google_key
+
+        if canonicalize_google_key and "GOOGLE_API_KEY" in value:
+            value = value.replace("GOOGLE_API_KEY", "GEMINI_API_KEY")
 
         for key_name in keys:
             if key_name not in value:
