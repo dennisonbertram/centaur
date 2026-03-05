@@ -27,7 +27,6 @@ class SpawnRequest(BaseModel):
     harness: str | None = None
     repo: str | None = None
     engine: str | None = None
-    legal_loop_enabled: bool | None = None
     request_id: str | None = None
 
 
@@ -47,7 +46,6 @@ class ExecuteRequest(BaseModel):
     model: str | None = None
     engine: str | None = None
     continue_session: bool = True
-    legal_loop_enabled: bool | None = None
     files: list[FileAttachment] = Field(default_factory=list)
 
 
@@ -69,7 +67,6 @@ async def spawn(req: SpawnRequest) -> dict[str, Any]:
         req.repo,
         req.request_id,
         req.engine,
-        req.legal_loop_enabled,
     )
 
 
@@ -92,7 +89,6 @@ async def execute(req: ExecuteRequest) -> dict[str, Any]:
         req.model,
         req.engine,
         req.continue_session,
-        req.legal_loop_enabled,
     )
 
 
@@ -113,7 +109,6 @@ async def execute_kickoff(req: ExecuteRequest) -> dict[str, Any]:
         req.user_id,
         req.model,
         req.engine,
-        req.legal_loop_enabled,
     )
 
 
@@ -139,7 +134,6 @@ async def execute_stream(req: ExecuteRequest) -> StreamingResponse:
                 model=req.model,
                 engine=req.engine,
                 continue_session=req.continue_session,
-                legal_loop_enabled=req.legal_loop_enabled,
             )
         except Exception as e:
             q.put({"type": "error", "message": str(e)})

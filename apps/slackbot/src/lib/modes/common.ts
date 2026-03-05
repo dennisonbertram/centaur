@@ -24,7 +24,6 @@ export async function executeWithBusyRetries(params: {
   model?: string | null;
   engine?: Engine | null;
   continueSession?: boolean;
-  legalLoopEnabled?: boolean | null;
 }): Promise<string> {
   const maxAttempts = 4;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -40,7 +39,6 @@ export async function executeWithBusyRetries(params: {
         params.model,
         params.engine,
         params.continueSession ?? true,
-        params.legalLoopEnabled,
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);

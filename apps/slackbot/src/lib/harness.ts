@@ -11,8 +11,6 @@ export type RunOptions = {
   engine: Engine | null;
   model: string | null;
   budgetMode: BudgetMode | null;
-  legalLoopEnabled: boolean;
-  legalLoopExplicit: boolean;
   cleanedText: string;
   harnessExplicit: boolean;
   engineExplicit: boolean;
@@ -29,8 +27,6 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
   let engine: Engine | null = null;
   let model: string | null = null;
   let budgetMode: BudgetMode | null = null;
-  let legalLoopEnabled = true;
-  let legalLoopExplicit = false;
   let harnessExplicit = false;
   let engineExplicit = false;
   let budgetExplicit = false;
@@ -188,39 +184,12 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
     }
   }
 
-  // Legal loop mode flags (only relevant to --legal persona)
-  const legalSingleRegex = /(^|\s)--legal-single(?=\s|$)/gi;
-  if (legalSingleRegex.test(cleaned)) {
-    legalLoopEnabled = false;
-    legalLoopExplicit = true;
-    cleaned = cleaned.replace(legalSingleRegex, " ");
-    legalSingleRegex.lastIndex = 0;
-  }
-  const legalLoopRegex = /(^|\s)--legal-loop(?=\s|$)/gi;
-  if (legalLoopRegex.test(cleaned)) {
-    legalLoopEnabled = true;
-    legalLoopExplicit = true;
-    cleaned = cleaned.replace(legalLoopRegex, " ");
-    legalLoopRegex.lastIndex = 0;
-  }
-
-  const loopEqMatch = cleaned.match(/\blegal_loop\s*=\s*(single|multi)\b/i);
-  if (loopEqMatch) {
-    legalLoopEnabled = loopEqMatch[1].toLowerCase() === "multi";
-    legalLoopExplicit = true;
-    cleaned = (
-      cleaned.slice(0, loopEqMatch.index) + cleaned.slice(loopEqMatch.index! + loopEqMatch[0].length)
-    ).trim();
-  }
-
   cleaned = cleaned.replace(/\s+/g, " ").trim();
   return {
     harness,
     engine,
     model,
     budgetMode,
-    legalLoopEnabled,
-    legalLoopExplicit,
     cleanedText: cleaned,
     harnessExplicit,
     engineExplicit,
@@ -234,14 +203,12 @@ export async function spawn(
   engine?: Engine | null,
   repo?: string,
   requestId?: string,
-  legalLoopEnabled?: boolean | null,
 ): Promise<{ sessionId: string; status: string }> {
   const result = await apiPost("/agent/spawn", {
     slack_thread_key: threadKey,
     harness,
     ...(engine ? { engine } : {}),
     ...(repo ? { repo } : {}),
-    ...(typeof legalLoopEnabled === "boolean" ? { legal_loop_enabled: legalLoopEnabled } : {}),
     ...(requestId ? { request_id: requestId } : {}),
   }, { timeoutMs: 30_000 });
   return {
@@ -261,7 +228,6 @@ export async function execute(
   model?: string | null,
   engine?: Engine | null,
   continueSession: boolean = true,
-  legalLoopEnabled?: boolean | null,
 ): Promise<string> {
   const result = await apiPost("/agent/execute", {
     slack_thread_key: threadKey,
@@ -272,7 +238,6 @@ export async function execute(
     ...(files && files.length > 0 ? { files } : {}),
     ...(userId ? { user_id: userId } : {}),
     ...(model ? { model } : {}),
-    ...(typeof legalLoopEnabled === "boolean" ? { legal_loop_enabled: legalLoopEnabled } : {}),
     ...(continueSession ? {} : { continue_session: false }),
     source,
   });
@@ -301,7 +266,7 @@ export async function interrupt(
 
 export async function fetchThreadRuntimeConfig(
   threadKey: string
-): Promise<{ harness: Harness | null; engine: Engine | null; legalLoopEnabled: boolean | null }> {
+): Promise<{ harness: Harness | null; engine: Engine | null }> {
   const normalizedThreadKey = normalizeThreadKey(threadKey);
   const response = await apiGet(
     "/api/threads/detail",
@@ -314,7 +279,6 @@ export async function fetchThreadRuntimeConfig(
   const payload = await response.json();
   const rawHarness = String(payload?.harness ?? "").trim().toLowerCase();
   const rawEngine = String(payload?.engine ?? "").trim().toLowerCase();
-  const rawMode = String(payload?.mode ?? "").trim().toLowerCase();
   const harness: Harness | null =
     rawHarness === "eng" || rawHarness === "engineer"
       ? "eng"
@@ -327,13 +291,7 @@ export async function fetchThreadRuntimeConfig(
     rawEngine === "amp" || rawEngine === "claude-code" || rawEngine === "codex" || rawEngine === "pi-mono"
       ? (rawEngine as Engine)
       : null;
-  const legalLoopEnabled: boolean | null =
-    rawMode === "legal-single"
-      ? false
-      : rawMode === "legal-loop"
-        ? true
-        : null;
-  return { harness, engine, legalLoopEnabled };
+  return { harness, engine };
 }
 
 export async function postThreadContextMessage(

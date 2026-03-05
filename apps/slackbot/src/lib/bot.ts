@@ -49,7 +49,6 @@ type ThreadConfig = {
   engine: Engine | null;
   model: string | null;
   budgetMode: BudgetMode | null;
-  legalLoopEnabled: boolean;
 };
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
@@ -66,8 +65,8 @@ export function getSlackBootstrapState(): { ready: boolean; missingEnvKeys: stri
   };
 }
 
-function isLegalHarness(harness: Harness): boolean {
-  return harness === "legal";
+function isPersonaHarness(harness: Harness): boolean {
+  return harness === "legal" || harness === "eng";
 }
 
 type SlackReply = {
@@ -385,7 +384,6 @@ function createBot() {
     let recovered: {
       harness: Harness | null;
       engine: Engine | null;
-      legalLoopEnabled: boolean | null;
     } | null = null;
     if (!isFirstMessage && !previous) {
       try {
@@ -443,19 +441,19 @@ function createBot() {
       return;
     }
 
-    if (!parsed.cleanedText) {
+    if (!parsed.cleanedText && !isPersonaHarness(harness)) {
       await thread.post(
         toSlackMessage(
-          "Please provide a prompt after flags. Example: `--legal review this term sheet` or `--eng implement retry logic`."
+          "Please provide a prompt after flags. Example: `--amp build me a dashboard`."
         )
       );
       return;
     }
 
-    setThreadConfig(threadKey, { harness, engine, model, budgetMode, legalLoopEnabled: false });
+    setThreadConfig(threadKey, { harness, engine, model, budgetMode });
 
     try {
-      const instruction = parsed.cleanedText;
+      const instruction = parsed.cleanedText || "hey";
       if (!isFirstMessage) {
         try {
           await interrupt(threadKey, requestId);
@@ -510,7 +508,7 @@ function createBot() {
         stopProgress();
       }
       let finalMessage = result;
-      if (isFirstMessage) {
+      if (isFirstMessage && isPersonaHarness(harness)) {
         const viewerUrl = `${THREAD_VIEWER_URL}/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
         finalMessage = `[Thread Viewer](${viewerUrl})\n\n` + finalMessage;
       }

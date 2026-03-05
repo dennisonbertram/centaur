@@ -43,6 +43,9 @@ COPY tools/ tools/
 # 5. Copy legal policy/docs used by tools
 COPY docs/ docs/
 
+# 6. Copy persona overlay prompts used by API harness runtime
+COPY sandbox/SYSTEM_PROMPT_ENG.md sandbox/SYSTEM_PROMPT_LEGAL.md sandbox/
+
 # Copy migrations
 COPY migrations/ migrations/
 
