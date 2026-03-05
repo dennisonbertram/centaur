@@ -10,15 +10,26 @@ import asyncio
 import hashlib
 import json
 import re
+import time
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import asyncpg
+import httpx
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.responses import RedirectResponse, StreamingResponse
 
-from api.agent import get_session_state, record_thread_message, session_items_snapshot
+from api.agent import (
+    _fetch_secret,
+    get_session_state,
+    record_thread_message,
+    session_items_snapshot,
+)
 from api.deps import get_pool, verify_ui_or_api_key
+
+log = structlog.get_logger()
 
 router = APIRouter(
     prefix="/api/threads",
@@ -31,7 +42,11 @@ _CONTEXT_HEADER = (
     "Additional Slack thread context since the last AI instruction "
     "(ambient discussion from humans):"
 )
+_THREAD_NAME_MAX_CHARS = 60
+_SLACK_USER_CACHE_TTL_S = 600.0
 _SLACK_MENTION_RE = re.compile(r"<?@[A-Z0-9]{6,}>?")
+_SLACK_USER_ID_RE = re.compile(r"^U[A-Z0-9]+$")
+_slack_user_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def _raw_item_call_digest(item: dict[str, Any]) -> str:
@@ -112,8 +127,225 @@ def _build_participants_from_turns(turns: list[dict[str, Any]]) -> list[dict[str
             user_ids.extend(_extract_turn_user_ids(events))
         for user_id in user_ids:
             if user_id not in seen:
-                seen[user_id] = {"id": user_id, "name": user_id, "avatar_url": None}
+                seen[user_id] = {
+                    "id": user_id,
+                    "name": user_id,
+                    "username": None,
+                    "avatar_url": None,
+                }
     return list(seen.values())
+
+
+def _json_record_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _participant_details_from_slack_user(
+    user: dict[str, Any],
+    *,
+    fallback_id: str,
+) -> dict[str, Any]:
+    profile = user.get("profile") if isinstance(user.get("profile"), dict) else {}
+    username = str(user.get("name") or "").strip() or None
+    display_name = (
+        str(profile.get("display_name") or "").strip()
+        or str(profile.get("real_name") or "").strip()
+        or str(user.get("real_name") or "").strip()
+        or None
+    )
+    preferred_name = display_name or username or fallback_id
+    avatar_url = (
+        profile.get("image_48")
+        or profile.get("image_72")
+        or profile.get("image_24")
+        or profile.get("image_original")
+    )
+    return {
+        "name": preferred_name,
+        "username": username,
+        "avatar_url": str(avatar_url) if avatar_url else None,
+    }
+
+
+def _participant_details_complete(details: dict[str, Any] | None, user_id: str) -> bool:
+    if not details:
+        return False
+    username = str(details.get("username") or "").strip()
+    avatar_url = str(details.get("avatar_url") or "").strip()
+    name = str(details.get("name") or "").strip()
+    if username and avatar_url:
+        return True
+    return bool(avatar_url and name and name != user_id and not _SLACK_USER_ID_RE.fullmatch(name))
+
+
+def _cached_slack_user_details(user_id: str) -> dict[str, Any] | None:
+    cached = _slack_user_cache.get(user_id)
+    if not cached:
+        return None
+    expires_at, details = cached
+    if expires_at <= time.monotonic():
+        _slack_user_cache.pop(user_id, None)
+        return None
+    return dict(details)
+
+
+def _store_cached_slack_user_details(user_id: str, details: dict[str, Any]) -> None:
+    _slack_user_cache[user_id] = (time.monotonic() + _SLACK_USER_CACHE_TTL_S, dict(details))
+
+
+async def _fetch_live_slack_users(user_ids: list[str]) -> dict[str, dict[str, Any]]:
+    token = _fetch_secret("SLACK_BOT_TOKEN").strip()
+    if not token or not user_ids:
+        return {}
+
+    headers = {"Authorization": f"Bearer {token}"}
+    semaphore = asyncio.Semaphore(8)
+    results: dict[str, dict[str, Any]] = {}
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        async def fetch_one(user_id: str) -> None:
+            try:
+                async with semaphore:
+                    resp = await client.get(
+                        "https://slack.com/api/users.info",
+                        headers=headers,
+                        params={"user": user_id},
+                    )
+                resp.raise_for_status()
+                payload = resp.json()
+            except Exception as exc:
+                log.debug("slack_user_lookup_failed", user_id=user_id, error=str(exc))
+                return
+
+            user = payload.get("user") if isinstance(payload.get("user"), dict) else None
+            if not payload.get("ok") or not user:
+                log.debug(
+                    "slack_user_lookup_rejected",
+                    user_id=user_id,
+                    error=str(payload.get("error") or "unknown_error"),
+                )
+                return
+            results[user_id] = user
+
+        await asyncio.gather(*(fetch_one(user_id) for user_id in user_ids))
+    return results
+
+
+async def _persist_live_slack_users(
+    pool: asyncpg.Pool,
+    users_by_id: dict[str, dict[str, Any]],
+) -> None:
+    if not users_by_id:
+        return
+
+    now = datetime.now(UTC)
+    rows: list[tuple[str, datetime, str, str]] = []
+    for user_id, user in users_by_id.items():
+        payload = json.dumps(user, sort_keys=True, default=str)
+        content_hash = hashlib.sha1(payload.encode("utf-8")).hexdigest()
+        rows.append((user_id, now, content_hash, payload))
+
+    try:
+        await pool.executemany(
+            """
+            INSERT INTO raw_records (source, kind, external_id, fetched_at, content_hash, data)
+            VALUES ('slack', 'user', $1, $2, $3, $4::jsonb)
+            ON CONFLICT (source, kind, external_id, content_hash) DO NOTHING
+            """,
+            rows,
+        )
+    except Exception as exc:
+        log.debug("slack_user_cache_persist_failed", error=str(exc), count=len(rows))
+
+
+def _resolved_thread_name(
+    explicit_name: Any,
+    *,
+    turns: list[dict[str, Any]] | None = None,
+    fallback_messages: list[str] | None = None,
+) -> str | None:
+    name = str(explicit_name or "").strip()
+    if name:
+        return name
+
+    fallback_messages = fallback_messages or []
+    if turns:
+        for turn in reversed(turns):
+            preview = _user_message_preview(
+                str(turn.get("user_message") or ""), max_chars=_THREAD_NAME_MAX_CHARS
+            ).strip()
+            if preview:
+                return preview
+
+    for text in fallback_messages:
+        preview = _user_message_preview(str(text or ""), max_chars=_THREAD_NAME_MAX_CHARS).strip()
+        if preview:
+            return preview
+    return None
+
+
+async def _resolve_participant_details(
+    pool: asyncpg.Pool,
+    user_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    ids = list(dict.fromkeys(item for item in user_ids if item))
+    if not ids:
+        return {}
+
+    by_id: dict[str, dict[str, Any]] = {}
+    unresolved_ids: list[str] = []
+
+    for user_id in ids:
+        cached = _cached_slack_user_details(user_id)
+        if cached and _participant_details_complete(cached, user_id):
+            by_id[user_id] = cached
+        else:
+            unresolved_ids.append(user_id)
+
+    if unresolved_ids:
+        rows = await pool.fetch(
+            """
+            SELECT DISTINCT ON (external_id)
+                external_id,
+                data
+            FROM raw_records
+            WHERE source = 'slack'
+              AND kind = 'user'
+              AND external_id = ANY($1::text[])
+            ORDER BY external_id, fetched_at DESC
+            """,
+            unresolved_ids,
+        )
+        for row in rows:
+            user_id = str(row["external_id"])
+            data = _json_record_dict(row["data"])
+            details = _participant_details_from_slack_user(data, fallback_id=user_id)
+            if not _participant_details_complete(details, user_id):
+                continue
+            by_id[user_id] = details
+            _store_cached_slack_user_details(user_id, details)
+
+    live_lookup_ids = [
+        user_id for user_id in ids if not _participant_details_complete(by_id.get(user_id), user_id)
+    ]
+    if live_lookup_ids:
+        live_users = await _fetch_live_slack_users(live_lookup_ids)
+        if live_users:
+            await _persist_live_slack_users(pool, live_users)
+        for user_id, user in live_users.items():
+            details = _participant_details_from_slack_user(user, fallback_id=user_id)
+            by_id[user_id] = details
+            _store_cached_slack_user_details(user_id, details)
+    return by_id
 
 
 async def _enrich_participants(
@@ -123,39 +355,7 @@ async def _enrich_participants(
     if not participants:
         return []
     ids = [str(p.get("id") or "").strip() for p in participants]
-    ids = [item for item in ids if item]
-    if not ids:
-        return participants
-
-    rows = await pool.fetch(
-        """
-        SELECT DISTINCT ON (external_id)
-            external_id,
-            data
-        FROM raw_records
-        WHERE source = 'slack'
-          AND kind = 'user'
-          AND external_id = ANY($1::text[])
-        ORDER BY external_id, fetched_at DESC
-        """,
-        ids,
-    )
-    by_id: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        data = row["data"] if isinstance(row["data"], dict) else {}
-        profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
-        display_name = (
-            profile.get("display_name")
-            or profile.get("real_name")
-            or data.get("real_name")
-            or data.get("name")
-            or row["external_id"]
-        )
-        avatar_url = profile.get("image_48") or profile.get("image_72") or profile.get("image_24")
-        by_id[str(row["external_id"])] = {
-            "name": str(display_name),
-            "avatar_url": str(avatar_url) if avatar_url else None,
-        }
+    by_id = await _resolve_participant_details(pool, ids)
 
     enriched: list[dict[str, Any]] = []
     for participant in participants:
@@ -165,7 +365,12 @@ async def _enrich_participants(
             enriched.append(participant)
             continue
         enriched.append(
-            {**participant, "name": details["name"], "avatar_url": details["avatar_url"]}
+            {
+                **participant,
+                "name": details["name"],
+                "username": details.get("username"),
+                "avatar_url": details["avatar_url"],
+            }
         )
     return enriched
 
@@ -200,7 +405,7 @@ def _build_live_detail(key: str, session: dict[str, Any]) -> dict[str, Any]:
         "created_at": session["created_at"],
         "last_activity": session["last_activity"],
         "turns": turns,
-        "thread_name": session.get("thread_name"),
+        "thread_name": _resolved_thread_name(session.get("thread_name"), turns=turns),
         "participants": participants,
     }
 
@@ -336,6 +541,13 @@ async def list_threads(
         else:
             parts = await _fetch_pg_participants(pool, key)
         participants_by_key[key] = parts
+        explicit_thread_name = (live.get("thread_name") if live else None) or r.get("thread_name")
+        fallback_last_user_message = (
+            live_last_user_message if live_last_user_message else str(r["last_user_message"] or "")
+        )
+        fallback_first_message = (
+            live_first_message if live_first_message else str(r["first_message"] or "")
+        )
         for p in parts:
             pid = str(p.get("id") or "").strip()
             if pid:
@@ -378,7 +590,11 @@ async def list_threads(
                     if live_last_user_message
                     else _user_message_preview(str(r["last_user_message"] or ""))
                 ),
-                "thread_name": live.get("thread_name") if live else r.get("thread_name"),
+                "thread_name": _resolved_thread_name(
+                    explicit_thread_name,
+                    turns=live_turns if live else None,
+                    fallback_messages=[fallback_last_user_message, fallback_first_message],
+                ),
                 "participants": [],  # filled in after batch enrichment
             }
         )
@@ -417,42 +633,16 @@ async def list_threads(
                     "last_result": last_result[:200],
                     "first_message": first_msg,
                     "last_user_message": last_user_message,
-                    "thread_name": live.get("thread_name"),
+                    "thread_name": _resolved_thread_name(
+                        live.get("thread_name"),
+                        turns=live.get("turns", []),
+                        fallback_messages=[last_user_message, first_msg],
+                    ),
                     "participants": [],  # filled in after batch enrichment
                 }
             )
 
-    # Batch enrichment: single query for all participant IDs
-    enrichment_map: dict[str, dict[str, Any]] = {}
-    if all_participant_ids:
-        user_rows = await pool.fetch(
-            """
-            SELECT DISTINCT ON (external_id)
-                external_id, data
-            FROM raw_records
-            WHERE source = 'slack' AND kind = 'user'
-              AND external_id = ANY($1::text[])
-            ORDER BY external_id, fetched_at DESC
-            """,
-            list(all_participant_ids),
-        )
-        for row in user_rows:
-            data = row["data"] if isinstance(row["data"], dict) else {}
-            profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
-            display_name = (
-                profile.get("display_name")
-                or profile.get("real_name")
-                or data.get("real_name")
-                or data.get("name")
-                or row["external_id"]
-            )
-            avatar_url = (
-                profile.get("image_48") or profile.get("image_72") or profile.get("image_24")
-            )
-            enrichment_map[str(row["external_id"])] = {
-                "name": str(display_name),
-                "avatar_url": str(avatar_url) if avatar_url else None,
-            }
+    enrichment_map = await _resolve_participant_details(pool, list(all_participant_ids))
 
     # Apply enrichment to all threads
     for thread in threads:
@@ -463,7 +653,14 @@ async def list_threads(
             pid = str(p.get("id") or "").strip()
             details = enrichment_map.get(pid)
             if details:
-                enriched.append({**p, "name": details["name"], "avatar_url": details["avatar_url"]})
+                enriched.append(
+                    {
+                        **p,
+                        "name": details["name"],
+                        "username": details.get("username"),
+                        "avatar_url": details["avatar_url"],
+                    }
+                )
             else:
                 enriched.append(p)
         thread["participants"] = enriched
@@ -546,7 +743,7 @@ async def _fetch_pg_detail(pool: asyncpg.Pool, key: str) -> dict[str, Any]:
         "mode": str(row.get("mode") or "default"),
         "agent_thread_id": row["agent_thread_id"],
         "state": row["state"],
-        "thread_name": row.get("thread_name"),
+        "thread_name": _resolved_thread_name(row.get("thread_name"), turns=turns),
         "created_at": float(row["created_at"]),
         "last_activity": float(row["last_activity"]),
         "turns": turns,
@@ -1040,6 +1237,7 @@ async def stream_thread_ui(
         emitted_turn_user_messages: set[str] = set()
         pending_tool_ids: dict[tuple[int, str], list[str]] = {}
         tool_call_counters: dict[tuple[int, str], int] = {}
+        last_detail_payload = ""
 
         while True:
             if await request.is_disconnected():
@@ -1070,6 +1268,7 @@ async def stream_thread_ui(
                     return
 
             any_new_data = False
+            detail["participants"] = await _enrich_participants(pool, detail.get("participants"))
             turns = detail.get("turns") or []
             if live_only and not initialized_live_cursor:
                 for turn in turns:
@@ -1102,6 +1301,17 @@ async def stream_thread_ui(
                 last_state = state
                 any_new_data = True
                 yield f"data: {json.dumps({'type': 'data-agent-status', 'data': {'text': state.capitalize() if state else 'Working...'}, 'transient': True})}\n\n"
+            detail_payload = {
+                "slack_thread_key": key,
+                "thread_name": detail.get("thread_name"),
+                "state": detail.get("state"),
+                "participants": detail.get("participants") or [],
+            }
+            detail_payload_key = json.dumps(detail_payload, sort_keys=True, default=str)
+            if detail_payload_key != last_detail_payload:
+                last_detail_payload = detail_payload_key
+                any_new_data = True
+                yield f"data: {json.dumps({'type': 'data-thread-detail', 'id': f'thread-detail-{key}', 'data': detail_payload}, default=str)}\n\n"
             for turn in turns:
                 turn_id = int(turn.get("turn_id") or 0)
                 phase = _parse_phase_label(str(turn.get("user_message") or ""))

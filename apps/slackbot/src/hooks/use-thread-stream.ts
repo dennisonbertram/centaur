@@ -222,6 +222,7 @@ export function useThreadStream(threadKey: string, initialThread?: Partial<Threa
   const stopStreamRef = useRef<(() => void) | null>(null);
   const streamAttachedRef = useRef(false);
   const fetchInFlightRef = useRef(0);
+  const fetchThreadRef = useRef<(() => Promise<boolean>) | null>(null);
   const [reconnectExhausted, setReconnectExhausted] = useState(false);
   const fetchAbortRef = useRef<AbortController | null>(null);
   const fetchSeqRef = useRef(0);
@@ -359,6 +360,10 @@ export function useThreadStream(threadKey: string, initialThread?: Partial<Threa
     },
     onFinish: () => {
       setAgentStatus(null);
+      const refetch = fetchThreadRef.current;
+      if (refetch) {
+        void refetch();
+      }
     },
   });
 
@@ -428,6 +433,13 @@ export function useThreadStream(threadKey: string, initialThread?: Partial<Threa
       }
     }
   }, [threadKey]);
+
+  useEffect(() => {
+    fetchThreadRef.current = () => fetchThread();
+    return () => {
+      fetchThreadRef.current = null;
+    };
+  }, [fetchThread]);
 
   useEffect(() => {
     return () => {

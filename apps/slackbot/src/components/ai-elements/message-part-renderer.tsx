@@ -75,7 +75,7 @@ function sourceLabel(source?: string): string {
 }
 
 function initials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
+  const words = name.trim().replace(/^@/, "").split(/\s+/).filter(Boolean);
   if (words.length === 0) return "?";
   if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
   return `${words[0][0]}${words[1][0]}`.toUpperCase();
@@ -88,12 +88,40 @@ function participantDisplayName(
   userId: string | undefined,
   fallback: string,
 ): string {
+  const username = String(participant?.username || "").trim();
+  if (username) return `@${username}`;
   const participantName = String(participant?.name || "").trim();
   if (participantName && !SLACK_USER_ID_RE.test(participantName)) return participantName;
   const id = String(userId || participant?.id || "").trim();
   if (!id) return fallback;
   if (SLACK_USER_ID_RE.test(id)) return `User ${id.slice(-4)}`;
   return id;
+}
+
+function mentionLabelForUserId(
+  participantsById: Map<string, Participant>,
+  userId: string,
+): string {
+  const participant = participantsById.get(userId);
+  const username = String(participant?.username || "").trim();
+  if (username) return `@${username}`;
+  return participantDisplayName(participant, userId, userId);
+}
+
+function resolveSlackMentions(
+  text: string,
+  participantsById: Map<string, Participant>,
+): string {
+  const withBracketMentions = text.replace(/<@([A-Z0-9]+)>/g, (_match, userId: string) => {
+    return mentionLabelForUserId(participantsById, userId);
+  });
+  return withBracketMentions.replace(
+    /(^|[^\w])@([A-Z0-9]+)\b/g,
+    (match: string, prefix: string, userId: string) => {
+      if (!SLACK_USER_ID_RE.test(userId)) return match;
+      return `${prefix}${mentionLabelForUserId(participantsById, userId)}`;
+    },
+  );
 }
 
 function fileChangeIcon(kind: string): string {
@@ -296,6 +324,7 @@ export function MessagePartRenderer({
   if (step.type === "user-message") {
     const participant = step.userId ? participantsById.get(step.userId) : undefined;
     const displayName = participantDisplayName(participant, step.userId, "User");
+    const bodyText = resolveSlackMentions(step.text, participantsById);
     const turnDuration = step.turnId ? turnDurationsById[step.turnId] : undefined;
     return (
       <div className="rounded-lg border border-primary/20 bg-primary/5 px-2.5 py-2">
@@ -318,7 +347,7 @@ export function MessagePartRenderer({
             {sourceLabel(step.source)}
           </span>
         </div>
-        <div className="whitespace-pre-wrap text-sm text-foreground">{step.text}</div>
+        <div className="whitespace-pre-wrap text-sm text-foreground">{bodyText}</div>
       </div>
     );
   }
@@ -338,13 +367,21 @@ export function MessagePartRenderer({
               item.userId,
               "Thread participant",
             );
+            const bodyText = resolveSlackMentions(item.text, participantsById);
             return (
               <div key={item.id} className="rounded-md border border-border/50 bg-background px-2 py-1.5">
                 <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+                  {participant?.avatar_url ? (
+                    <img src={participant.avatar_url} alt={displayName} className="size-[16px] rounded-full" />
+                  ) : (
+                    <div className="flex size-[16px] items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
+                      {initials(displayName)}
+                    </div>
+                  )}
                   <span className="text-foreground">{displayName}</span>
                   <span>{sourceLabel(item.source)}</span>
                 </div>
-                <div className="whitespace-pre-wrap text-xs text-muted-foreground">{item.text}</div>
+                <div className="whitespace-pre-wrap text-xs text-muted-foreground">{bodyText}</div>
               </div>
             );
           })}

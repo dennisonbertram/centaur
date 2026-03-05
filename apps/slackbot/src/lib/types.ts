@@ -17,6 +17,7 @@ export type Turn = {
 export type Participant = {
   id: string;
   name: string;
+  username?: string | null;
   avatar_url: string | null;
 };
 

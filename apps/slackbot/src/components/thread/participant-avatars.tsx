@@ -14,7 +14,8 @@ const FALLBACK_COLORS = [
 const SLACK_USER_ID_RE = /^U[A-Z0-9]+$/;
 
 function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const normalized = name.trim().replace(/^@/, "");
+  const parts = normalized.split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
   return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
@@ -30,6 +31,8 @@ function colorForId(id: string): string {
 }
 
 function participantLabel(participant: Participant): string {
+  const username = String(participant.username || "").trim();
+  if (username) return `@${username}`;
   const name = String(participant.name || "").trim();
   if (name && !SLACK_USER_ID_RE.test(name)) return name;
   const id = String(participant.id || "").trim();
