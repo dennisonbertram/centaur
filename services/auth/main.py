@@ -67,6 +67,15 @@ def _check_auth(request: Request) -> bool:
         # Fail closed: no password configured means secrets are unavailable.
         # Never allow unauthenticated access.
         return False
+
+    # Check Bearer token first (API_SECRET_KEY)
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer ") and _SECRET_KEY:
+        bearer = auth_header[7:]
+        if secrets.compare_digest(bearer, _SECRET_KEY):
+            return True
+
+    # Fall back to session cookie
     token = request.cookies.get(_COOKIE_NAME, "")
     if not token:
         return False
