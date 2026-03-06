@@ -211,6 +211,7 @@ call slack get_thread_replies '{"channel":"<CHANNEL_ID>","thread_ts":"<THREAD_TS
 ```
 https://paradigm-ops.slack.com/archives/<CHANNEL_ID>/p<MESSAGE_TS_NO_DOT>?thread_ts=<THREAD_TS>&cid=<CHANNEL_ID>
 ```
+Example: `https://paradigm-ops.slack.com/archives/C0ADWCA25L0/p1770252361656499?thread_ts=1770252299.188729&cid=C0ADWCA25L0`
 
 3. **Find the correct row(s) and column** in the sheet:
 
@@ -231,6 +232,13 @@ The sheet has 2 header rows, so data starts at row 3:
 - Row 3 = First data row (JSON index 0)
 
 **Formula**: `sheet_row = json_index + 3`
+
+Examples:
+- JSON index 0 → Row 3
+- JSON index 5 → Row 8
+- JSON index 7 → Row 10
+
+**ALWAYS verify** by matching the Asset, Transaction Type, Quantity, and Fund from the JSON output against the approval request before updating.
 
 **Approver columns** (Row 2 headers):
 | Column | Approver |
