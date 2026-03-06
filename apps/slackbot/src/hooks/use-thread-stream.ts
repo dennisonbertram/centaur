@@ -8,6 +8,7 @@ import { stepsFromUiMessages } from "@/lib/chat-steps";
 import { stepsFromTurns } from "@/lib/turn-steps";
 import { isActiveState } from "@/lib/thread-ordering";
 import type { Step } from "@/lib/describe";
+import { mergeSubagentStep, subagentSelectionKey } from "@/lib/subagent-steps";
 
 type SendRoute = "execute";
 
@@ -146,8 +147,8 @@ function semanticMergeKey(step: Step): string {
   if (step.type === "file-changes" && turnId !== undefined && seq !== undefined) {
     return `file:${turnId}:${seq}`;
   }
-  if (step.type === "subagent" && turnId !== undefined && seq !== undefined) {
-    return `subagent:${turnId}:${seq}:${step.subagentId ?? step.id}`;
+  if (step.type === "subagent") {
+    return `subagent:${subagentSelectionKey(step)}`;
   }
   if (step.type === "diff" && turnId !== undefined && seq !== undefined) {
     return `diff:${turnId}:${seq}`;
@@ -168,7 +169,13 @@ function mergeStepsPreferLive(historical: Step[], live: Step[]): Step[] {
     mergedById.set(semanticMergeKey(step), step);
   }
   for (const step of live) {
-    mergedById.set(semanticMergeKey(step), step);
+    const key = semanticMergeKey(step);
+    const existing = mergedById.get(key);
+    if (existing?.type === "subagent" && step.type === "subagent") {
+      mergedById.set(key, mergeSubagentStep(existing, step));
+      continue;
+    }
+    mergedById.set(key, step);
   }
   const indexed = Array.from(mergedById.values()).map((step, index) => ({ step, index }));
   indexed.sort((a, b) => {
@@ -233,6 +240,8 @@ export function useThreadStream(threadKey: string, initialThread?: Partial<Threa
         name: z.string().nullable().optional(),
         summary: z.string().nullable().optional(),
         error: z.string().nullable().optional(),
+        activity: z.string().nullable().optional(),
+        tool_name: z.string().nullable().optional(),
         branch_index: z.number().nullable().optional(),
         total_branches: z.number().nullable().optional(),
         completed: z.number().nullable().optional(),

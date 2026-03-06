@@ -53,13 +53,136 @@ def test_pi_tool_execution_start_without_id_gets_stable_fallback() -> None:
     assert tool_id.startswith("tool-call-")
 
 
-def test_pi_tool_result_without_linkage_is_dropped() -> None:
+def test_pi_tool_result_without_linkage_gets_stable_fallback() -> None:
     raw_event = {
         "type": "tool_execution_end",
+        "toolName": "search",
+        "args": {"query": "status"},
         "result": {"content": [{"type": "text", "text": "ok"}]},
         "isError": False,
     }
-    assert normalize_harness_event("pi-mono", raw_event) == []
+    events = normalize_harness_event("pi-mono", raw_event)
+    assert events[0]["type"] == "tool"
+    assert events[0]["content"][0]["tool_use_id"].startswith("tool-call-")
+
+
+def test_amp_task_started_normalizes_to_subagent_started() -> None:
+    raw_event = {
+        "type": "system",
+        "subtype": "task_started",
+        "task_id": "task-123",
+        "description": "Research lending markets",
+    }
+
+    assert normalize_harness_event("amp", raw_event) == [
+        {
+            "type": "subagent",
+            "status": "started",
+            "subagent_id": "task-123",
+            "name": "Research lending markets",
+        }
+    ]
+
+
+def test_amp_task_progress_normalizes_to_subagent_activity() -> None:
+    raw_event = {
+        "type": "system",
+        "subtype": "task_progress",
+        "task_id": "task-123",
+        "description": "Reading Aave docs",
+        "last_tool_name": "ReadFile",
+    }
+
+    assert normalize_harness_event("claude-code", raw_event) == [
+        {
+            "type": "subagent",
+            "status": "working",
+            "subagent_id": "task-123",
+            "activity": "Reading Aave docs",
+            "tool_name": "ReadFile",
+        }
+    ]
+
+
+def test_amp_task_progress_without_task_id_uses_tool_use_fallback() -> None:
+    raw_event = {
+        "type": "system",
+        "subtype": "task_progress",
+        "tool_use_id": "toolu_123",
+        "description": "Reading Aave docs",
+        "last_tool_name": "ReadFile",
+    }
+
+    assert normalize_harness_event("amp", raw_event) == [
+        {
+            "type": "subagent",
+            "status": "working",
+            "subagent_id": "toolu_123",
+            "activity": "Reading Aave docs",
+            "tool_name": "ReadFile",
+        }
+    ]
+
+
+def test_amp_task_notification_normalizes_to_subagent_completed() -> None:
+    raw_event = {
+        "type": "system",
+        "subtype": "task_notification",
+        "task_id": "task-123",
+        "summary": "Compared five lending protocols",
+    }
+
+    assert normalize_harness_event("amp", raw_event) == [
+        {
+            "type": "subagent",
+            "status": "completed",
+            "subagent_id": "task-123",
+            "summary": "Compared five lending protocols",
+        }
+    ]
+
+
+def test_codex_subagent_update_normalizes_to_activity() -> None:
+    raw_event = {
+        "type": "item.updated",
+        "item": {
+            "type": "tool_call",
+            "tool": "subagent",
+            "id": "subagent-1",
+            "arguments": {"description": "Research liquidity"},
+            "message": "Searching across docs",
+        },
+    }
+
+    assert normalize_harness_event("codex", raw_event) == [
+        {
+            "type": "subagent",
+            "status": "working",
+            "subagent_id": "subagent-1",
+            "name": "Research liquidity",
+            "activity": "Searching across docs",
+        }
+    ]
+
+
+def test_pi_subagent_update_normalizes_to_activity() -> None:
+    raw_event = {
+        "type": "tool_execution_update",
+        "toolName": "subagent",
+        "toolCallId": "subagent-2",
+        "args": {"description": "Review patch"},
+        "message": "Reading modified files",
+    }
+
+    assert normalize_harness_event("pi-mono", raw_event) == [
+        {
+            "type": "subagent",
+            "status": "working",
+            "subagent_id": "subagent-2",
+            "name": "Review patch",
+            "activity": "Reading modified files",
+        }
+    ]
 
 
 @pytest.mark.parametrize(

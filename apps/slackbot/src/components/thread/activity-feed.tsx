@@ -14,7 +14,7 @@ import {
 } from "@/components/ai-elements/message";
 import { MessagePartRenderer } from "@/components/ai-elements/message-part-renderer";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import type { Step } from "@/lib/describe";
+import type { Step, SubagentStep } from "@/lib/describe";
 import { groupStepsByTurn } from "@/lib/thread-hierarchy";
 import type { Participant } from "@/lib/types";
 
@@ -25,6 +25,8 @@ export function ActivityFeed({
   participants,
   turnDurationsById = {},
   compactMode = false,
+  onSelectSubagent,
+  selectedSubagentKey,
 }: {
   steps: Step[];
   state?: string;
@@ -32,6 +34,8 @@ export function ActivityFeed({
   participants?: Participant[];
   turnDurationsById?: Record<number, number>;
   compactMode?: boolean;
+  onSelectSubagent?: (step: SubagentStep) => void;
+  selectedSubagentKey?: string | null;
 }) {
   const participantsById = useMemo(
     () => new Map((participants || []).map((p) => [p.id, p])),
@@ -100,6 +104,8 @@ export function ActivityFeed({
                       step={step}
                       participantsById={participantsById}
                       turnDurationsById={turnDurationsById}
+                      onSelectSubagent={onSelectSubagent}
+                      selectedSubagentKey={selectedSubagentKey}
                     />
                   ))}
                 </div>

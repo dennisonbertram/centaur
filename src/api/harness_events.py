@@ -1,7 +1,8 @@
 """Normalize harness-specific JSON events into canonical thread events.
 
 The thread UI stream mapper expects a small set of event shapes (`assistant`,
-`tool`, `reasoning`, `command_execution`, `file_change`, `result`, `error`).
+`tool`, `reasoning`, `command_execution`, `file_change`, `subagent`, `result`,
+`error`).
 Each harness emits different raw JSON shapes, so this module converts them into
 those canonical events without introducing a heavy abstraction layer.
 """
@@ -88,6 +89,8 @@ def _subagent_event(
     name: str = "",
     summary: str = "",
     error: str = "",
+    activity: str = "",
+    tool_name: str = "",
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "type": "subagent",
@@ -100,7 +103,26 @@ def _subagent_event(
         payload["summary"] = summary
     if error:
         payload["error"] = error
+    if activity:
+        payload["activity"] = activity
+    if tool_name:
+        payload["tool_name"] = tool_name
     return payload
+
+
+def _amp_subagent_id(event: dict[str, Any]) -> str:
+    task_id = (
+        _as_text(event.get("task_id"))
+        or _as_text(event.get("tool_use_id"))
+        or _as_text(event.get("parent_tool_use_id"))
+    )
+    if task_id:
+        return task_id
+    description = _as_text(event.get("description"))
+    subtype = _as_text(event.get("subtype"))
+    if description:
+        return _stable_tool_call_id("subagent", {"description": description}, subtype)
+    return ""
 
 
 def _usage_payload_from_source(source: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
@@ -210,6 +232,50 @@ def _normalize_amp_like_event(event: dict[str, Any]) -> list[dict[str, Any]]:
                 return [{"type": "reasoning", "text": text}] if text else []
         return []
 
+    if event_type == "system":
+        subtype = _as_text(event.get("subtype"))
+        task_id = _amp_subagent_id(event)
+        if not task_id:
+            return []
+        if subtype == "task_started":
+            return [
+                _subagent_event(
+                    status="started",
+                    subagent_id=task_id,
+                    name=_as_text(event.get("description")),
+                )
+            ]
+        if subtype == "task_progress":
+            return [
+                _subagent_event(
+                    status="working",
+                    subagent_id=task_id,
+                    activity=_as_text(event.get("description")),
+                    tool_name=_as_text(event.get("last_tool_name")),
+                )
+            ]
+        if subtype in {"task_notification", "task_completed", "task_done"}:
+            error_text = _as_text(event.get("error"))
+            if error_text:
+                return [
+                    _subagent_event(
+                        status="failed",
+                        subagent_id=task_id,
+                        error=error_text,
+                    )
+                ]
+            result = _as_text(
+                event.get("result") or event.get("summary") or event.get("description")
+            )
+            return [
+                _subagent_event(
+                    status="completed",
+                    subagent_id=task_id,
+                    summary=result[:220] if result else "",
+                )
+            ]
+        return []
+
     return []
 
 
@@ -276,6 +342,21 @@ def _normalize_codex_item(item: dict[str, Any], phase: str) -> list[dict[str, An
             )
             if phase == "started":
                 return [_subagent_event(status="started", subagent_id=tool_id, name=label)]
+            if phase == "updated":
+                activity = (
+                    _as_text(item.get("activity"))
+                    or _as_text(item.get("status"))
+                    or _as_text(item.get("message"))
+                    or _as_text(item.get("description"))
+                )
+                return [
+                    _subagent_event(
+                        status="working",
+                        subagent_id=tool_id,
+                        name=label,
+                        activity=activity,
+                    )
+                ] if activity else []
             if phase == "completed":
                 if item.get("error") is not None:
                     return [
@@ -418,6 +499,39 @@ def _normalize_pi_event(event: dict[str, Any]) -> list[dict[str, Any]]:
             return [_subagent_event(status="started", subagent_id=fallback_id, name=label)]
         return [_assistant_tool_use_event(tool_id, tool_name, tool_input)]
 
+    if event_type == "tool_execution_update":
+        tool_name = _as_text(event.get("toolName")) or "tool"
+        if tool_name.strip().lower() != "subagent":
+            return []
+        tool_input = _as_dict(event.get("args"))
+        tool_id = _as_text(event.get("toolCallId"))
+        if not tool_id:
+            nonce = (
+                _as_text(event.get("toolExecutionId"))
+                or _as_text(event.get("executionId"))
+                or _as_text(event.get("id"))
+            )
+            tool_id = _stable_tool_call_id(tool_name, tool_input, nonce)
+        label = (
+            _as_text(tool_input.get("description"))
+            or _as_text(tool_input.get("name"))
+            or "Delegated subagent"
+        )
+        activity = (
+            _as_text(event.get("message"))
+            or _as_text(event.get("description"))
+            or _as_text(event.get("status"))
+            or _as_text(event.get("progress"))
+        )
+        return [
+            _subagent_event(
+                status="working",
+                subagent_id=tool_id,
+                name=label,
+                activity=activity,
+            )
+        ] if activity else []
+
     if event_type == "tool_execution_end":
         tool_id = _as_text(event.get("toolCallId"))
         if not tool_id:
@@ -428,8 +542,6 @@ def _normalize_pi_event(event: dict[str, Any]) -> list[dict[str, Any]]:
                 or _as_text(event.get("executionId"))
                 or _as_text(event.get("id"))
             )
-            if not nonce:
-                return []
             tool_id = _stable_tool_call_id(tool_name, tool_input, nonce)
         if _as_text(event.get("toolName")).strip().lower() == "subagent":
             if bool(event.get("isError")):

@@ -7,7 +7,7 @@ import {
   Timer,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { Step } from "@/lib/describe";
+import type { Step, SubagentStep } from "@/lib/describe";
 import type { Participant } from "@/lib/types";
 import { DiffCard } from "@/components/thread/diff-card";
 import { StepGroup } from "@/components/thread/step-group";
@@ -25,11 +25,7 @@ import {
   TerminalActions,
   TerminalCopyButton,
 } from "@/components/ai-elements/terminal";
-import {
-  Agent,
-  AgentHeader,
-  AgentContent,
-} from "@/components/ai-elements/agent";
+import { SubagentCard } from "@/components/thread/subagent-card";
 import {
   Checkpoint,
   CheckpointIcon,
@@ -62,6 +58,7 @@ import {
   StackTraceHeader,
 } from "@/components/ai-elements/stack-trace";
 import { Badge } from "@/components/ui/badge";
+import { subagentSelectionKey } from "@/lib/subagent-steps";
 import { cn } from "@/lib/utils";
 
 function sourceLabel(source?: string): string {
@@ -157,10 +154,14 @@ export function MessagePartRenderer({
   step,
   participantsById,
   turnDurationsById,
+  onSelectSubagent,
+  selectedSubagentKey,
 }: {
   step: Step;
   participantsById: Map<string, Participant>;
   turnDurationsById: Record<number, number>;
+  onSelectSubagent?: (step: SubagentStep) => void;
+  selectedSubagentKey?: string | null;
 }) {
   if (step.type === "phase") {
     return (
@@ -183,45 +184,12 @@ export function MessagePartRenderer({
   }
 
   if (step.type === "subagent") {
-    const normalizedStatus = step.status.trim().toLowerCase();
-    const isDone = normalizedStatus === "completed" || normalizedStatus === "selected";
-    const isFailed = normalizedStatus === "failed";
-    const stats: string[] = [];
-    if (step.phase) stats.push(step.phase);
-    if (step.completed !== undefined && step.totalBranches !== undefined) {
-      stats.push(`${step.completed}/${step.totalBranches} done`);
-    }
-    if (step.turns !== undefined) stats.push(`${step.turns} turns`);
-    if (step.toolCalls !== undefined) stats.push(`${step.toolCalls} tool calls`);
-    if (step.durationS !== undefined) stats.push(formatDuration(step.durationS));
-    if (step.totalTokens !== undefined) {
-      const tokenStr = `${Math.max(0, step.totalTokens).toLocaleString()} tok`;
-      const costStr = step.costUsd != null ? ` / $${step.costUsd.toFixed(4)}` : "";
-      stats.push(`${tokenStr}${costStr}`);
-    }
-    if (step.maxParallel !== undefined && step.maxParallel > 1) {
-      stats.push(`${step.maxParallel}x parallel`);
-    }
-
     return (
-      <Agent className={isFailed ? "border-destructive/30" : isDone ? "border-primary/30" : ""}>
-        <AgentHeader name={step.name || "Subagent"} model={step.model} />
-        <AgentContent>
-          <div className="flex flex-wrap items-center gap-1.5 text-xs">
-            <Badge
-              variant={isFailed ? "destructive" : isDone ? "default" : "secondary"}
-              className="text-xs"
-            >
-              {normalizedStatus.replace(/_/g, " ") || "update"}
-            </Badge>
-            {stats.map((stat) => (
-              <span key={stat} className="text-muted-foreground">{stat}</span>
-            ))}
-          </div>
-          {step.summary ? <p className="text-xs">{step.summary}</p> : null}
-          {step.error ? <p className="text-xs font-medium text-destructive">{step.error}</p> : null}
-        </AgentContent>
-      </Agent>
+      <SubagentCard
+        step={step}
+        isSelected={selectedSubagentKey === subagentSelectionKey(step)}
+        onSelect={onSelectSubagent}
+      />
     );
   }
 

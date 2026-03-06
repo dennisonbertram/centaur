@@ -43,6 +43,11 @@ export type ContextMessageItem = {
   createdAt?: string;
 };
 
+export type SubagentActivity = {
+  description: string;
+  toolName?: string;
+};
+
 type StepBase = {
   id: string;
   eventSeq?: number;
@@ -62,6 +67,8 @@ export type Step =
       name?: string;
       summary?: string;
       error?: string;
+      activity?: string;
+      activities?: SubagentActivity[];
       branchIndex?: number;
       totalBranches?: number;
       completed?: number;
@@ -125,6 +132,8 @@ export type Step =
       turnId?: number;
     })
   | (StepBase & { type: "context-group"; title: string; items: ContextMessageItem[] });
+
+export type SubagentStep = Extract<Step, { type: "subagent" }>;
 
 import { asString, asNumber } from "@/lib/parse-utils";
 

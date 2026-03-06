@@ -6,6 +6,8 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { LoaderCircle } from "lucide-react";
 import { ActivityFeed } from "@/components/thread/activity-feed";
+import { SubagentDetailPanel } from "@/components/thread/subagent-detail-panel";
+import type { SubagentStep } from "@/lib/describe";
 import { ThreadDetailTelemetry } from "@/components/thread/thread-detail-telemetry";
 import { MessageInput } from "@/components/thread/message-input";
 import { QuickActionChips } from "@/components/thread/quick-action-chips";
@@ -25,6 +27,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useThreadList } from "@/hooks/use-thread-list";
 import { Shimmer } from "@/components/ai-elements/shimmer";
+import { subagentSelectionKey } from "@/lib/subagent-steps";
 import {
   entrySourceLabel,
   listQueryFromSearchParams,
@@ -72,8 +75,39 @@ export default function ThreadDetailPage() {
   const [infoOpen, setInfoOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [compactMode, setCompactMode] = useState(false);
+  const [selectedSubagentKey, setSelectedSubagentKey] = useState<string | null>(null);
+  const [selectedSubagentSnapshot, setSelectedSubagentSnapshot] = useState<SubagentStep | null>(null);
   const { threads } = useThreadList();
   const closeInfoSheet = useCallback(() => setInfoOpen(false), []);
+  const closeSubagentPanel = useCallback(() => {
+    setSelectedSubagentKey(null);
+    setSelectedSubagentSnapshot(null);
+  }, []);
+  const handleSelectSubagent = useCallback(
+    (step: SubagentStep) => {
+      setSelectedSubagentKey(subagentSelectionKey(step));
+      setSelectedSubagentSnapshot(step);
+    },
+    [],
+  );
+  useEffect(() => {
+    setSelectedSubagentKey(null);
+    setSelectedSubagentSnapshot(null);
+  }, [threadKey]);
+  const liveSelectedSubagent = useMemo(() => {
+    if (!selectedSubagentKey) return null;
+    const match = liveSteps.find(
+      (step): step is SubagentStep =>
+        step.type === "subagent" && subagentSelectionKey(step) === selectedSubagentKey,
+    );
+    return match ?? null;
+  }, [liveSteps, selectedSubagentKey]);
+  useEffect(() => {
+    if (liveSelectedSubagent) {
+      setSelectedSubagentSnapshot(liveSelectedSubagent);
+    }
+  }, [liveSelectedSubagent]);
+  const resolvedSelectedSubagent = liveSelectedSubagent ?? selectedSubagentSnapshot;
   const entrySource = parseEntrySource(searchParams.get("entry_source"));
   const entryAnchor = parseEntryAnchor(searchParams.get("entry_anchor"));
   const sourceLabel = entrySourceLabel(entrySource);
@@ -249,6 +283,8 @@ export default function ThreadDetailPage() {
           participants={thread.participants}
           turnDurationsById={turnDurationsById}
           compactMode={compactMode}
+          onSelectSubagent={handleSelectSubagent}
+          selectedSubagentKey={selectedSubagentKey}
         />
       </div>
 
@@ -270,6 +306,12 @@ export default function ThreadDetailPage() {
       />
 
       {/* Overlays */}
+      <SubagentDetailPanel
+        step={resolvedSelectedSubagent}
+        open={selectedSubagentKey !== null}
+        onClose={closeSubagentPanel}
+      />
+
       {thread && (
         <ThreadInfoSheet
           open={infoOpen}

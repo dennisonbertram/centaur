@@ -864,6 +864,8 @@ def _ui_stream_chunks_for_event(
 ) -> list[dict[str, Any]]:
     chunks: list[dict[str, Any]] = []
     event_type = event.get("type")
+    raw_event_seq = event.get("event_seq")
+    event_seq = _coerce_non_negative_int(raw_event_seq) if raw_event_seq is not None else event_index + 1
 
     if event_type == "assistant":
         content = (event.get("message") or {}).get("content") or []
@@ -923,7 +925,7 @@ def _ui_stream_chunks_for_event(
             {
                 "type": "data-file-changes",
                 "id": f"turn-{turn_id}-file-change-{event_index}",
-                "data": {"changes": event.get("changes") or []},
+                    "data": {"changes": event.get("changes") or [], "event_seq": event_seq},
             }
         )
     elif event_type == "command_execution":
@@ -936,6 +938,7 @@ def _ui_stream_chunks_for_event(
                     "output": event.get("aggregated_output") or event.get("output") or "",
                     "exitCode": event.get("exit_code"),
                     "status": event.get("status"),
+                    "event_seq": event_seq,
                 },
             }
         )
@@ -951,6 +954,7 @@ def _ui_stream_chunks_for_event(
             "source": str(event.get("source") or "unknown"),
             "user_id": str(event.get("user_id") or "").strip() or None,
             "created_at": str(event.get("created_at") or ""),
+            "event_seq": event_seq,
         }
         if message_type == "context":
             chunks.append(
@@ -1025,6 +1029,9 @@ def _ui_stream_chunks_for_event(
                     "total_tokens": total_tokens,
                     "cost_usd": cost_usd,
                     "model": model_name,
+                    "activity": event.get("activity"),
+                    "tool_name": event.get("tool_name"),
+                    "event_seq": event_seq,
                 },
             }
         )
@@ -1215,7 +1222,7 @@ async def stream_thread_ui(
                 if phase and last_phase_by_turn.get(turn_id) != phase:
                     last_phase_by_turn[turn_id] = phase
                     any_new_data = True
-                    yield f"data: {json.dumps({'type': 'data-phase-progress', 'id': f'turn-{turn_id}-phase', 'data': {'phase': phase, 'turn_id': turn_id}})}\n\n"
+                    yield f"data: {json.dumps({'type': 'data-phase-progress', 'id': f'turn-{turn_id}-phase', 'data': {'phase': phase, 'turn_id': turn_id, 'event_seq': 0}})}\n\n"
                 events_raw = turn.get("events")
                 if isinstance(events_raw, list):
                     events = events_raw

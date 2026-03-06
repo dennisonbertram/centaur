@@ -14,6 +14,7 @@ import {
   type ToolCall,
 } from "@/lib/describe";
 import { asBoolean, asNumber } from "@/lib/parse-utils";
+import { buildSubagentStepId, mergeSubagentStep, normalizeSubagentStatus } from "@/lib/subagent-steps";
 import { dedupeSources, extractSourcesFromUnknown, type StepSource } from "@/lib/source-utils";
 import { stringifyToolOutput } from "@/lib/tool-output-detect";
 import type { Turn } from "@/lib/types";
@@ -41,9 +42,10 @@ function toolFingerprint(toolName: string, input: Record<string, unknown>): stri
   return `${toolName}:${stableSerialize(input)}`;
 }
 
-function eventSeqFromEvent(event: Record<string, unknown>): number | undefined {
+function eventSeqFromEvent(event: Record<string, unknown>, fallbackIndex?: number): number | undefined {
   const direct = asNumber(event.event_seq ?? event.eventSeq);
   if (direct !== null && direct > 0) return direct;
+  if (typeof fallbackIndex === "number" && fallbackIndex >= 0) return fallbackIndex + 1;
   return undefined;
 }
 
@@ -132,6 +134,7 @@ export function stepsFromTurns(turns: Turn[]): Step[] {
   const terminalStepById = new Map<string, Step & { type: "terminal" }>();
   const diffStepById = new Map<string, Step & { type: "diff" }>();
   const contextGroupById = new Map<string, Step & { type: "context-group" }>();
+  const subagentStepByKey = new Map<string, Step & { type: "subagent" }>();
 
   for (const turn of turns) {
     const turnId = turn.turn_id;
@@ -194,7 +197,7 @@ export function stepsFromTurns(turns: Turn[]): Step[] {
     for (let ei = 0; ei < events.length; ei++) {
       const event = asRecord(events[ei]);
       const eventType = asString(event.type);
-      const eventSeq = eventSeqFromEvent(event);
+      const eventSeq = eventSeqFromEvent(event, ei);
 
       if (eventType === "assistant") {
         const content = (asRecord(event.message).content as unknown[]) || [];
@@ -442,13 +445,17 @@ export function stepsFromTurns(turns: Turn[]): Step[] {
           });
         }
       } else if (eventType === "subagent") {
-        const status = asString(event.status);
+        const status = normalizeSubagentStatus(asString(event.status));
         if (!status) continue;
-        flushGroup();
         const subagentId = asString(event.subagent_id);
+        const mergeKey = subagentId ? `${turnId}:${subagentId}` : "";
+        const existing = mergeKey ? subagentStepByKey.get(mergeKey) : null;
+
+        const activityText = asString(event.activity);
+        const toolNameText = asString(event.tool_name);
         const acceptableRaw = event.acceptable;
-        steps.push({
-          id: `subagent:turn-${turnId}:${ei}:${subagentId || "unknown"}:${status}`,
+        const incomingStep: Step & { type: "subagent" } = {
+          id: buildSubagentStepId(turnId, subagentId || undefined, String(ei)),
           type: "subagent",
           eventSeq,
           turnId,
@@ -458,6 +465,10 @@ export function stepsFromTurns(turns: Turn[]): Step[] {
           name: asString(event.name) || undefined,
           summary: asString(event.summary) || undefined,
           error: asString(event.error) || undefined,
+          activity: activityText || undefined,
+          activities: activityText
+            ? [{ description: activityText, toolName: toolNameText || undefined }]
+            : undefined,
           branchIndex: asNumber(event.branch_index) ?? undefined,
           totalBranches: asNumber(event.total_branches) ?? undefined,
           completed:
@@ -480,7 +491,18 @@ export function stepsFromTurns(turns: Turn[]): Step[] {
           totalTokens: asNumber(event.total_tokens) ?? undefined,
           costUsd: asNumber(event.cost_usd),
           model: asString(event.model) || undefined,
-        });
+        };
+
+        if (existing) {
+          const merged = mergeSubagentStep(existing, incomingStep);
+          Object.assign(existing, merged);
+        } else {
+          flushGroup();
+          steps.push(incomingStep);
+          if (mergeKey) {
+            subagentStepByKey.set(mergeKey, incomingStep);
+          }
+        }
       } else if (eventType === "error") {
         flushGroup();
         steps.push({

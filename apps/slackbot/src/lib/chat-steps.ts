@@ -8,6 +8,12 @@ import {
   type ToolCall,
 } from "@/lib/describe";
 import { asString, asRecord, asNumber, asBoolean } from "@/lib/parse-utils";
+import {
+  buildSubagentStepId,
+  mergeSubagentStep,
+  normalizeSubagentStatus,
+  subagentSelectionKey,
+} from "@/lib/subagent-steps";
 import { dedupeSources, extractSourcesFromUnknown, type StepSource } from "@/lib/source-utils";
 import { stringifyToolOutput } from "@/lib/tool-output-detect";
 
@@ -241,25 +247,29 @@ export function stepsFromUiMessages(messages: UIMessage[]): Step[] {
 
       if (partType === "data-subagent") {
         const data = asRecord(part.data);
-        const status = asString(data.status);
+        const status = normalizeSubagentStatus(asString(data.status));
         if (!status) continue;
         flushGroup();
         const subagentId = asString(data.subagent_id);
-        const phase = asString(data.phase) || undefined;
-        const streamId = asString(part.id);
-        const stepId = streamId || `subagent:${subagentId || partId}:${status}`;
+        const activityText = asString(data.activity);
+        const toolNameText = asString(data.tool_name);
         const acceptableRaw = data.acceptable;
+        const stepId = buildSubagentStepId(turnId, subagentId || undefined, partId);
         steps.push({
           id: stepId,
           type: "subagent",
           eventSeq,
           turnId,
           subagentId: subagentId || undefined,
-          phase,
+          phase: asString(data.phase) || undefined,
           status,
           name: asString(data.name) || undefined,
           summary: asString(data.summary) || undefined,
           error: asString(data.error) || undefined,
+          activity: activityText || undefined,
+          activities: activityText
+            ? [{ description: activityText, toolName: toolNameText || undefined }]
+            : undefined,
           branchIndex: asNumber(data.branch_index) ?? undefined,
           totalBranches: asNumber(data.total_branches) ?? undefined,
           completed: asNumber(data.completed_count ?? data.completed) ?? undefined,
@@ -473,9 +483,10 @@ export function stepsFromUiMessages(messages: UIMessage[]): Step[] {
   const byId = new Map<string, number>();
   const stable: Step[] = [];
   for (const step of steps) {
-    const existingIndex = byId.get(step.id);
+    const identityKey = step.type === "subagent" ? subagentSelectionKey(step) : step.id;
+    const existingIndex = byId.get(identityKey);
     if (existingIndex === undefined) {
-      byId.set(step.id, stable.length);
+      byId.set(identityKey, stable.length);
       stable.push(step);
       continue;
     }
@@ -497,6 +508,10 @@ export function stepsFromUiMessages(messages: UIMessage[]): Step[] {
         text: step.text || existing.text,
         streaming: existing.streaming && !step.streaming ? false : step.streaming,
       };
+      continue;
+    }
+    if (existing.type === "subagent" && step.type === "subagent") {
+      stable[existingIndex] = mergeSubagentStep(existing, step);
       continue;
     }
     stable[existingIndex] = step;
