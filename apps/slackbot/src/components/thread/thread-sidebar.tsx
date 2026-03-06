@@ -100,6 +100,7 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
   }, [pathname, router, searchParams, shouldSyncUrl, sidebarQueryString]);
 
   useEffect(() => {
+    if (!shouldSyncUrl) return;
     const nextQuery = searchParams.get("q") ?? "";
     const nextStatusRaw = (searchParams.get("status") as ThreadStatusFilter | null) ?? "all";
     const nextStatus: VisibleThreadStatusFilter =
@@ -110,7 +111,7 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
     if (nextStatus !== visibleStatusFilter) {
       setStatusFilter(nextStatus);
     }
-  }, [query, searchParams, setQuery, setStatusFilter, visibleStatusFilter]);
+  }, [query, searchParams, setQuery, setStatusFilter, shouldSyncUrl, visibleStatusFilter]);
 
   useEffect(() => {
     if (sortedThreads.length === 0) {
