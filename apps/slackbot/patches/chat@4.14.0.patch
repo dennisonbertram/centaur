@@ -1,0 +1,43 @@
+diff --git a/dist/index.js b/dist/index.js
+index f81f54e25db8dbe3a6ce337571e5686f21eddba8..357db1a04e321673519ee16fc29f93b123362702 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1391,6 +1391,7 @@ var Chat = class {
+   constructor(config) {
+     this.userName = config.userName;
+     this._stateAdapter = config.state;
++    this._onLockConflict = config.onLockConflict ?? "drop";
+     this.adapters = /* @__PURE__ */ new Map();
+     this._streamingUpdateIntervalMs = config.streamingUpdateIntervalMs ?? 500;
+     if (typeof config.logger === "string") {
+@@ -2300,15 +2301,25 @@ var Chat = class {
+       return;
+     }
+     await this._stateAdapter.set(dedupeKey, true, DEDUPE_TTL_MS);
+-    const lock = await this._stateAdapter.acquireLock(
++    let lock = await this._stateAdapter.acquireLock(
+       threadId,
+       DEFAULT_LOCK_TTL_MS
+     );
+     if (!lock) {
+-      this.logger.warn("Could not acquire lock on thread", { threadId });
+-      throw new LockError(
+-        `Could not acquire lock on thread ${threadId}. Another instance may be processing.`
+-      );
++      const resolution = typeof this._onLockConflict === "function"
++        ? this._onLockConflict(threadId, message)
++        : this._onLockConflict;
++      if (resolution === "force" && typeof this._stateAdapter.forceReleaseLock === "function") {
++        this.logger.info("Force-releasing lock on thread for interrupt", { threadId });
++        await this._stateAdapter.forceReleaseLock(threadId);
++        lock = await this._stateAdapter.acquireLock(threadId, DEFAULT_LOCK_TTL_MS);
++      }
++      if (!lock) {
++        this.logger.warn("Could not acquire lock on thread", { threadId });
++        throw new LockError(
++          `Could not acquire lock on thread ${threadId}. Another instance may be processing.`
++        );
++      }
+     }
+     this.logger.debug("Lock acquired", { threadId, token: lock.token });
+     try {

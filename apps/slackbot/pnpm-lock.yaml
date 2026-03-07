@@ -4,6 +4,17 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@chat-adapter/state-memory@4.14.0':
+    hash: 5f7242168c5ef6bb86e644768c173a16562000b9619c51625136f98a1ea9f58e
+    path: patches/@chat-adapter__state-memory@4.14.0.patch
+  '@chat-adapter/state-redis@4.14.0':
+    hash: 701850d19849154dd4ade7d8b2977b1c6a11ac5dafce456f6b1cc95148185b18
+    path: patches/@chat-adapter__state-redis@4.14.0.patch
+  chat@4.14.0:
+    hash: c2202e28072a5f146a50c030c44dff34eb5655c279b1836651b89277b9264029
+    path: patches/chat@4.14.0.patch
+
 importers:
 
   .:
@@ -16,10 +27,10 @@ importers:
         version: 4.14.0
       '@chat-adapter/state-memory':
         specifier: 4.14.0
-        version: 4.14.0
+        version: 4.14.0(patch_hash=5f7242168c5ef6bb86e644768c173a16562000b9619c51625136f98a1ea9f58e)
       '@chat-adapter/state-redis':
         specifier: 4.14.0
-        version: 4.14.0
+        version: 4.14.0(patch_hash=701850d19849154dd4ade7d8b2977b1c6a11ac5dafce456f6b1cc95148185b18)
       '@pierre/diffs':
         specifier: ^1.0.11
         version: 1.0.11(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -67,7 +78,7 @@ importers:
         version: 10.4.27(postcss@8.5.6)
       chat:
         specifier: 4.14.0
-        version: 4.14.0
+        version: 4.14.0(patch_hash=c2202e28072a5f146a50c030c44dff34eb5655c279b1836651b89277b9264029)
       class-variance-authority:
         specifier: 0.7.1
         version: 0.7.1
@@ -3201,7 +3212,7 @@ snapshots:
 
   '@chat-adapter/shared@4.14.0':
     dependencies:
-      chat: 4.14.0
+      chat: 4.14.0(patch_hash=c2202e28072a5f146a50c030c44dff34eb5655c279b1836651b89277b9264029)
     transitivePeerDependencies:
       - supports-color
 
@@ -3209,20 +3220,20 @@ snapshots:
     dependencies:
       '@chat-adapter/shared': 4.14.0
       '@slack/web-api': 7.14.1
-      chat: 4.14.0
+      chat: 4.14.0(patch_hash=c2202e28072a5f146a50c030c44dff34eb5655c279b1836651b89277b9264029)
     transitivePeerDependencies:
       - debug
       - supports-color
 
-  '@chat-adapter/state-memory@4.14.0':
+  '@chat-adapter/state-memory@4.14.0(patch_hash=5f7242168c5ef6bb86e644768c173a16562000b9619c51625136f98a1ea9f58e)':
     dependencies:
-      chat: 4.14.0
+      chat: 4.14.0(patch_hash=c2202e28072a5f146a50c030c44dff34eb5655c279b1836651b89277b9264029)
     transitivePeerDependencies:
       - supports-color
 
-  '@chat-adapter/state-redis@4.14.0':
+  '@chat-adapter/state-redis@4.14.0(patch_hash=701850d19849154dd4ade7d8b2977b1c6a11ac5dafce456f6b1cc95148185b18)':
     dependencies:
-      chat: 4.14.0
+      chat: 4.14.0(patch_hash=c2202e28072a5f146a50c030c44dff34eb5655c279b1836651b89277b9264029)
       redis: 4.7.0
     transitivePeerDependencies:
       - supports-color
@@ -4722,7 +4733,7 @@ snapshots:
 
   character-reference-invalid@2.0.1: {}
 
-  chat@4.14.0:
+  chat@4.14.0(patch_hash=c2202e28072a5f146a50c030c44dff34eb5655c279b1836651b89277b9264029):
     dependencies:
       '@workflow/serde': 4.1.0-beta.2
       mdast-util-to-string: 4.0.0

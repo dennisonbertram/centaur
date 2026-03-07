@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import os
+import threading
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -34,6 +35,8 @@ class PipeSession:
     _stdout_sock: Any = field(default=None, repr=False)
     turn_counter: int = 0
     started_at: float = 0.0
+    _active_turn_id: int = field(default=0, repr=False)
+    _turn_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
 
 # In-memory sessions — reconstructable from Docker labels on restart
@@ -246,17 +249,25 @@ def _spawn_sync(thread_key: str, harness: str) -> PipeSession:
 
 
 def _send_turn_and_stream(session: PipeSession, message: str):
-    """Send a turn via stdin, yield stdout lines until turn.done (blocking generator)."""
+    """Send a turn via stdin, yield stdout lines until turn.done (blocking generator).
+
+    Only one turn can actively read stdout at a time. If a new turn starts while
+    a previous turn is still reading, the previous reader detects the preemption
+    via ``_active_turn_id`` and exits, leaving the stdout stream to the new owner.
+    """
     _attach_sync(session)
 
-    session.turn_counter += 1
-    turn_id = session.turn_counter
+    with session._turn_lock:
+        session.turn_counter += 1
+        turn_id = session.turn_counter
+        session._active_turn_id = turn_id
 
     _write_stdin(session, {"type": "turn.start", "turn_id": turn_id, "text": message})
 
-    # Read log stream lines until we see turn.done for our turn_id
     buf = ""
     for chunk in session._stdout_sock:
+        if session._active_turn_id != turn_id:
+            return
         buf += chunk.decode("utf-8", errors="replace")
         while "\n" in buf:
             line, buf = buf.split("\n", 1)

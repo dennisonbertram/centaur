@@ -266,7 +266,8 @@ function createBot() {
     userName: SLACK_BOT_USERNAME,
     adapters: hasSlackCreds ? { slack: createSlackAdapter() } : {},
     state: process.env.REDIS_URL ? createRedisState() : createMemoryState(),
-  });
+    onLockConflict: "force",
+  } as ConstructorParameters<typeof Chat>[0]);
   const threadConfigs = new Map<string, ThreadConfig>();
   const recentMentionDeliveries = new Map<string, number>();
 
