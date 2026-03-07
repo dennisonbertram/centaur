@@ -40,11 +40,11 @@ def _system_prompt_path() -> str | None:
     return p if os.path.isfile(p) else None
 
 
-def build_persistent_cmd(initial_message: str) -> list[str]:
+def build_persistent_cmd() -> list[str]:
     if engine == "amp":
         cmd = [
             "amp", "--no-ide", "--no-notifications", "--dangerously-allow-all",
-            "--stream-json", "--stream-json-input", "-x", initial_message,
+            "--stream-json", "--stream-json-input",
         ]
         if model_override:
             cmd.extend(["--model", model_override])
@@ -52,7 +52,7 @@ def build_persistent_cmd(initial_message: str) -> list[str]:
     cmd = [
         "claude", "--dangerously-skip-permissions",
         "--output-format", "stream-json", "--input-format", "stream-json",
-        "--verbose", "-p", initial_message,
+        "--verbose",
     ]
     if model_override:
         cmd.extend(["--model", model_override])
@@ -210,14 +210,13 @@ def run_persistent() -> None:
             current_turn_id = msg.get("turn_id")
             text = msg.get("text", "")
             if proc is None or proc.poll() is not None:
-                proc = start_harness(build_persistent_cmd(text))
+                proc = start_harness(build_persistent_cmd())
                 _spawn_forwarders(proc)
-            else:
-                assert proc.stdin is not None
-                proc.stdin.write(
-                    json.dumps({"type": "user", "text": text}) + "\n"
-                )
-                proc.stdin.flush()
+            assert proc is not None and proc.stdin is not None
+            proc.stdin.write(
+                json.dumps({"type": "user", "text": text}) + "\n"
+            )
+            proc.stdin.flush()
 
 
 def run_oneshot() -> None:
