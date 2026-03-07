@@ -1,4 +1,4 @@
-import { apiPost, apiGet, ApiError, API_URL, API_KEY } from "./api-client";
+import { apiPost, apiGet, resilientFetch, ApiError, API_URL, API_KEY } from "./api-client";
 
 export type Engine = "amp" | "claude-code" | "codex" | "pi-mono";
 export type Harness = Engine | "eng" | "legal";
@@ -197,70 +197,96 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
   };
 }
 
-export async function spawn(
-  threadKey: string,
-  harness: Harness = "amp",
-  engine?: Engine | null,
-  repo?: string,
-  requestId?: string,
-): Promise<{ sessionId: string; status: string }> {
-  const result = await apiPost("/agent/spawn", {
-    slack_thread_key: threadKey,
-    harness,
-    ...(engine ? { engine } : {}),
-    ...(repo ? { repo } : {}),
-    ...(requestId ? { request_id: requestId } : {}),
-  }, { timeoutMs: 30_000 });
-  return {
-    sessionId: result.session_id as string,
-    status: result.status as string,
-  };
-}
-
 export async function execute(
   threadKey: string,
   message: string,
   harness?: Harness | null,
-  requestId?: string,
-  files?: FileAttachment[],
-  userId?: string,
-  source: ExecuteSource = "slack",
-  model?: string | null,
-  engine?: Engine | null,
-  continueSession: boolean = true,
+  _requestId?: string,
+  _files?: FileAttachment[],
+  _userId?: string,
+  _source: ExecuteSource = "slack",
+  _model?: string | null,
+  _engine?: Engine | null,
+  _continueSession: boolean = true,
 ): Promise<string> {
-  const result = await apiPost("/agent/execute", {
-    slack_thread_key: threadKey,
-    message,
-    ...(harness ? { harness } : {}),
-    ...(engine ? { engine } : {}),
-    ...(requestId ? { request_id: requestId } : {}),
-    ...(files && files.length > 0 ? { files } : {}),
-    ...(userId ? { user_id: userId } : {}),
-    ...(model ? { model } : {}),
-    ...(continueSession ? {} : { continue_session: false }),
-    source,
+  const normalizedKey = normalizeThreadKey(threadKey);
+  const res = await resilientFetch(`${API_URL}/pipe/execute`, {
+    method: "POST",
+    body: JSON.stringify({
+      thread_key: normalizedKey,
+      message,
+      harness: harness || "amp",
+    }),
+    timeoutMs: 10 * 60_000,
+    maxAttempts: 1,
+    stream: true,
   });
-  if (typeof result.error === "string" && result.error.trim()) {
-    throw new ApiError(result.error, 200, false);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new ApiError(
+      `/pipe/execute failed (${res.status}): ${text.slice(0, 300)}`,
+      res.status,
+      res.status >= 500,
+    );
   }
-  return (result.result as string) || "";
+  if (!res.body) return "";
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let lastAssistantText = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+
+    while (buf.includes("\n\n")) {
+      const boundary = buf.indexOf("\n\n");
+      const raw = buf.slice(0, boundary);
+      buf = buf.slice(boundary + 2);
+
+      const dataLines = raw
+        .split("\n")
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).trim());
+      if (dataLines.length === 0) continue;
+      const payload = dataLines.join("\n");
+      if (payload === "[DONE]") break;
+
+      try {
+        const evt = JSON.parse(payload);
+        // Collect assistant text from harness events
+        if (evt.type === "result" && typeof evt.result === "string") {
+          lastAssistantText = evt.result;
+        } else if (evt.type === "assistant" && evt.message?.content) {
+          for (const block of evt.message.content) {
+            if (block?.type === "text" && typeof block.text === "string") {
+              lastAssistantText = block.text;
+            }
+          }
+        }
+      } catch {
+        // Non-JSON line — could be plain text result
+        if (payload.trim()) lastAssistantText = payload.trim();
+      }
+    }
+  }
+
+  return lastAssistantText;
 }
 
 export async function interrupt(
   threadKey: string,
-  requestId?: string
+  _requestId?: string,
 ): Promise<{ sessionId: string; status: string }> {
-  const result = await apiPost("/agent/interrupt", {
-    slack_thread_key: threadKey,
-    ...(requestId ? { request_id: requestId } : {}),
+  const normalizedKey = normalizeThreadKey(threadKey);
+  const result = await apiPost("/pipe/stop", {
+    thread_key: normalizedKey,
   }, { timeoutMs: 30_000 });
-  if (typeof result.error === "string" && result.error.trim()) {
-    throw new ApiError(result.error, 200, false);
-  }
   return {
-    sessionId: String(result.session_id ?? threadKey),
-    status: String(result.status ?? "interrupted"),
+    sessionId: normalizedKey,
+    status: result.ok ? "stopped" : "not_found",
   };
 }
 
