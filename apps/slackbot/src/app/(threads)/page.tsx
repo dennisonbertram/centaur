@@ -4,7 +4,6 @@ import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createIdGenerator } from "ai";
 import { Menu, MessageSquarePlus } from "lucide-react";
-import { toast } from "sonner";
 import { MessageInput } from "@/components/thread/message-input";
 import { MobileTabBar } from "@/components/thread/mobile-tab-bar";
 import { useThreadLayout } from "@/components/thread/thread-layout";
@@ -25,28 +24,8 @@ export default function NewSessionPage() {
 
       const threadKey = `ui:${generateThreadId()}`;
       const encoded = encodeURIComponent(threadKey);
-
-      try {
-        const res = await fetch("/api/agent/execute", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            slack_thread_key: threadKey,
-            message: text,
-            source: "thread_ui",
-          }),
-        });
-
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error ?? `Failed (${res.status})`);
-        }
-
-        router.push(`/${encoded}`);
-      } catch (err) {
-        toast(err instanceof Error ? err.message : "Failed to start session");
-        setSending(false);
-      }
+      const messageParam = encodeURIComponent(text);
+      router.push(`/${encoded}?initial_message=${messageParam}`);
     },
     [generateThreadId, router, sending],
   );

@@ -1,9 +1,9 @@
-/** GET /api/messages?key={thread_key} — proxy to FastAPI backend */
+/** GET /api/messages?key={thread_key} — load messages from Postgres */
 
 import { NextRequest } from "next/server";
 import { safeValidateUIMessages } from "ai";
 import { dataPartSchemas } from "@/lib/data-part-schemas";
-import { resilientFetch, API_URL } from "@/lib/api-client";
+import { getPool } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -15,34 +15,33 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const res = await resilientFetch(
-      `${API_URL}/threads/messages?key=${encodeURIComponent(threadKey)}`,
-      { timeoutMs: 10_000 },
+    const pool = getPool();
+    const { rows } = await pool.query(
+      "SELECT id, role, parts, created_at, metadata FROM chat_messages WHERE thread_key = $1 ORDER BY created_at",
+      [threadKey],
     );
 
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      return Response.json(data, {
-        status: res.status,
-        headers: { "Cache-Control": "no-store" },
-      });
-    }
-
-    const rawMessages = await res.json();
+    const messages = rows.map((row) => ({
+      id: row.id,
+      role: row.role,
+      parts: row.parts,
+      createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+      metadata: row.metadata,
+    }));
 
     const validated = await safeValidateUIMessages({
-      messages: rawMessages,
+      messages,
       dataSchemas: dataPartSchemas,
     });
 
     return Response.json(
-      validated.success ? validated.data : rawMessages,
+      validated.success ? validated.data : messages,
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (err) {
-    console.error("Failed to fetch messages from API:", err);
+    console.error("Failed to fetch messages:", err);
     return Response.json(
-      { error: err instanceof Error ? err.message : "API unreachable" },
+      { error: err instanceof Error ? err.message : "Database error" },
       { status: 502, headers: { "Cache-Control": "no-store" } },
     );
   }

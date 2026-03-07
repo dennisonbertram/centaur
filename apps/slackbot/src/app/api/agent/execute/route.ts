@@ -23,6 +23,7 @@ import {
   harnessEventToUiChunks,
   createConversionState,
 } from "@/lib/harness-to-ui-chunks";
+import { getPool } from "@/lib/db";
 
 const generateMessageId = createIdGenerator({ prefix: "msg", size: 16 });
 
@@ -126,20 +127,31 @@ export async function POST(request: Request) {
       },
       onFinish: async ({ messages }) => {
         try {
-          await resilientFetch(`${API_URL}/threads/messages`, {
-            method: "POST",
-            body: JSON.stringify({
-              thread_key: slackThreadKey,
-              messages: messages.map((msg) => ({
-                id: msg.id,
-                role: msg.role,
-                parts: msg.parts,
-                metadata: msg.metadata || {},
-              })),
-            }),
-            maxAttempts: 2,
-            timeoutMs: 10_000,
-          });
+          const pool = getPool();
+          const client = await pool.connect();
+          try {
+            await client.query("BEGIN");
+            for (const msg of messages) {
+              await client.query(
+                `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
+                 VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+                 ON CONFLICT (id) DO UPDATE SET parts = $4::jsonb, metadata = $5::jsonb`,
+                [
+                  msg.id,
+                  slackThreadKey,
+                  msg.role,
+                  JSON.stringify(msg.parts),
+                  JSON.stringify(msg.metadata || {}),
+                ],
+              );
+            }
+            await client.query("COMMIT");
+          } catch (e) {
+            await client.query("ROLLBACK");
+            throw e;
+          } finally {
+            client.release();
+          }
         } catch {
           // Best-effort persistence — don't block stream
         }

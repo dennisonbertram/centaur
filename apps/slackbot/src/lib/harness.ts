@@ -1,4 +1,5 @@
-import { apiPost, apiGet, resilientFetch, ApiError, API_URL, API_KEY } from "./api-client";
+import { apiPost, resilientFetch, ApiError, API_URL } from "./api-client";
+import { getPool } from "@/lib/db";
 
 export type Engine = "amp" | "claude-code" | "codex" | "pi-mono";
 export type Harness = Engine | "eng" | "legal";
@@ -294,17 +295,17 @@ export async function fetchThreadRuntimeConfig(
   threadKey: string
 ): Promise<{ harness: Harness | null; engine: Engine | null }> {
   const normalizedThreadKey = normalizeThreadKey(threadKey);
-  const response = await apiGet(
-    "/api/threads/detail",
-    { key: normalizedThreadKey },
-    { timeoutMs: 10_000, maxAttempts: 2 }
+  const pool = getPool();
+  const { rows } = await pool.query(
+    `SELECT metadata->>'harness' as harness, metadata->>'engine' as engine
+     FROM chat_messages
+     WHERE thread_key = $1 AND role = 'assistant' AND metadata->>'harness' IS NOT NULL
+     ORDER BY created_at DESC LIMIT 1`,
+    [normalizedThreadKey],
   );
-  if (!response.ok) {
-    throw new ApiError(`thread detail failed (${response.status})`, response.status, response.status >= 500);
-  }
-  const payload = await response.json();
-  const rawHarness = String(payload?.harness ?? "").trim().toLowerCase();
-  const rawEngine = String(payload?.engine ?? "").trim().toLowerCase();
+  if (rows.length === 0) return { harness: null, engine: null };
+  const rawHarness = String(rows[0].harness ?? "").trim().toLowerCase();
+  const rawEngine = String(rows[0].engine ?? "").trim().toLowerCase();
   const harness: Harness | null =
     rawHarness === "eng" || rawHarness === "engineer"
       ? "eng"
@@ -331,18 +332,19 @@ export async function postThreadContextMessage(
   },
 ): Promise<{ status: string }> {
   const normalizedThreadKey = normalizeThreadKey(threadKey);
-  const payload: Record<string, unknown> = {
-    thread_key: normalizedThreadKey,
-    text,
-    ...(options?.source ? { source: options.source } : {}),
-    ...(options?.userId ? { user_id: options.userId } : {}),
-    ...(options?.messageId ? { message_id: options.messageId } : {}),
-    ...(options?.attachments && options.attachments.length > 0
-      ? { attachments: options.attachments }
-      : {}),
-  };
-  const result = await apiPost("/api/threads/context-message", payload, { timeoutMs: 30_000 });
-  return { status: String(result.status ?? "accepted") };
+  const pool = getPool();
+  const msgId = options?.messageId || `ctx-${normalizedThreadKey}-${Date.now()}`;
+  const metadata: Record<string, unknown> = {};
+  if (options?.source) metadata.source = options.source;
+  if (options?.userId) metadata.user_id = options.userId;
+  if (options?.attachments?.length) metadata.attachments = options.attachments;
+  await pool.query(
+    `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
+     VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb)
+     ON CONFLICT (id) DO NOTHING`,
+    [msgId, normalizedThreadKey, JSON.stringify([{ type: "text", text }]), JSON.stringify(metadata)],
+  );
+  return { status: "accepted" };
 }
 
 export function splitThreadKey(threadKey: string): { channel: string; threadTs: string } {
@@ -365,101 +367,29 @@ export function watchProgress(
   threadKey: string,
   onStatus: (status: string) => void,
 ): () => void {
-  const controller = new AbortController();
   const normalizedKey = normalizeThreadKey(threadKey);
-  const url = `${API_URL}/api/threads/stream-ui?key=${encodeURIComponent(normalizedKey)}&live_only=1`;
+  let stopped = false;
 
-  (async () => {
-    try {
-      const res = await fetch(url, {
-        headers: {
-          Accept: "text/event-stream",
-          Authorization: `Bearer ${API_KEY}`,
-        },
-        signal: controller.signal,
-      });
-      if (!res.ok || !res.body) return;
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-
-      while (!controller.signal.aborted) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-
-        while (buf.includes("\n\n")) {
-          const boundary = buf.indexOf("\n\n");
-          const raw = buf.slice(0, boundary);
-          buf = buf.slice(boundary + 2);
-
-          const dataLines = raw
-            .split("\n")
-            .filter((l) => l.startsWith("data:"))
-            .map((l) => l.slice(5).trim());
-          if (dataLines.length === 0) continue;
-          const payload = dataLines.join("\n");
-          if (payload === "[DONE]") return;
-
-          try {
-            const evt = JSON.parse(payload);
-            const status = describeEvent(evt);
-            if (status) onStatus(status);
-          } catch {
-            // ignore malformed SSE chunks
+  const poll = async () => {
+    while (!stopped) {
+      try {
+        const res = await resilientFetch(
+          `${API_URL}/agent/status?key=${encodeURIComponent(normalizedKey)}`,
+          { timeoutMs: 5000, maxAttempts: 1 },
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === "running") {
+            onStatus("Agent working...");
           }
         }
+      } catch {
+        // ignore
       }
-    } catch {
-      // Connection closed or aborted — expected on cleanup.
+      if (!stopped) await new Promise((r) => setTimeout(r, 3000));
     }
-  })();
+  };
 
-  return () => controller.abort();
-}
-
-function describeEvent(evt: Record<string, unknown>): string | null {
-  const type = typeof evt.type === "string" ? evt.type : "";
-
-  if (type === "assistant") {
-    const message = evt.message as Record<string, unknown> | undefined;
-    const content = Array.isArray(message?.content) ? message!.content : [];
-    for (const block of content) {
-      if (block?.type === "tool_use") {
-        const name = typeof block.name === "string" ? block.name : "tool";
-        return `Running tool: ${name}`;
-      }
-    }
-    return "Generating response...";
-  }
-
-  if (type === "tool") return null;
-  if (type === "reasoning") return "Thinking...";
-
-  if (type === "command_execution") {
-    const cmd = typeof evt.command === "string" ? evt.command : "";
-    if (cmd) {
-      const short = cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd;
-      return `Running: ${short}`;
-    }
-    return "Running command...";
-  }
-
-  if (type === "status") {
-    const stage = typeof evt.stage === "string" ? evt.stage : "";
-    if (stage === "container.creating") return "Creating container...";
-    if (stage === "container.ready") return "Container ready";
-    if (stage === "files.downloading") return "Downloading files...";
-    if (stage === "exec.start") return "Agent starting...";
-    return null;
-  }
-
-  if (type === "data-agent-status") {
-    const data = evt.data as Record<string, unknown> | undefined;
-    const text = typeof data?.text === "string" ? data.text : "";
-    if (text) return text;
-  }
-
-  return null;
+  void poll();
+  return () => { stopped = true; };
 }

@@ -19,7 +19,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from api.pipe_agent import recover_sessions
-from api.routers import admin, health, threads
+from api.routers import admin, health
 from api.routers import pipe_agent as pipe_router_mod
 from shared.config import settings
 from shared.db import close_pool, create_pool
@@ -114,7 +114,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(pipe_router_mod.router)
 app.include_router(admin.router)
-app.include_router(threads.router)
+
 
 # Load tools
 _app_root = Path(__file__).resolve().parent.parent.parent

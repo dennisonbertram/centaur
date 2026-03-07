@@ -90,6 +90,21 @@ export default function ThreadDetailPage() {
     chatMessages,
     handoffTarget,
   } = useThreadStream(threadKey, undefined, initialMessages);
+
+  // Auto-send initial message from new session page
+  const initialMessageSent = useRef(false);
+  useEffect(() => {
+    const initialMessage = searchParams.get("initial_message");
+    if (!initialMessage || initialMessageSent.current) return;
+    initialMessageSent.current = true;
+    // Clean up the URL
+    const url = new URL(window.location.href);
+    url.searchParams.delete("initial_message");
+    window.history.replaceState({}, "", url.pathname + url.search);
+    // Send the message
+    void sendThreadMessage(decodeURIComponent(initialMessage));
+  }, [searchParams, sendThreadMessage]);
+
   const humanName = thread?.thread_name || threadName(threadKey);
   const [infoOpen, setInfoOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);

@@ -22,6 +22,7 @@ import { ApiError } from "./api-client";
 import { runModeExecution } from "./modes";
 import { truncateSlackText } from "./slack-text";
 import { postRichReplyToSlack } from "./slack-post";
+import { getPool } from "@/lib/db";
 
 function formatErrorForSlack(error: unknown, context: string): string {
   if (error instanceof ApiError) {
@@ -463,6 +464,44 @@ function createBot() {
         stopProgress();
       }
       const finalMessage = result.trim();
+
+        // Persist user + assistant messages to chat_messages for thread viewer
+        try {
+          const pool = getPool();
+          const dbClient = await pool.connect();
+          try {
+            const userMsgId = `slack-user-${threadKey}-${Date.now()}`;
+            const assistantMsgId = `slack-asst-${threadKey}-${Date.now()}`;
+            await dbClient.query("BEGIN");
+            await dbClient.query(
+              `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
+               VALUES ($1, $2, 'user', $3::jsonb, '{}'::jsonb)
+               ON CONFLICT (id) DO NOTHING`,
+              [userMsgId, threadKey, JSON.stringify([{ type: "text", text: instruction }])],
+            );
+            if (finalMessage) {
+              await dbClient.query(
+                `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
+                 VALUES ($1, $2, 'assistant', $3::jsonb, $4::jsonb)
+                 ON CONFLICT (id) DO NOTHING`,
+                [
+                  assistantMsgId,
+                  threadKey,
+                  JSON.stringify([{ type: "text", text: finalMessage }]),
+                  JSON.stringify({ harness, thread_name: finalMessage.slice(0, 60) }),
+                ],
+              );
+            }
+            await dbClient.query("COMMIT");
+          } catch {
+            await dbClient.query("ROLLBACK");
+          } finally {
+            dbClient.release();
+          }
+        } catch {
+          // Best-effort — don't block Slack reply
+        }
+
       if (finalMessage) {
         await postThreadRichReply(threadKey, finalMessage, {
           harness,

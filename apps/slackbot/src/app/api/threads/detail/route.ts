@@ -1,5 +1,6 @@
-/** /api/threads/detail?key=... — proxy to FastAPI backend + enrich with pipe status */
+/** /api/threads/detail?key=... — thread detail from Postgres + pipe status enrichment */
 
+import { getPool } from "@/lib/db";
 import { resilientFetch, API_URL } from "@/lib/api-client";
 import type { Harness, ThreadDetail, ThreadState } from "@/lib/types";
 
@@ -15,6 +16,14 @@ type PipeStatus = {
   started_at?: number;
 };
 
+function extractText(parts: unknown): string | null {
+  const arr = Array.isArray(parts) ? parts : [];
+  for (const p of arr) {
+    if (p && typeof p === "object" && typeof p.text === "string") return p.text;
+  }
+  return null;
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const key = searchParams.get("key") || "";
@@ -23,20 +32,44 @@ export async function GET(request: Request) {
   }
 
   try {
-    const res = await resilientFetch(
-      `${API_URL}/threads/detail?key=${encodeURIComponent(key)}`,
-      { timeoutMs: 10_000, signal: request.signal },
+    const pool = getPool();
+    const { rows } = await pool.query(
+      `SELECT
+        MIN(created_at) AS created_at,
+        MAX(created_at) AS last_activity,
+        COUNT(*)::int AS message_count,
+        (SELECT parts FROM chat_messages cm2
+         WHERE cm2.thread_key = $1 AND cm2.role = 'user'
+         ORDER BY cm2.created_at DESC LIMIT 1
+        ) AS last_user_parts,
+        (SELECT metadata->>'thread_name' FROM chat_messages cm3
+         WHERE cm3.thread_key = $1 AND cm3.metadata->>'thread_name' IS NOT NULL
+         ORDER BY cm3.created_at DESC LIMIT 1
+        ) AS thread_name
+      FROM chat_messages
+      WHERE thread_key = $1`,
+      [key],
     );
 
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      return Response.json(data, {
-        status: res.status,
-        headers: { "Cache-Control": "no-store" },
-      });
+    const row = rows[0];
+    if (!row || !row.created_at) {
+      return Response.json(
+        { error: `Thread not found: ${key}` },
+        { status: 404, headers: { "Cache-Control": "no-store" } },
+      );
     }
 
-    const detail = (await res.json()) as ThreadDetail;
+    const detail: ThreadDetail = {
+      slack_thread_key: key,
+      harness: "amp",
+      state: "idle",
+      created_at: new Date(row.created_at).getTime() / 1000,
+      last_activity: new Date(row.last_activity).getTime() / 1000,
+      message_count: row.message_count,
+      last_user_message: extractText(row.last_user_parts),
+      token_usage: null,
+      thread_name: row.thread_name,
+    };
 
     // Enrich with live pipe status (best-effort)
     try {
@@ -51,14 +84,14 @@ export async function GET(request: Request) {
         detail.harness = (pipeStatus.harness as Harness) ?? detail.harness;
       }
     } catch {
-      // Pipe server unreachable — keep idle state from API
+      // Pipe server unreachable — keep idle state
     }
 
     return Response.json(detail, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     return Response.json(
-      { error: err instanceof Error ? err.message : "API unreachable" },
-      { status: 502, headers: { "Cache-Control": "no-store" } },
+      { error: err instanceof Error ? err.message : "Database error" },
+      { status: 500, headers: { "Cache-Control": "no-store" } },
     );
   }
 }
