@@ -111,11 +111,10 @@ class TestProtocol:
         return _lines(captured), mock_proc
 
     def test_amp_turn_emits_ready_and_forwards(self):
-        """First turn should start harness, forward events, emit turn.done."""
+        """First turn should start harness, forward events, emit turn.done on assistant end_turn."""
         harness_output = [
             json.dumps({"type": "system", "subtype": "init", "session_id": "s1"}) + "\n",
-            json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}]}}) + "\n",
-            json.dumps({"type": "result", "result": "said hi"}) + "\n",
+            json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn"}}) + "\n",
         ]
         events, mock_proc = self._run_session(
             "amp",
@@ -125,12 +124,12 @@ class TestProtocol:
 
         types = [e["type"] for e in events]
         assert "system" in types
-        assert "result" in types
+        assert "assistant" in types
         assert "turn.done" in types
 
         turn_done = next(e for e in events if e["type"] == "turn.done")
         assert turn_done["turn_id"] == 1
-        assert turn_done["result"] == "said hi"
+        assert turn_done["result"] == "hi"
         assert turn_done["agent_thread_id"] == "s1"
 
     def test_amp_message_sent_via_stdin(self):

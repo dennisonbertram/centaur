@@ -95,7 +95,14 @@ def _extract_thread_id(event: dict) -> None:
 def _is_turn_done(event: dict) -> bool:
     t = event.get("type", "")
     if engine in ("amp", "claude-code"):
-        return t == "result"
+        # "result" is emitted on exit; "assistant" with stop_reason="end_turn"
+        # signals end-of-turn in persistent (--stream-json-input) mode.
+        if t == "result":
+            return True
+        if t == "assistant":
+            msg = event.get("message", {})
+            return msg.get("stop_reason") == "end_turn"
+        return False
     if engine == "codex":
         return t in ("turn.completed", "turn.failed")
     return t == "agent_end"  # pi-mono
@@ -104,8 +111,15 @@ def _is_turn_done(event: dict) -> bool:
 def _extract_result(event: dict) -> None:
     global last_result_text
     t = event.get("type", "")
-    if engine in ("amp", "claude-code") and t == "result":
-        last_result_text = event.get("result", "")
+    if engine in ("amp", "claude-code"):
+        if t == "result":
+            last_result_text = event.get("result", "")
+        elif t == "assistant":
+            msg = event.get("message", {})
+            content = msg.get("content", [])
+            texts = [c.get("text", "") for c in content if c.get("type") == "text"]
+            if texts:
+                last_result_text = texts[-1]
     elif engine == "codex" and t == "item.completed":
         item = event.get("item", {})
         if item.get("type") == "agent_message":
