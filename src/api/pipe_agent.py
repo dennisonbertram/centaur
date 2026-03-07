@@ -7,11 +7,9 @@ Sessions are in-memory only and reconstructable from Docker labels on restart.
 from __future__ import annotations
 
 import asyncio
-import codecs
 import contextlib
 import json
 import os
-import struct
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -25,12 +23,6 @@ from shared.tool_sdk import _sm_read
 
 log = structlog.get_logger()
 
-# Docker stream multiplexing header: 8 bytes
-# [stream_type(1), 0, 0, 0, size(4 big-endian)]
-_HEADER_SIZE = 8
-_STDOUT = 1
-_STDERR = 2
-
 
 @dataclass
 class PipeSession:
@@ -38,8 +30,9 @@ class PipeSession:
     thread_key: str
     harness: str
     engine: str
-    sock: Any = field(default=None, repr=False)
-    exec_id: str | None = None
+    _stdin_sock: Any = field(default=None, repr=False)
+    _stdout_sock: Any = field(default=None, repr=False)
+    turn_counter: int = 0
     started_at: float = 0.0
 
 
@@ -148,40 +141,30 @@ def _wait_ready(container: Any, timeout: int = 15) -> float:
     raise TimeoutError(f"sandbox readiness timed out after {timeout}s")
 
 
-def _build_command(engine: str, message: str) -> list[str]:
-    """Build the harness CLI command (non-persistent, single-turn)."""
-    if engine == "claude-code":
-        return [
-            "claude",
-            "--dangerously-skip-permissions",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "-p",
-            message,
-        ]
-    if engine == "codex":
-        codex_model = os.getenv("AGENT_CODEX_MODEL", "gpt-5.3-codex").strip() or "gpt-5.3-codex"
-        return [
-            "codex",
-            "exec",
-            "--model",
-            codex_model,
-            "--json",
-            "--full-auto",
-            "--skip-git-repo-check",
-            message,
-        ]
-    # Default: amp
-    return [
-        "amp",
-        "--no-ide",
-        "--no-notifications",
-        "--dangerously-allow-all",
-        "--stream-json",
-        "-x",
-        message,
-    ]
+def _attach_sync(session: PipeSession) -> None:
+    """Attach to container stdin (for writes) and get a log stream (for reads)."""
+    if session._stdin_sock and session._stdout_sock:
+        return
+    client = _docker_client()
+    api = client.api
+
+    # Attach stdin socket for writing NDJSON commands
+    stdin_sock = api.attach_socket(
+        session.container_id, params={"stdin": True, "stream": True}
+    )
+    session._stdin_sock = stdin_sock._sock
+
+    # Use container logs with follow for reading stdout
+    container = client.containers.get(session.container_id)
+    session._stdout_sock = container.logs(
+        stdout=True, stderr=True, stream=True, follow=True
+    )
+
+
+def _write_stdin(session: PipeSession, obj: dict) -> None:
+    """Write an NDJSON line to the container's stdin."""
+    payload = json.dumps(obj, separators=(",", ":")) + "\n"
+    session._stdin_sock.sendall(payload.encode())
 
 
 def _create_container(
@@ -252,71 +235,31 @@ def _spawn_sync(thread_key: str, harness: str) -> PipeSession:
     return session
 
 
-def _exec_and_stream_sync(session: PipeSession, message: str):
-    """Start docker exec and yield raw stdout lines (blocking generator)."""
-    client = _docker_client()
-    api = client.api
-    cmd = _build_command(session.engine, message)
+def _send_turn_and_stream(session: PipeSession, message: str):
+    """Send a turn via stdin, yield stdout lines until turn.done (blocking generator)."""
+    _attach_sync(session)
 
-    exec_id = api.exec_create(
-        session.container_id,
-        cmd,
-        stdin=True,
-        stdout=True,
-        stderr=True,
-        workdir="/home/agent/workspace",
-    )["Id"]
-    session.exec_id = exec_id
+    session.turn_counter += 1
+    turn_id = session.turn_counter
 
-    # Get a raw multiplexed socket
-    sock = api.exec_start(exec_id, socket=True)
-    raw = sock._sock
+    _write_stdin(session, {"type": "turn.start", "turn_id": turn_id, "text": message})
 
-    decoder = codecs.getincrementaldecoder("utf-8")("replace")
-    stdout_buf = ""
-
-    def _recvall(n: int) -> bytes:
-        buf = b""
-        while len(buf) < n:
-            chunk = raw.recv(n - len(buf))
-            if not chunk:
-                raise ConnectionError("socket closed")
-            buf += chunk
-        return buf
-
-    try:
-        while True:
-            try:
-                header = _recvall(_HEADER_SIZE)
-            except ConnectionError:
-                break
-            stream_type = header[0]
-            payload_len = struct.unpack(">I", header[4:8])[0]
-            if payload_len == 0:
+    # Read log stream lines until we see turn.done for our turn_id
+    buf = ""
+    for chunk in session._stdout_sock:
+        buf += chunk.decode("utf-8", errors="replace")
+        while "\n" in buf:
+            line, buf = buf.split("\n", 1)
+            stripped = line.strip()
+            if not stripped:
                 continue
-            payload = _recvall(payload_len)
-
-            if stream_type == _STDOUT:
-                stdout_buf += decoder.decode(payload)
-                while "\n" in stdout_buf:
-                    line, stdout_buf = stdout_buf.split("\n", 1)
-                    stripped = line.strip()
-                    if stripped:
-                        yield stripped
-            elif stream_type == _STDERR:
-                text = payload.decode("utf-8", errors="replace").strip()
-                if text:
-                    yield json.dumps({"type": "stderr", "text": text})
-
-        # Flush remaining
-        final = decoder.decode(b"", final=True)
-        stdout_buf += final
-        remaining = stdout_buf.strip()
-        if remaining:
-            yield remaining
-    finally:
-        with contextlib.suppress(Exception):
-            sock.close()
+            yield stripped
+            try:
+                evt = json.loads(stripped)
+                if evt.get("type") == "turn.done" and evt.get("turn_id") == turn_id:
+                    return
+            except (json.JSONDecodeError, TypeError):
+                pass
 
 
 def _stop_sync(thread_key: str) -> bool:
@@ -324,6 +267,13 @@ def _stop_sync(thread_key: str) -> bool:
     session = _sessions.pop(thread_key, None)
     if not session:
         return False
+    # Send interrupt and close sockets
+    with contextlib.suppress(Exception):
+        _write_stdin(session, {"type": "interrupt"})
+    with contextlib.suppress(Exception):
+        session._stdin_sock.close()
+    session._stdin_sock = None
+    session._stdout_sock = None
     client = _docker_client()
     with contextlib.suppress(Exception):
         container = client.containers.get(session.container_id)
@@ -410,7 +360,7 @@ async def stream_exec(session: PipeSession, message: str) -> AsyncIterator[str]:
 
     def _run() -> None:
         try:
-            for line in _exec_and_stream_sync(session, message):
+            for line in _send_turn_and_stream(session, message):
                 loop.call_soon_threadsafe(q.put_nowait, line)
         except Exception as exc:
             loop.call_soon_threadsafe(
