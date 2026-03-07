@@ -1,12 +1,29 @@
-/** GET /api/threads — list threads from Postgres */
+/** GET /api/threads — list threads from Postgres (10s cache) */
 
 import { getPool } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
-export const fetchCache = "force-no-store";
+
+// In-memory cache (10s TTL — thread list doesn't need real-time)
+let cache: { data: unknown; ts: number } | null = null;
+const CACHE_TTL = 10_000;
+
+function extractText(parts: unknown): string | null {
+  const arr = Array.isArray(parts) ? parts : [];
+  for (const p of arr) {
+    if (p && typeof p === "object" && typeof p.text === "string") return p.text;
+  }
+  return null;
+}
 
 export async function GET() {
   try {
+    if (cache && Date.now() - cache.ts < CACHE_TTL) {
+      return Response.json(cache.data, {
+        headers: { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=5" },
+      });
+    }
+
     const pool = getPool();
     const { rows } = await pool.query(`
       SELECT
@@ -29,28 +46,24 @@ export async function GET() {
       LIMIT 200
     `);
 
-    const threads = rows.map((row) => {
-      const extractText = (parts: unknown): string | null => {
-        const arr = Array.isArray(parts) ? parts : [];
-        for (const p of arr) {
-          if (p && typeof p === "object" && typeof p.text === "string") return p.text;
-        }
-        return null;
-      };
-      return {
-        slack_thread_key: row.thread_key,
-        harness: "amp",
-        state: "idle",
-        created_at: new Date(row.created_at).getTime() / 1000,
-        last_activity: new Date(row.last_activity).getTime() / 1000,
-        turn_count: row.message_count,
-        first_message: extractText(row.first_user_parts),
-        last_user_message: extractText(row.last_user_parts),
-        thread_name: row.thread_name,
-      };
-    });
+    const threads = rows.map((row) => ({
+      slack_thread_key: row.thread_key,
+      harness: "amp",
+      state: "idle",
+      created_at: new Date(row.created_at).getTime() / 1000,
+      last_activity: new Date(row.last_activity).getTime() / 1000,
+      turn_count: row.message_count,
+      first_message: extractText(row.first_user_parts),
+      last_user_message: extractText(row.last_user_parts),
+      thread_name: row.thread_name,
+    }));
 
-    return Response.json({ threads }, { headers: { "Cache-Control": "no-store" } });
+    const result = { threads };
+    cache = { data: result, ts: Date.now() };
+
+    return Response.json(result, {
+      headers: { "Cache-Control": "public, s-maxage=10, stale-while-revalidate=5" },
+    });
   } catch (err) {
     console.error("Failed to list threads:", err);
     return Response.json(

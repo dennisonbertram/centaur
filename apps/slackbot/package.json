@@ -4,9 +4,10 @@
   "private": true,
   "packageManager": "pnpm@10.28.1",
   "scripts": {
-    "dev": "next dev --port 3001",
+    "dev": "next dev --port 3001 --turbopack",
     "build": "next build",
-    "start": "next start --port 3001"
+    "start": "next start --port 3001",
+    "lint": "eslint src/"
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.107",
@@ -67,7 +68,10 @@
     "@types/pg": "^8.18.0",
     "@types/react": "19.2.14",
     "@types/react-grid-layout": "^2.1.0",
+    "@typescript-eslint/parser": "^8.56.1",
     "babel-plugin-react-compiler": "^1.0.0",
+    "eslint": "^10.0.3",
+    "eslint-plugin-tailwindcss": "4.0.0-beta.0",
     "typescript": "5.9.3"
   },
   "pnpm": {
