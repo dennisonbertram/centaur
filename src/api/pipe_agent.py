@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import os
+import queue
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -37,6 +38,8 @@ class PipeSession:
     started_at: float = 0.0
     _active_turn_id: int = field(default=0, repr=False)
     _turn_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _reader_thread: threading.Thread | None = field(default=None, repr=False)
+    _active_queue: queue.SimpleQueue[str | None] | None = field(default=None, repr=False)
 
 
 # In-memory sessions — reconstructable from Docker labels on restart
@@ -248,39 +251,73 @@ def _spawn_sync(thread_key: str, harness: str) -> PipeSession:
     return session
 
 
+def _ensure_reader(session: PipeSession) -> None:
+    """Start a single background reader thread that dispatches stdout lines to the
+    active turn's queue. Only one reader ever exists per session."""
+    if session._reader_thread and session._reader_thread.is_alive():
+        return
+
+    def _read_loop() -> None:
+        buf = ""
+        try:
+            for chunk in session._stdout_sock:
+                buf += chunk.decode("utf-8", errors="replace")
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    q = session._active_queue
+                    if q is not None:
+                        q.put(stripped)
+        except Exception:
+            pass
+        # EOF — signal the active queue
+        q = session._active_queue
+        if q is not None:
+            q.put(None)
+
+    t = threading.Thread(target=_read_loop, daemon=True)
+    t.start()
+    session._reader_thread = t
+
+
 def _send_turn_and_stream(session: PipeSession, message: str):
     """Send a turn via stdin, yield stdout lines until turn.done (blocking generator).
 
-    Only one turn can actively read stdout at a time. If a new turn starts while
-    a previous turn is still reading, the previous reader detects the preemption
-    via ``_active_turn_id`` and exits, leaving the stdout stream to the new owner.
+    A single reader thread reads stdout and dispatches lines to the active turn's
+    queue. When a new turn starts, the old queue gets a None sentinel so the old
+    consumer stops, and the new turn's queue takes over.
     """
     _attach_sync(session)
 
+    # Create a new queue for this turn and swap it in atomically
+    turn_queue: queue.SimpleQueue[str | None] = queue.SimpleQueue()
     with session._turn_lock:
         session.turn_counter += 1
         turn_id = session.turn_counter
         session._active_turn_id = turn_id
+        old_queue = session._active_queue
+        session._active_queue = turn_queue
 
+    # Signal old turn to stop
+    if old_queue is not None:
+        old_queue.put(None)
+
+    _ensure_reader(session)
     _write_stdin(session, {"type": "turn.start", "turn_id": turn_id, "text": message})
 
-    buf = ""
-    for chunk in session._stdout_sock:
-        if session._active_turn_id != turn_id:
+    while True:
+        line = turn_queue.get()
+        if line is None:
             return
-        buf += chunk.decode("utf-8", errors="replace")
-        while "\n" in buf:
-            line, buf = buf.split("\n", 1)
-            stripped = line.strip()
-            if not stripped:
-                continue
-            yield stripped
-            try:
-                evt = json.loads(stripped)
-                if evt.get("type") == "turn.done" and evt.get("turn_id") == turn_id:
-                    return
-            except (json.JSONDecodeError, TypeError):
-                pass
+        yield line
+        try:
+            evt = json.loads(line)
+            if evt.get("type") == "turn.done" and evt.get("turn_id") == turn_id:
+                return
+        except (json.JSONDecodeError, TypeError):
+            pass
 
 
 def _stop_sync(thread_key: str) -> bool:
@@ -288,6 +325,11 @@ def _stop_sync(thread_key: str) -> bool:
     session = _sessions.pop(thread_key, None)
     if not session:
         return False
+    # Signal active queue to stop
+    q = session._active_queue
+    if q is not None:
+        q.put(None)
+    session._active_queue = None
     # Send interrupt and close sockets
     with contextlib.suppress(Exception):
         _write_stdin(session, {"type": "interrupt"})
