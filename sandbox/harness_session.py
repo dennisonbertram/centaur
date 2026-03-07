@@ -214,7 +214,13 @@ def run_persistent() -> None:
                 _spawn_forwarders(proc)
             assert proc is not None and proc.stdin is not None
             proc.stdin.write(
-                json.dumps({"type": "user", "text": text}) + "\n"
+                json.dumps({
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": text}],
+                    },
+                }) + "\n"
             )
             proc.stdin.flush()
 
