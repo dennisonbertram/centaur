@@ -493,6 +493,7 @@ export async function postThreadContextMessage(
     source?: string;
     userId?: string;
     messageId?: string;
+    slackTs?: string;
     attachments?: FileAttachment[];
   },
 ): Promise<{ status: string }> {
@@ -503,12 +504,28 @@ export async function postThreadContextMessage(
   if (options?.source) metadata.source = options.source;
   if (options?.userId) metadata.user_id = options.userId;
   if (options?.attachments?.length) metadata.attachments = options.attachments;
-  await pool.query(
-    `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
-     VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb)
-     ON CONFLICT (id) DO NOTHING`,
-    [msgId, normalizedThreadKey, JSON.stringify([{ type: "text", text }]), JSON.stringify(metadata)],
-  );
+
+  // Derive created_at from the Slack message timestamp so messages sort in
+  // the order they were actually posted, not when the webhook was processed.
+  const ts = options?.slackTs || options?.messageId || "";
+  const epoch = parseFloat(ts);
+  const createdAt = epoch > 1_000_000_000 ? new Date(epoch * 1000).toISOString() : null;
+
+  if (createdAt) {
+    await pool.query(
+      `INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at)
+       VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb, $5::timestamptz)
+       ON CONFLICT (id) DO NOTHING`,
+      [msgId, normalizedThreadKey, JSON.stringify([{ type: "text", text }]), JSON.stringify(metadata), createdAt],
+    );
+  } else {
+    await pool.query(
+      `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
+       VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb)
+       ON CONFLICT (id) DO NOTHING`,
+      [msgId, normalizedThreadKey, JSON.stringify([{ type: "text", text }]), JSON.stringify(metadata)],
+    );
+  }
   return { status: "accepted" };
 }
 

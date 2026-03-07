@@ -337,6 +337,7 @@ function createBot() {
     isFirstMessage: boolean,
     attachments?: Array<{ url?: string; name?: string }>,
     userId?: string,
+    slackTs?: string,
   ) {
     const requestId = generateId();
     const rawThreadKey = thread.id;
@@ -501,17 +502,18 @@ function createBot() {
       const finalMessage = (tracker.resultText || tracker.lastAssistantText || streamReturn).trim();
 
       // Persist user + assistant messages to chat_messages for thread viewer.
-      // Use explicit created_at with a 1ms offset so user always sorts before
-      // assistant (DEFAULT NOW() gives both the same timestamp in a transaction).
+      // Use the Slack message timestamp for the user message so it sorts in
+      // the original conversation order. The assistant gets +1ms to sort after.
       try {
         const pool = getPool();
         const dbClient = await pool.connect();
         try {
-          const now = Date.now();
-          const userMsgId = `slack-user-${threadKey}-${now}`;
-          const assistantMsgId = `slack-asst-${threadKey}-${now + 1}`;
-          const userTs = new Date(now).toISOString();
-          const assistantTs = new Date(now + 1).toISOString();
+          const slackEpoch = slackTs ? parseFloat(slackTs) : 0;
+          const userEpochMs = slackEpoch > 1_000_000_000 ? Math.floor(slackEpoch * 1000) : Date.now();
+          const userMsgId = `slack-user-${threadKey}-${userEpochMs}`;
+          const assistantMsgId = `slack-asst-${threadKey}-${userEpochMs + 1}`;
+          const userTs = new Date(userEpochMs).toISOString();
+          const assistantTs = new Date(userEpochMs + 1).toISOString();
           await dbClient.query("BEGIN");
           await dbClient.query(
             `INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at)
@@ -589,7 +591,8 @@ function createBot() {
     }
     await thread.subscribe();
     const attachments = message.attachments?.map((a) => ({ url: a.url, name: a.name }));
-    await handleMessage(thread, message.text, true, attachments, message.author.userId);
+    const mentionTs = (message as { ts?: string }).ts || "";
+    await handleMessage(thread, message.text, true, attachments, message.author.userId, mentionTs);
   });
 
   bot.onSubscribedMessage(async (thread, message) => {
@@ -611,11 +614,13 @@ function createBot() {
       });
 
       const contextText = text || "Shared attachment in thread.";
+      const slackTs = (message as { ts?: string }).ts || "";
       try {
         await postThreadContextMessage(threadKey, contextText, {
           source: "slack_subscribed_message",
           userId: message.author.userId,
           messageId,
+          slackTs,
           attachments: files.length > 0 ? files : undefined,
         });
       } catch (error) {
@@ -637,7 +642,8 @@ function createBot() {
       });
       return;
     }
-    await handleMessage(thread, message.text, false, attachments, message.author.userId);
+    const subTs = (message as { ts?: string }).ts || "";
+    await handleMessage(thread, message.text, false, attachments, message.author.userId, subTs);
   });
 
   return bot;
