@@ -1,3 +1,5 @@
+import type { SlackMessagePayload } from "@/lib/slack-blocks";
+
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 
 function sleep(ms: number): Promise<void> {
@@ -73,12 +75,65 @@ export class SlackLiveReply {
       this.flushTimer = null;
     }
     this.pendingText = null;
-    // Wait for any in-flight flush to complete before sending the final update
     if (this.inFlightFlush) {
       await this.inFlightFlush;
     }
     if (this.messageTs) {
       await this.updateMessage(markdown);
+    }
+  }
+
+  /**
+   * Edit the live reply in-place with rich blocks (the final result).
+   * If there are overflow payloads (content exceeding Slack's block limit),
+   * they are posted as follow-up messages in the same thread.
+   */
+  async finishRich(payloads: SlackMessagePayload[]): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.pendingText = null;
+    if (this.inFlightFlush) {
+      await this.inFlightFlush;
+    }
+    if (!this.messageTs || payloads.length === 0) return;
+
+    // Update the existing message with the first payload
+    const first = payloads[0];
+    const blocks = [...(first.blocks || [])];
+    if (this.viewerUrl) {
+      blocks.push(viewerActionBlock(this.viewerUrl));
+    }
+    const updatePayload: Record<string, unknown> = {
+      channel: this.channel,
+      ts: this.messageTs,
+      text: first.text,
+    };
+    if (blocks.length > 0) updatePayload.blocks = blocks;
+    if (first.attachments && first.attachments.length > 0) {
+      updatePayload.attachments = first.attachments;
+    }
+
+    let res = await this.slackApi("chat.update", updatePayload);
+    if (!res.ok && res.error === "ratelimited") {
+      await sleep(2000);
+      res = await this.slackApi("chat.update", updatePayload);
+    }
+
+    // Post overflow payloads as follow-up messages
+    for (let i = 1; i < payloads.length; i++) {
+      const overflow = payloads[i];
+      await this.slackApi("chat.postMessage", {
+        channel: this.channel,
+        thread_ts: this.threadTs,
+        text: overflow.text,
+        ...(overflow.blocks ? { blocks: overflow.blocks } : {}),
+        ...(overflow.attachments ? { attachments: overflow.attachments } : {}),
+        unfurl_links: false,
+      });
     }
   }
 

@@ -18,10 +18,10 @@ import {
 import { ApiError } from "./api-client";
 import { executeStreamingWithBusyRetries } from "./modes";
 import { truncateSlackText } from "./slack-text";
-import { postRichReplyToSlack } from "./slack-post";
 import { SlackLiveReply } from "./slack-live-reply";
 import { ProgressTracker } from "./progress-tracker";
 import { HandoffDetector } from "./handoff-detection";
+import { resultToSlackMessages, type SlackReplyMetadata } from "./slack-blocks";
 import { getPool } from "@/lib/db";
 
 function formatErrorForSlack(error: unknown, context: string): string {
@@ -250,24 +250,6 @@ function toSlackMessage(markdown: string) {
   return renderSlackMessage(truncateSlackText(markdown));
 }
 
-async function postThreadRichReply(
-  threadKey: string,
-  markdown: string,
-  metadata: {
-    harness?: Harness;
-    durationSeconds?: number;
-    sourceLabel?: string;
-  },
-): Promise<void> {
-  const { channel, threadTs } = splitThreadKey(threadKey);
-  await postRichReplyToSlack(channel, markdown, threadTs, {
-    threadKey,
-    viewerUrl: `${THREAD_VIEWER_URL}/${encodeURIComponent(normalizeThreadKey(threadKey))}`,
-    harness: metadata.harness,
-    durationSeconds: metadata.durationSeconds,
-    sourceLabel: metadata.sourceLabel,
-  });
-}
 
 function createBot() {
   const hasSlackCreds =
@@ -560,17 +542,22 @@ function createBot() {
         // Best-effort — don't block Slack reply
       }
 
-      // Single Slack message — update the live reply in-place with the final result.
-      // For substantial results, also post a rich-formatted reply.
+      // Single Slack message — edit the live reply in-place with the final result.
       if (isLowValueResult(finalMessage)) {
         await liveReply.finish(tracker.toSlackBullets());
       } else {
-        await liveReply.finish(tracker.toSlackBullets());
-        await postThreadRichReply(threadKey, finalMessage, {
+        const metadata: SlackReplyMetadata = {
+          threadKey: normalizeThreadKey(threadKey),
           harness,
           durationSeconds: Math.max(0, (Date.now() - executionStartedAt) / 1000),
           sourceLabel: "Paradigm AI",
-        });
+        };
+        const payloads = resultToSlackMessages(finalMessage, metadata);
+        if (payloads.length > 0) {
+          await liveReply.finishRich(payloads);
+        } else {
+          await liveReply.finish(tracker.toSlackBullets());
+        }
       }
     } catch (error) {
       await thread.post(
