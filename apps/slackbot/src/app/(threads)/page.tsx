@@ -45,7 +45,7 @@ export default function NewSessionPage() {
         <span className="text-sm font-medium text-foreground">New Session</span>
         <span className="size-10" aria-hidden="true" />
       </div>
-      <div className="flex-1 flex items-center justify-center px-4">
+      <div className="flex-1 min-h-0 flex items-center justify-center px-4 overflow-auto">
         <div className="text-center max-w-md">
           <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl border border-border/80 bg-card/60">
             <MessageSquarePlus className="size-6 text-muted-foreground" />
