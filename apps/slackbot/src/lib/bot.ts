@@ -500,35 +500,42 @@ function createBot() {
 
       const finalMessage = (tracker.resultText || tracker.lastAssistantText || streamReturn).trim();
 
-      // Persist user + assistant messages to chat_messages for thread viewer
+      // Persist user + assistant messages to chat_messages for thread viewer.
+      // Use explicit created_at with a 1ms offset so user always sorts before
+      // assistant (DEFAULT NOW() gives both the same timestamp in a transaction).
       try {
         const pool = getPool();
         const dbClient = await pool.connect();
         try {
-          const userMsgId = `slack-user-${threadKey}-${Date.now()}`;
-          const assistantMsgId = `slack-asst-${threadKey}-${Date.now()}`;
+          const now = Date.now();
+          const userMsgId = `slack-user-${threadKey}-${now}`;
+          const assistantMsgId = `slack-asst-${threadKey}-${now + 1}`;
+          const userTs = new Date(now).toISOString();
+          const assistantTs = new Date(now + 1).toISOString();
           await dbClient.query("BEGIN");
           await dbClient.query(
-            `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
-             VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb)
+            `INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at)
+             VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb, $5::timestamptz)
              ON CONFLICT (id) DO NOTHING`,
             [
               userMsgId,
               threadKey,
               JSON.stringify([{ type: "text", text: instruction }]),
               JSON.stringify({ harness, ...(engine ? { engine } : {}) }),
+              userTs,
             ],
           );
           if (finalMessage) {
             await dbClient.query(
-              `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
-               VALUES ($1, $2, 'assistant', $3::jsonb, $4::jsonb)
+              `INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at)
+               VALUES ($1, $2, 'assistant', $3::jsonb, $4::jsonb, $5::timestamptz)
                ON CONFLICT (id) DO NOTHING`,
               [
                 assistantMsgId,
                 threadKey,
                 JSON.stringify([{ type: "text", text: finalMessage }]),
                 JSON.stringify({ harness, thread_name: finalMessage.slice(0, 60) }),
+                assistantTs,
               ],
             );
           }

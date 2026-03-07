@@ -131,10 +131,16 @@ export async function POST(request: Request) {
           const client = await pool.connect();
           try {
             await client.query("BEGIN");
-            for (const msg of messages) {
+            // Use explicit created_at with 1ms offsets so messages sort in
+            // the order they were streamed (DEFAULT NOW() gives identical
+            // timestamps within a transaction).
+            const baseTs = Date.now();
+            for (let i = 0; i < messages.length; i++) {
+              const msg = messages[i];
+              const ts = new Date(baseTs + i).toISOString();
               await client.query(
-                `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
-                 VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+                `INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at)
+                 VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::timestamptz)
                  ON CONFLICT (id) DO UPDATE SET parts = $4::jsonb, metadata = $5::jsonb`,
                 [
                   msg.id,
@@ -142,6 +148,7 @@ export async function POST(request: Request) {
                   msg.role,
                   JSON.stringify(msg.parts),
                   JSON.stringify(msg.metadata || {}),
+                  ts,
                 ],
               );
             }
