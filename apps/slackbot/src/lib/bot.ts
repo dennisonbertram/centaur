@@ -7,7 +7,7 @@ import { createMemoryState } from "@chat-adapter/state-memory";
 import {
   extractRunOptions,
   fetchThreadRuntimeConfig,
-  interrupt,
+  
   normalizeThreadKey,
   postThreadContextMessage,
   
@@ -424,17 +424,6 @@ function createBot() {
 
     try {
       const instruction = parsed.cleanedText || "hey";
-      if (!isFirstMessage) {
-        try {
-          await interrupt(threadKey, requestId);
-        } catch (error) {
-          console.warn("agent_interrupt_failed", {
-            thread: threadKey,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-
       await thread.startTyping("Running...");
       let threadHistory = "";
       if (isFirstMessage) {
