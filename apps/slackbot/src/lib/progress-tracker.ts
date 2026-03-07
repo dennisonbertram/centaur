@@ -131,14 +131,12 @@ export class ProgressTracker {
       lines.push(`• 💻 \`${truncated}\``);
     }
 
-    // Show last few completed tools
-    const recentCompleted = this.completedTools.slice(-3);
-    for (const tool of recentCompleted) {
+    for (const tool of this.completedTools) {
       const icon = tool.isError ? "❌" : "✅";
       lines.push(`• ${icon} ${tool.name} (${tool.duration.toFixed(1)}s)`);
     }
 
-    for (const sub of this.completedSubagents.slice(-2)) {
+    for (const sub of this.completedSubagents) {
       const icon = sub.status === "failed" ? "❌" : "✅";
       lines.push(`• ${icon} Subagent: _${sub.name}_`);
     }
