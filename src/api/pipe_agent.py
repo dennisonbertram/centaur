@@ -142,22 +142,22 @@ def _wait_ready(container: Any, timeout: int = 15) -> float:
 
 
 def _attach_sync(session: PipeSession) -> None:
-    """Attach to container stdin (for writes) and get a log stream (for reads)."""
+    """Attach to container stdin (for writes) and stdout stream (for reads)."""
     if session._stdin_sock and session._stdout_sock:
         return
     client = _docker_client()
     api = client.api
 
     # Attach stdin socket for writing NDJSON commands
-    stdin_sock = api.attach_socket(
+    stdin_attach = api.attach_socket(
         session.container_id, params={"stdin": True, "stream": True}
     )
-    session._stdin_sock = stdin_sock._sock
+    session._stdin_sock = stdin_attach._sock
 
-    # Use container logs with follow for reading stdout
+    # Attach stdout stream — logs=False to skip history, stdout only
     container = client.containers.get(session.container_id)
-    session._stdout_sock = container.logs(
-        stdout=True, stderr=True, stream=True, follow=True
+    session._stdout_sock = container.attach(
+        stdout=True, stderr=False, stream=True, logs=False
     )
 
 
