@@ -1,9 +1,28 @@
 /** GET /api/portfolio/positions -> POST /tools/paradigmdb/db_positions */
 
 import { resilientFetch, API_URL, ApiError } from "@/lib/api-client";
+import { decode } from "@toon-format/toon";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
+
+/** Parse a tool result string that may be JSON or TOON-encoded. */
+function parseResult(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  // Try JSON first
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Fall back to TOON
+  }
+  try {
+    const decoded = decode(raw, { strict: false });
+    if (decoded !== undefined) return decoded;
+  } catch {
+    // ignore
+  }
+  return raw;
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -27,6 +46,10 @@ export async function GET(request: Request) {
     }
 
     const data = await res.json();
+    // The result field may be TOON-encoded; decode it to plain JSON
+    if (typeof data.result === "string") {
+      data.result = parseResult(data.result);
+    }
     return Response.json(data, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     const status = err instanceof ApiError ? (err.status ?? 502) : 502;

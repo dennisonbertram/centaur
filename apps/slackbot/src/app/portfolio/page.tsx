@@ -95,21 +95,20 @@ export default function PortfolioPage() {
         const parsed: Position[] = (() => {
           const raw = posData.result;
           if (!raw) return [];
-          const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
-          return Array.isArray(arr) ? arr : [];
+          if (typeof raw === "object" && "error" in raw) return [];
+          const arr = Array.isArray(raw) ? raw : [];
+          return arr;
         })();
         setPositions(parsed);
 
         if (fundRes.ok) {
           const fundData = await fundRes.json();
           const rawFunds = fundData.result;
-          const fundArr = typeof rawFunds === "string" ? JSON.parse(rawFunds) : rawFunds;
-          if (Array.isArray(fundArr)) {
-            const names = fundArr
-              .map((f: Record<string, unknown>) => (f.fundName ?? f.name ?? "") as string)
-              .filter(Boolean);
-            setFunds([...new Set(names)].sort());
-          }
+          const fundArr = Array.isArray(rawFunds) ? rawFunds : [];
+          const names = fundArr
+            .map((f: Record<string, unknown>) => (f.fundName ?? f.name ?? "") as string)
+            .filter(Boolean);
+          setFunds([...new Set(names)].sort());
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load portfolio data");
