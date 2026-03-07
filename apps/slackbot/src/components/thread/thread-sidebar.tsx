@@ -263,7 +263,7 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col" onKeyDown={handleListKeyDown}>
-      <div className="border-b border-border/40 px-3 py-3">
+      <div className="px-3 py-3">
         <div className="flex items-center gap-1.5">
           <Tooltip>
             <TooltipTrigger asChild>
