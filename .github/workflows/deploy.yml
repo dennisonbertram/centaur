@@ -53,102 +53,20 @@ jobs:
           docker volume create ai_v2_prometheusdata 2>/dev/null || true
           docker volume create ai_v2_lokidata 2>/dev/null || true
 
-      # --- Detect what changed ---
-
-      - name: Detect changes
-        id: changes
-        working-directory: ${{ github.workspace }}
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "scope=all" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BEFORE="${{ github.event.pull_request.base.sha }}"
-            AFTER="${{ github.event.pull_request.merge_commit_sha }}"
-          else
-            BEFORE="${{ github.event.before }}"
-            AFTER="${{ github.sha }}"
-          fi
-
-          if [ -z "$AFTER" ]; then
-            echo "scope=all" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
-            echo "scope=all" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          DIFF=$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null || echo "")
-          if [ -z "$DIFF" ]; then
-            echo "scope=all" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "diff<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$DIFF" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
-          # If infra files changed, rebuild everything
-          if echo "$DIFF" | grep -qE '^(Dockerfile|pyproject\.toml|uv\.lock|docker-compose\.yml|migrations/|services/|monitoring/)'; then
-            echo "scope=all" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Otherwise, figure out which services changed
-          SCOPE=""
-          echo "$DIFF" | grep -q '^src/' && SCOPE="${SCOPE} api"
-          echo "$DIFF" | grep -q '^apps/slackbot/' && SCOPE="${SCOPE} slackbot"
-          echo "$DIFF" | grep -q '^sandbox/' && SCOPE="${SCOPE} sandbox"
-          echo "$DIFF" | grep -q '^tools/' && SCOPE="${SCOPE} tools"
-
-          if [ -z "$SCOPE" ]; then
-            echo "scope=none" >> "$GITHUB_OUTPUT"
-          else
-            echo "scope=${SCOPE}" >> "$GITHUB_OUTPUT"
-          fi
-
       # --- Deploy ---
 
-      - name: Deploy all services
-        if: steps.changes.outputs.scope == 'all'
-        run: docker compose up -d --build
-
-      - name: Deploy API
-        if: steps.changes.outputs.scope != 'all' && contains(steps.changes.outputs.scope, 'api')
-        run: docker compose up -d --build --wait api
-
-      - name: Deploy slackbot
-        if: steps.changes.outputs.scope != 'all' && contains(steps.changes.outputs.scope, 'slackbot')
-        run: |
-          test ! -f apps/slackbot/package-lock.json
-          docker compose up -d --build --no-deps slackbot
-
       - name: Build sandbox image
-        if: steps.changes.outputs.scope != 'all' && contains(steps.changes.outputs.scope, 'sandbox')
         run: docker build -t agent2:latest sandbox/
 
-      - name: Reload tools
-        if: steps.changes.outputs.scope != 'all' && contains(steps.changes.outputs.scope, 'tools') && !contains(steps.changes.outputs.scope, 'api')
-        run: |
-          if [ -z "${API_SECRET_KEY:-}" ]; then
-            echo "Skipping: API_SECRET_KEY not configured"
-            exit 0
-          fi
-          curl -sf -X POST http://localhost:8000/admin/reload-tools \
-            -H "Authorization: Bearer $API_SECRET_KEY"
-
-      # --- Post-deploy ---
+      - name: Deploy all services
+        run: docker compose up -d --build
 
       - name: Restart nginx
-        if: steps.changes.outputs.scope == 'all' || contains(steps.changes.outputs.scope, 'api')
         run: docker compose restart nginx
 
+      # --- Post-deploy health checks ---
+
       - name: Health check
-        if: steps.changes.outputs.scope != 'none'
         run: |
           for i in $(seq 1 60); do
             if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
@@ -161,7 +79,6 @@ jobs:
           exit 1
 
       - name: Verify tools loaded
-        if: steps.changes.outputs.scope != 'none'
         continue-on-error: true
         run: |
           if [ -z "${API_SECRET_KEY:-}" ]; then
@@ -181,7 +98,6 @@ jobs:
           fi
 
       - name: Secrets health check
-        if: steps.changes.outputs.scope == 'all' || contains(steps.changes.outputs.scope, 'api')
         run: |
           for i in $(seq 1 90); do
             CID=$(docker compose ps -q secrets 2>/dev/null)
@@ -209,7 +125,7 @@ jobs:
       # --- Notify ---
 
       - name: Notify Slack
-        if: always() && steps.changes.outputs.scope != 'none'
+        if: always()
         continue-on-error: true
         run: |
           if [ -z "${OPENAI_API_KEY:-}" ] || [ -z "${SLACK_BOT_TOKEN:-}" ]; then
@@ -226,7 +142,7 @@ jobs:
           ./scripts/deploy-notify.sh \
             "${{ github.event.before }}" \
             "${{ github.sha }}" \
-            "${{ steps.changes.outputs.scope }}" \
+            "all" \
             "${{ github.repository }}" \
             "${{ job.status }}" \
             "$ERROR_LOG"
