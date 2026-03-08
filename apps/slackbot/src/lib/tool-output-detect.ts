@@ -353,17 +353,28 @@ function isFlatObject(value: unknown): value is Record<string, unknown> {
   });
 }
 
-function isSourceItem(value: unknown): value is SourceItem {
+function sourceUrl(value: Record<string, unknown>): string | undefined {
+  const candidate = value.url ?? value.link ?? value.href ?? value.source_url;
+  return typeof candidate === "string" && URL_RE.test(candidate) ? candidate : undefined;
+}
+
+function isSourceItem(value: unknown): value is Record<string, unknown> & { title: string } {
   if (!isRecord(value)) return false;
-  return typeof value.url === "string" && typeof value.title === "string";
+  return typeof value.title === "string" && sourceUrl(value) !== undefined;
 }
 
 function sourceItemsFromUnknown(value: unknown): SourceItem[] {
   if (!Array.isArray(value)) return [];
   return value.filter(isSourceItem).map((item) => ({
-    url: item.url,
+    url: sourceUrl(item)!,
     title: item.title,
-    snippet: typeof item.snippet === "string" && item.snippet.trim() ? item.snippet : undefined,
+    snippet: typeof item.snippet === "string" && item.snippet.trim()
+      ? item.snippet
+      : typeof item.summary === "string" && item.summary.trim()
+        ? item.summary
+        : typeof item.description === "string" && item.description.trim()
+          ? item.description
+          : undefined,
   }));
 }
 
