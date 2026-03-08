@@ -1,0 +1,13 @@
+diff --git a/dist/index.js b/dist/index.js
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1225,7 +1225,8 @@
+       this.logger.warn("Chat instance not initialized, ignoring event");
+       return;
+     }
+-    if (event.subtype && event.subtype !== "bot_message") {
++    var allowedSubtypes = new Set(["bot_message", "file_share", "thread_broadcast"]);
++    if (event.subtype && !allowedSubtypes.has(event.subtype)) {
+       this.logger.debug("Ignoring message subtype", {
+         subtype: event.subtype
+       });
