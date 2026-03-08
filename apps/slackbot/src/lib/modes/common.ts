@@ -1,6 +1,7 @@
 import {
   execute,
   executeStreaming,
+  reconnectStreaming,
   type Engine,
   type FileAttachment,
   type Harness,
@@ -65,6 +66,29 @@ export async function* executeStreamingWithBusyRetries(params: {
         params.threadKey,
         params.message,
         params.harness,
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      const shouldRetry = isBusyRunError(detail) && attempt < maxAttempts;
+      if (!shouldRetry) throw error;
+      await sleep(Math.min(300 * Math.pow(2, attempt - 1), 2500));
+    }
+  }
+  return "";
+}
+
+export async function* reconnectStreamingWithRetries(params: {
+  threadKey: string;
+  harness: Harness;
+  skipCount?: number;
+}): AsyncGenerator<CanonicalEvent, string, undefined> {
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return yield* reconnectStreaming(
+        params.threadKey,
+        params.harness,
+        params.skipCount ?? 0,
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);

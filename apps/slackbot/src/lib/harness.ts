@@ -412,6 +412,90 @@ export async function* executeStreaming(
   return resultText || lastAssistantText;
 }
 
+/**
+ * Re-attach to a running container's stdout without sending a new turn.
+ *
+ * Used after a follow=true handoff: Amp has already navigated to the new
+ * thread and started working autonomously — we just need to read its output.
+ * Sending a new turn.start (via executeStreaming) would create a competing
+ * turn that produces a stale "mid-reply" summary.
+ *
+ * Also used for post-restart recovery when the slackbot reconnects to a
+ * container that was running while the process was down.
+ */
+export async function* reconnectStreaming(
+  threadKey: string,
+  harness?: Harness | null,
+  skipCount: number = 0,
+): AsyncGenerator<CanonicalEvent, string, undefined> {
+  const normalizedKey = normalizeThreadKey(threadKey);
+  const harnessName = harness || "amp";
+  let yieldedCount = 0;
+  let lastAssistantText = "";
+  let resultText = "";
+
+  for (let attempt = 0; attempt <= RECONNECT_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      const delay = Math.min(
+        RECONNECT_BASE_MS * Math.pow(2, attempt - 1),
+        RECONNECT_MAX_MS,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+
+    let res: Response;
+    try {
+      res = await resilientFetch(`${API_URL}/agent/reconnect`, {
+        method: "POST",
+        body: JSON.stringify({
+          thread_key: normalizedKey,
+          harness: harnessName,
+        }),
+        timeoutMs: 10 * 60_000,
+        maxAttempts: 1,
+        stream: true,
+      });
+    } catch (err) {
+      if (attempt < RECONNECT_MAX_ATTEMPTS && isStreamNetworkError(err)) continue;
+      throw err;
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      if (res.status >= 500 && attempt < RECONNECT_MAX_ATTEMPTS) continue;
+      throw new ApiError(
+        `/agent/reconnect failed (${res.status}): ${text.slice(0, 300)}`,
+        res.status,
+        res.status >= 500,
+      );
+    }
+
+    try {
+      const inner = readSSEStream(res, harnessName);
+      let replayCount = 0;
+      while (true) {
+        const { done, value } = await inner.next();
+        if (done) {
+          const ret = value as { lastAssistantText: string; resultText: string; sawDone: boolean };
+          lastAssistantText = ret.lastAssistantText || lastAssistantText;
+          resultText = ret.resultText || resultText;
+          return resultText || lastAssistantText;
+        }
+        replayCount++;
+        if (replayCount <= skipCount + yieldedCount) continue;
+        if (value.type === "result" && "text" in value) resultText = value.text;
+        yieldedCount++;
+        yield value;
+      }
+    } catch (err) {
+      if (attempt < RECONNECT_MAX_ATTEMPTS && isStreamNetworkError(err)) continue;
+      throw err;
+    }
+  }
+
+  return resultText || lastAssistantText;
+}
+
 export async function execute(
   threadKey: string,
   message: string,

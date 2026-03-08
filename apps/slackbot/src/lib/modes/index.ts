@@ -3,8 +3,8 @@ import type {
   FileAttachment,
   Harness,
 } from "../harness";
-import { executeWithBusyRetries, executeStreamingWithBusyRetries } from "./common";
-export { executeStreamingWithBusyRetries };
+import { executeWithBusyRetries, executeStreamingWithBusyRetries, reconnectStreamingWithRetries } from "./common";
+export { executeStreamingWithBusyRetries, reconnectStreamingWithRetries };
 
 export type ModeExecutionParams = {
   harness: Harness;

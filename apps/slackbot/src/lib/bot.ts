@@ -16,7 +16,7 @@ import {
   type Harness,
 } from "./harness";
 import { ApiError } from "./api-client";
-import { executeStreamingWithBusyRetries } from "./modes";
+import { executeStreamingWithBusyRetries, reconnectStreamingWithRetries } from "./modes";
 import { truncateSlackText } from "./slack-text";
 import { SlackLiveReply } from "./slack-live-reply";
 import { ProgressTracker } from "./progress-tracker";
@@ -51,6 +51,21 @@ const LOW_VALUE_PATTERNS = [
 function isLowValueResult(text: string): boolean {
   if (!text) return true;
   return LOW_VALUE_PATTERNS.some((p) => p.test(text.trim()));
+}
+
+/**
+ * Detect if text looks like a mid-thought that was cut off.
+ * Used to trigger a reconnect attempt when the stream ended prematurely.
+ */
+function looksIncomplete(text: string): boolean {
+  if (!text || text.length < 20) return false;
+  const trimmed = text.trimEnd();
+  // Ends with colon (about to do something), ellipsis, or "Let me ..."
+  if (/:\s*$/.test(trimmed)) return true;
+  if (/\.\.\.\s*$/.test(trimmed)) return true;
+  if (/\blet me\b.{0,30}$/i.test(trimmed)) return true;
+  if (/\bI'll\b.{0,30}$/i.test(trimmed)) return true;
+  return false;
 }
 
 const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "https://svc-ai.paradigm.xyz";
@@ -446,41 +461,31 @@ function createBot() {
       let streamReturn = "";
 
       try {
-        let currentMessage = message;
-        let followedHandoff = true;
+        // Track total events yielded across iterations so reconnect can skip
+        // already-seen events (the API replays full stdout history on reconnect).
+        let totalYieldedCount = 0;
 
-        // Loop: each iteration is one turn in the same container.
-        // After a follow=true handoff, amp internally navigates to the new
-        // thread, so the next turn.start on stdin is handled by that thread.
-        // From our perspective it's all one session — same threadKey, same
-        // Slack message, same container. No timeout — this is the long-running
-        // agent abstraction; amp can chain handoffs indefinitely.
-        while (followedHandoff) {
-          followedHandoff = false;
+        // Phase 1: initial execute — sends turn.start to the container.
+        {
           const handoffDetector = new HandoffDetector();
+          let detectedHandoff = false;
 
           const gen = executeStreamingWithBusyRetries({
             threadKey,
-            message: currentMessage,
+            message,
             harness,
             engine,
           });
 
-          // Use manual iteration to capture the generator's return value
           while (true) {
             const { done, value } = await gen.next();
             if (done) {
-              // Only capture the return value if we're NOT about to follow a handoff.
-              // After a handoff, the return value is stale ("Handed off to...").
-              if (!followedHandoff) streamReturn = value || "";
+              if (!detectedHandoff) streamReturn = value || "";
               break;
             }
+            if (detectedHandoff) continue;
 
-            // Once we've committed to following a handoff, ignore the remaining
-            // events in this turn (the post-handoff assistant text and result
-            // event would overwrite the tracker with stale "Handed off..." text).
-            if (followedHandoff) continue;
-
+            totalYieldedCount++;
             if (tracker.update(value)) {
               liveReply.queueUpdate(tracker.toSlackBullets());
             }
@@ -489,9 +494,74 @@ function createBot() {
             if (handoff && handoff.follow) {
               tracker.addHandoff(handoff.goal, handoff.newThreadKey);
               liveReply.queueUpdate(tracker.toSlackBullets());
-              currentMessage = "continue";
-              followedHandoff = true;
+              detectedHandoff = true;
             }
+          }
+
+          // Phase 2: follow handoff chain via reconnect (no turn.start).
+          // After follow=true, Amp navigates to the new thread and continues
+          // autonomously. We reconnect to the same container to read its output
+          // instead of sending a new turn.start which would create a competing
+          // turn and produce a stale "mid-reply" summary.
+          while (detectedHandoff) {
+            detectedHandoff = false;
+            const nextHandoffDetector = new HandoffDetector();
+
+            const reconnGen = reconnectStreamingWithRetries({
+              threadKey,
+              harness,
+              skipCount: totalYieldedCount,
+            });
+
+            while (true) {
+              const { done, value } = await reconnGen.next();
+              if (done) {
+                if (!detectedHandoff) streamReturn = value || "";
+                break;
+              }
+              if (detectedHandoff) continue;
+
+              totalYieldedCount++;
+              if (tracker.update(value)) {
+                liveReply.queueUpdate(tracker.toSlackBullets());
+              }
+
+              const handoff = nextHandoffDetector.processEvent(value);
+              if (handoff && handoff.follow) {
+                tracker.addHandoff(handoff.goal, handoff.newThreadKey);
+                liveReply.queueUpdate(tracker.toSlackBullets());
+                detectedHandoff = true;
+              }
+            }
+          }
+        }
+
+        // Phase 3: incomplete-result recovery.
+        // If we got no proper result event and the last assistant text looks
+        // like a mid-thought (ends with colon, "Let me", etc.), the stream
+        // may have ended prematurely. Try a single reconnect to capture any
+        // remaining output from a still-running container.
+        const prelimResult = (tracker.resultText || tracker.lastAssistantText || streamReturn).trim();
+        if (!tracker.resultText && looksIncomplete(prelimResult)) {
+          try {
+            const recoveryGen = reconnectStreamingWithRetries({
+              threadKey,
+              harness,
+              skipCount: totalYieldedCount,
+            });
+            while (true) {
+              const { done, value } = await recoveryGen.next();
+              if (done) {
+                if (value) streamReturn = value;
+                break;
+              }
+              totalYieldedCount++;
+              if (tracker.update(value)) {
+                liveReply.queueUpdate(tracker.toSlackBullets());
+              }
+            }
+          } catch {
+            // Recovery is best-effort — don't fail the whole request
           }
         }
       } catch (error) {
