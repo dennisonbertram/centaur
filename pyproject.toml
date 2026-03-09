@@ -36,7 +36,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/api", "src/etl", "src/shared", "src/secret_manager"]
+packages = ["src/api", "src/etl", "src/shared", "src/secret_manager", "src/secret_backends"]
 
 [dependency-groups]
 dev = [
@@ -55,7 +55,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 ignore = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["api", "etl", "shared", "secret_manager"]
+known-first-party = ["api", "etl", "shared", "secret_manager", "secret_backends"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

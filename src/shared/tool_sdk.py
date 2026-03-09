@@ -4,13 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import os
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from threading import Lock
-from time import monotonic
 from typing import Any
-from urllib.parse import quote
 
 log = logging.getLogger(__name__)
 
@@ -37,45 +33,15 @@ def get_tool_context() -> ToolContext:
 
 
 # ---------------------------------------------------------------------------
-# Secret Manager backend (replaces direct 1Password CLI calls)
+# Deprecated compat alias — use ``secret_backends.registry.get_backend()`` instead.
 # ---------------------------------------------------------------------------
-
-_SECRET_MANAGER_URL = os.environ.get("SECRET_MANAGER_URL", "")
-
-# Local cache so we don't HTTP on every secret() call.
-_sm_cache: dict[str, tuple[str, float]] = {}
-_sm_cache_lock = Lock()
-_SM_CACHE_TTL = 60  # re-check every 60s (the sidecar itself refreshes from 1PW)
 
 
 def _sm_read(key: str) -> str | None:
-    """Fetch a secret from the secret-manager sidecar. Cached locally."""
-    if not _SECRET_MANAGER_URL:
-        return None
+    """Fetch a secret via the pluggable backend. Backward-compat alias."""
+    from secret_backends.registry import get_backend
 
-    now = monotonic()
-    with _sm_cache_lock:
-        cached = _sm_cache.get(key)
-        if cached is not None:
-            value, expiry = cached
-            if now < expiry:
-                return value
-            del _sm_cache[key]
-
-    try:
-        import httpx
-
-        resp = httpx.get(f"{_SECRET_MANAGER_URL}/secrets/{quote(key, safe='')}", timeout=5.0)
-        if resp.status_code != 200:
-            return None
-        value = resp.json()["value"]
-    except Exception:
-        log.debug("secret-manager fetch failed for %s", key)
-        return None
-
-    with _sm_cache_lock:
-        _sm_cache[key] = (value, monotonic() + _SM_CACHE_TTL)
-    return value
+    return get_backend().get_sync(key)
 
 
 # ---------------------------------------------------------------------------
@@ -84,10 +50,11 @@ def _sm_read(key: str) -> str | None:
 
 
 def secret(key: str, default: str | None = None) -> str:
-    """Get a secret. Resolution order: tool context → secret manager → default.
+    """Get a secret. Resolution order: tool context → pluggable backend → default.
 
     - **ToolContext**: Set by ToolManager, populated from .env files (if any).
-    - **Secret Manager**: HTTP sidecar backed by 1Password (``SECRET_MANAGER_URL``).
+    - **Pluggable backend**: Configured via ``secrets.registry`` (env vars,
+      HTTP sidecar, etc.).
     """
     # 1. Check tool context if available (server mode)
     try:
@@ -98,8 +65,10 @@ def secret(key: str, default: str | None = None) -> str:
     except LookupError:
         pass
 
-    # 2. Secret manager sidecar (backed by 1Password)
-    val = _sm_read(key)
+    # 2. Pluggable secret backend
+    from secret_backends.registry import get_backend
+
+    val = get_backend().get_sync(key)
     if val is not None:
         return val
 
