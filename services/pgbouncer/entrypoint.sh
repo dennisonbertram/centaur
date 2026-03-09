@@ -10,7 +10,7 @@ if [ -n "$SECRET_MANAGER_URL" ] && [ -z "$DATABASE_URL" ]; then
   MAX_RETRIES=30
   RETRY=0
   while [ $RETRY -lt $MAX_RETRIES ]; do
-    val=$(curl -sf --max-time 5 "${SECRET_MANAGER_URL}/secrets/DATABASE_URL" | jq -r '.value // empty' 2>/dev/null || true)
+    val=$(curl -sf --max-time 5 "${SECRET_MANAGER_URL}/secrets/PGBOUNCER_DATABASE_URL" | jq -r '.value // empty' 2>/dev/null || true)
     if [ -n "$val" ]; then
       export DATABASE_URL="$val"
       echo "Resolved DATABASE_URL from secret proxy"
