@@ -54,7 +54,7 @@ jobs:
         run: |
           docker volume create ai_v2_firewall-certs 2>/dev/null || true
           docker volume create ai_v2_prometheusdata 2>/dev/null || true
-          docker volume create ai_v2_lokidata 2>/dev/null || true
+          docker volume create ai_v2_vldata 2>/dev/null || true
 
       # --- Deploy ---
 
@@ -62,7 +62,7 @@ jobs:
         run: docker build -t agent2:latest sandbox/
 
       - name: Deploy all services
-        run: docker compose up -d --build
+        run: docker compose up -d --build --remove-orphans
 
       - name: Restart nginx
         run: docker compose restart nginx
