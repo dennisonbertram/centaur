@@ -14,6 +14,7 @@ from typing import Annotated
 
 from fastapi import Header, HTTPException, Request
 
+from api.api_keys import APIKeyInfo, check_scope, lookup_key
 from shared.tool_sdk import _sm_read
 
 # Only localhost is trusted without an API key (e.g. health checks).
@@ -201,6 +202,10 @@ async def verify_api_key(
 ) -> str:
     client_ip = request.client.host if request.client else ""
     if _is_loopback_ip(client_ip):
+        request.state.api_key_info = APIKeyInfo(
+            id="localhost", name="localhost", key_prefix="", scopes=["*"], created_by="system",
+            source="localhost",
+        )
         return "localhost-bypass"
 
     api_key = _get_api_secret_key()
@@ -217,16 +222,45 @@ async def verify_api_key(
     if token and token.startswith("sbx1."):
         claims = verify_sandbox_token(token)
         if claims is not None:
+            request.state.api_key_info = APIKeyInfo(
+                id=claims["container_id"], name="sandbox", key_prefix="sbx1",
+                scopes=["agent", "tools:*"], created_by="system", source="sandbox",
+            )
             return f"sandbox:{claims['container_id']}"
         raise HTTPException(status_code=401, detail="Invalid or expired sandbox token")
 
-    if not token or not secrets.compare_digest(token, api_key):
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    if _is_trusted_service_ip(client_ip):
+    # Root key check
+    if token and secrets.compare_digest(token, api_key):
+        request.state.api_key_info = APIKeyInfo(
+            id="root", name="root", key_prefix="root", scopes=["*"], created_by="system",
+            source="root",
+        )
+        if _is_trusted_service_ip(client_ip):
+            return token
+        if not _is_trusted_nginx_ip(client_ip) and not _is_sandbox_allowed_path(request.url.path):
+            raise HTTPException(status_code=403, detail="API key scope does not permit this route")
         return token
-    if not _is_trusted_nginx_ip(client_ip) and not _is_sandbox_allowed_path(request.url.path):
-        raise HTTPException(status_code=403, detail="API key scope does not permit this route")
-    return token
+
+    # DB key lookup
+    if token:
+        pool = request.app.state.db_pool
+        key_info = await lookup_key(pool, token)
+        if key_info is not None:
+            request.state.api_key_info = key_info
+            return f"key:{key_info.key_prefix}"
+
+    raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+def get_key_info(request: Request) -> APIKeyInfo:
+    """Retrieve the APIKeyInfo attached during verify_api_key."""
+    info = getattr(request.state, "api_key_info", None)
+    if info is None:
+        return APIKeyInfo(
+            id="unknown", name="unknown", key_prefix="", scopes=["*"],
+            created_by="system", source="unknown",
+        )
+    return info
 
 
 async def verify_operator_api_key(
@@ -234,35 +268,39 @@ async def verify_operator_api_key(
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> str:
     token = await verify_api_key(request, x_api_key)
-    client_ip = request.client.host if request.client else ""
-    if _is_loopback_ip(client_ip) or _is_trusted_nginx_ip(client_ip):
+    key_info = get_key_info(request)
+    if key_info.source == "localhost":
         return token
-    raise HTTPException(status_code=403, detail="Operator route requires trusted caller")
+    client_ip = request.client.host if request.client else ""
+    if _is_trusted_nginx_ip(client_ip) and check_scope(key_info, "admin"):
+        return token
+    if check_scope(key_info, "admin"):
+        return token
+    raise HTTPException(status_code=403, detail="Operator route requires admin scope")
 
 
 async def verify_ui_or_api_key(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
 ) -> str:
-    """Accept nginx-forwarded auth or an API key.
-
-    Trust model for /api/threads (UI) routes:
-    - Nginx sets X-Forwarded-User via auth_request → trusted if from Docker bridge IP
-    - External callers must provide a valid API key (Bearer token)
-
-    Sandbox containers use verify_api_key (agent/tools routes) which does NOT
-    include any bridge-network bypass.
-    """
+    """Accept nginx-forwarded auth or an API key."""
     client_ip = request.client.host if request.client else ""
 
-    # Localhost always trusted
     if _is_loopback_ip(client_ip):
+        request.state.api_key_info = APIKeyInfo(
+            id="localhost", name="localhost", key_prefix="", scopes=["*"],
+            created_by="system", source="localhost",
+        )
         return "localhost-bypass"
 
     forwarded_user = request.headers.get("x-forwarded-user")
     if forwarded_user and not _is_trusted_nginx_ip(client_ip):
         raise HTTPException(status_code=403, detail="Untrusted forwarded identity header")
     if forwarded_user and _is_trusted_nginx_ip(client_ip):
+        request.state.api_key_info = APIKeyInfo(
+            id="nginx", name=forwarded_user, key_prefix="", scopes=["*"],
+            created_by="nginx", source="nginx",
+        )
         return "nginx"
 
     return await verify_api_key(request, x_api_key)

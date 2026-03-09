@@ -23,7 +23,7 @@ from typing import Any, get_type_hints
 
 import structlog
 from click.testing import CliRunner
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
 from toon_format import encode as toon_encode
 from typer.main import get_command
@@ -913,17 +913,30 @@ class ToolManager:
         )
 
         @router.get("")
-        async def list_tools() -> dict:
-            return {
-                name: {
+        async def list_tools(request: Request) -> dict:
+            key_info = getattr(request.state, "api_key_info", None)
+            result = {}
+            for name, p in pm.tools.items():
+                if key_info is not None:
+                    from api.api_keys import check_scope
+                    if not check_scope(key_info, "tools", name):
+                        continue
+                result[name] = {
                     "description": p.description,
                     "methods": [m.method_name for m in p.methods],
                 }
-                for name, p in pm.tools.items()
-            }
+            return result
 
         @router.get("/{tool_name}")
-        async def describe_tool(tool_name: str) -> dict:
+        async def describe_tool(tool_name: str, request: Request) -> dict:
+            key_info = getattr(request.state, "api_key_info", None)
+            if key_info is not None:
+                from api.api_keys import check_scope
+                if not check_scope(key_info, "tools", tool_name):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"API key does not have access to tool '{tool_name}'",
+                    )
             return pm.describe_tool(tool_name)
 
         @router.post("/{tool_name}/{method_name}")
@@ -951,6 +964,15 @@ class ToolManager:
                 if "text/plain" in request.headers.get("accept", ""):
                     return PlainTextResponse(error)
                 return {"tool": tool_name, "method": method_name, "result": error}
+            # Tool-level scope check
+            key_info = getattr(request.state, "api_key_info", None)
+            if key_info is not None:
+                from api.api_keys import check_scope
+                if not check_scope(key_info, "tools", tool_name):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"API key does not have access to tool '{tool_name}'",
+                    )
             result = await pm.call_tool(tool_name, method_name, body)
             if "text/plain" in request.headers.get("accept", ""):
                 return PlainTextResponse(result)
