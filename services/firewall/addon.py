@@ -82,7 +82,8 @@ _DEFAULT_INJECTION_HOSTS = (
     "api.together.ai,"
     "api.exa.ai,"
     "generativelanguage.googleapis.com,"
-    "api.x.ai"
+    "api.x.ai,"
+    "ampcode.com"
 )
 
 # Hosts that need POST/PUT/DELETE but don't get secret injection.
