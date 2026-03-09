@@ -1,84 +1,83 @@
-"""CLI for Loki log queries."""
+"""CLI for VictoriaLogs queries."""
 
 import json
 
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
+
 from shared.cli_tables import Table
 
 load_dotenv()
 
-app = typer.Typer(name="loki", help="Loki CLI for LogQL queries and log exploration")
+app = typer.Typer(name="vlogs", help="VictoriaLogs CLI for LogsQL queries and log exploration")
 console = Console()
 
 
 def get_client():
-    from .client import LokiClient
+    from .client import VictoriaLogsClient
 
-    return LokiClient()
+    return VictoriaLogsClient()
 
 
 @app.command("query")
 def query_logs(
-    query: str = typer.Argument(..., help='LogQL expression (e.g. \'{job="api"} |= "error"\')'),
+    query: str = typer.Argument(..., help='LogsQL expression (e.g. \'_time:5m error\')'),
     start: str = typer.Option(None, "--start", "-s", help="Range start (RFC3339 or epoch)"),
     end: str = typer.Option(None, "--end", "-e", help="Range end"),
     limit: int = typer.Option(100, "--limit", "-n", help="Max log lines"),
-    direction: str = typer.Option("backward", "--direction", "-d", help="backward or forward"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """Run a LogQL query against Loki."""
+    """Run a LogsQL query against VictoriaLogs."""
     client = get_client()
-    result = client.query(query=query, limit=limit, start=start, end=end, direction=direction)
+    result = client.query(query=query, limit=limit, start=start, end=end)
 
     if json_output:
         print(json.dumps(result, indent=2))
         return
 
-    data = result.get("data", {})
-    streams = data.get("result", [])
-
-    if not streams:
+    if not result:
         console.print("[yellow]No results[/]")
         return
 
-    for stream in streams:
-        labels = stream.get("stream", {})
-        label_str = ", ".join(f"{k}={v}" for k, v in labels.items())
-        console.print(f"[cyan]--- {label_str} ---[/]")
-        for ts, line in stream.get("values", []):
-            console.print(f"  {line}")
+    for entry in result:
+        stream = entry.get("_stream", "")
+        time = entry.get("_time", "")
+        msg = entry.get("_msg", "")
+        console.print(f"[dim]{time}[/] [cyan]{stream}[/] {msg}")
 
 
-@app.command("labels")
-def list_labels(
+@app.command("fields")
+def list_fields(
+    query: str = typer.Option("*", "--query", "-q", help="LogsQL filter"),
     start: str = typer.Option(None, "--start", "-s", help="Start time filter"),
     end: str = typer.Option(None, "--end", "-e", help="End time filter"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """List all known label names."""
+    """List all known field names."""
     client = get_client()
-    result = client.labels(start=start, end=end)
+    result = client.field_names(query=query, start=start, end=end)
 
     if json_output:
         print(json.dumps(result, indent=2))
         return
 
-    for label in result:
-        console.print(f"  {label}")
+    for field in result:
+        console.print(f"  {field}")
 
 
-@app.command("label-values")
-def label_values(
-    label: str = typer.Argument(..., help="Label name (e.g. container_name, job)"),
+@app.command("field-values")
+def field_values(
+    field: str = typer.Argument(..., help="Field name (e.g. service, container)"),
+    query: str = typer.Option("*", "--query", "-q", help="LogsQL filter"),
+    limit: int = typer.Option(100, "--limit", "-n", help="Max values"),
     start: str = typer.Option(None, "--start", "-s", help="Start time filter"),
     end: str = typer.Option(None, "--end", "-e", help="End time filter"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """Get all values for a label."""
+    """Get all values for a field."""
     client = get_client()
-    result = client.label_values(label, start=start, end=end)
+    result = client.field_values(field, query=query, limit=limit, start=start, end=end)
 
     if json_output:
         print(json.dumps(result, indent=2))
@@ -88,44 +87,42 @@ def label_values(
         console.print(f"  {value}")
 
 
-@app.command("series")
-def list_series(
-    match: str = typer.Argument(..., help='Label matcher (e.g. \'{job="api"}\')'),
+@app.command("streams")
+def list_streams(
+    query: str = typer.Option("*", "--query", "-q", help="LogsQL filter"),
     start: str = typer.Option(None, "--start", "-s", help="Start time filter"),
     end: str = typer.Option(None, "--end", "-e", help="End time filter"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """Find log series matching a selector."""
+    """Find log streams matching a query."""
     client = get_client()
-    result = client.series(match=match, start=start, end=end)
+    result = client.streams(query=query, start=start, end=end)
 
     if json_output:
         print(json.dumps(result, indent=2))
         return
 
     if not result:
-        console.print("[yellow]No series found[/]")
+        console.print("[yellow]No streams found[/]")
         return
 
-    table = Table(title="Series")
-    if result:
-        cols = sorted(result[0].keys())
-        for col in cols:
-            table.add_column(col, style="cyan")
-        for s in result:
-            table.add_row(*[str(s.get(c, "")) for c in cols])
+    table = Table(title="Streams")
+    table.add_column("Stream", style="cyan")
+    table.add_column("Hits", style="green")
+    for s in result:
+        table.add_row(str(s.get("value", "")), str(s.get("hits", "")))
 
     console.print(table)
 
 
 @app.command()
 def health():
-    """Check Loki readiness."""
+    """Check VictoriaLogs readiness."""
     client = get_client()
     if client.ready():
-        console.print("[green]Loki is ready[/]")
+        console.print("[green]VictoriaLogs is ready[/]")
     else:
-        console.print("[red]Loki is not ready[/]")
+        console.print("[red]VictoriaLogs is not ready[/]")
         raise typer.Exit(1)
 
 

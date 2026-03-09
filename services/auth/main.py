@@ -44,6 +44,14 @@ log.handlers = [_handler]
 log.setLevel(logging.INFO)
 log.propagate = False
 
+# Uvicorn access/error log → JSON stdout (same schema as app logs)
+_uvi_handler = logging.StreamHandler(sys.stdout)
+_uvi_handler.setFormatter(_JsonFormatter())
+for _uvi_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+    _uvi_logger = logging.getLogger(_uvi_name)
+    _uvi_logger.handlers = [_uvi_handler]
+    _uvi_logger.propagate = False
+
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response

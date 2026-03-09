@@ -21,7 +21,7 @@ Replace the implicit `default` network with explicit named networks per trust zo
 - `secrets_net` (internal, keep existing): secrets, api, etl, auth, slackbot, firewall
 - `data_net` (internal): postgres, redis, api, etl
 - `agent_net` (internal, keep existing): sandboxes, firewall, api
-- `obs_net` (internal): prometheus, loki, promtail, grafana, nginx
+- `obs_net` (internal): prometheus, victorialogs, promtail, grafana, nginx
 - `egress_net` (not internal): secrets, firewall, api, etl, slackbot — services needing internet
 
 **Verify:** `docker compose config` passes. No service on a network it doesn't need. `docker compose up -d` starts all services.

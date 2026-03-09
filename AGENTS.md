@@ -102,7 +102,7 @@ ai_v2/
 ├── tools-paradigm/       # Paradigm-private tools (slack, bloomberg, coinbase, ...)
 ├── pi-plugins/           # TypeScript plugins (handoff, tool-harness, system-prompt)
 ├── migrations/           # Alembic migration versions
-├── monitoring/           # nginx.conf, Grafana dashboards, Prometheus, Loki, Promtail
+├── monitoring/           # nginx.conf, Grafana dashboards, Prometheus, VictoriaLogs, Promtail
 ├── scripts/              # Operational scripts
 ├── tests/                # pytest tests
 ├── docker-compose.yml    # Full stack: 12 services

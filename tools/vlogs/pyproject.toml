@@ -1,6 +1,6 @@
 [project]
-name = "loki"
-description = "Loki log aggregation — LogQL queries, labels, label values, and log tailing"
+name = "vlogs"
+description = "VictoriaLogs — LogsQL queries, field names, field values, and log streams"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
@@ -11,7 +11,7 @@ dependencies = [
 ]
 
 [project.scripts]
-loki = "loki.cli:app"
+vlogs = "vlogs.cli:app"
 
 [build-system]
 requires = ["hatchling"]

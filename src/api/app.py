@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
 import sys
 import time
@@ -48,6 +49,28 @@ structlog.configure(
 )
 
 log = structlog.get_logger().bind(service="api")
+
+# ---------------------------------------------------------------------------
+# Uvicorn access/error log → JSON stdout (same schema as structlog)
+# ---------------------------------------------------------------------------
+
+
+class _UvicornJsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        return json.dumps({
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
+            "level": record.levelname.lower(),
+            "service": "api",
+            "event": "http_request",
+            "msg": record.getMessage(),
+        })
+
+
+for _uvi_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+    _uvi_logger = logging.getLogger(_uvi_name)
+    _uvi_logger.handlers = [logging.StreamHandler(sys.stdout)]
+    _uvi_logger.handlers[0].setFormatter(_UvicornJsonFormatter())
+    _uvi_logger.propagate = False
 
 
 def _warm_tool_caches() -> None:
@@ -131,7 +154,7 @@ _plugins_config = _app_root / "tools.toml"
 _plugin_dirs = load_plugins_config(_plugins_config)
 _tools_dirs: list[Path] = _plugin_dirs if _plugin_dirs else [_tools_dir]
 
-tool_manager = ToolManager(_tools_dirs, root_env_path=_app_root / ".env")
+tool_manager = ToolManager(_tools_dirs)
 tool_manager.discover()
 app.state.tool_manager = tool_manager
 app.include_router(tool_manager.create_rest_router())
@@ -256,9 +279,7 @@ async def proxy_webhooks(request: Request, path: str):
         log.warning("slack_webhook_upstream_timeout", path=path, target=target)
         return JSONResponse({"detail": "Webhook upstream timeout"}, status_code=504)
     except httpx.RequestError as exc:
-        log.warning(
-            "slack_webhook_upstream_unreachable", path=path, target=target, error=str(exc)
-        )
+        log.warning("slack_webhook_upstream_unreachable", path=path, target=target, error=str(exc))
         return JSONResponse({"detail": "Webhook upstream unavailable"}, status_code=502)
     return Response(
         content=resp.content,
