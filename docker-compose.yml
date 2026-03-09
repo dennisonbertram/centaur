@@ -152,6 +152,7 @@ services:
       - default
       - secrets_net
       - app_net
+      - data_net
     depends_on:
       api:
         condition: service_healthy
