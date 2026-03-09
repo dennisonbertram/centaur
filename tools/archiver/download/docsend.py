@@ -6,28 +6,19 @@ This module provides:
 - State detection for DocSend URLs (expired, password required, download enabled, etc.)
 - Routing logic to handle each state appropriately
 - Orchestration for processing multiple URLs
-
-Usage:
-    from parchiver_docsend import route_all_docsends, DocSendState
-
-    urls = [
-        {"url": "https://docsend.com/view/abc", "company": "Acme", "password": "secret"},
-    ]
-    results = await route_all_docsends(urls, output_dir=Path("./output"))
 """
 
 import asyncio
 import os
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-from dotenv import load_dotenv
 from playwright.async_api import async_playwright, Page, TimeoutError as PlaywrightTimeout
-
-load_dotenv()
+from shared.tool_sdk import secret
 
 from browser_use_sdk import AsyncBrowserUse
 
@@ -47,10 +38,10 @@ from ..docsend.playwright import (
 )
 
 # Configuration
-API_KEY = os.environ.get("BROWSER_USE_API_KEY")
-BROWSER_USE_PROXY_COUNTRY = os.environ.get("BROWSER_USE_PROXY_COUNTRY")
-BROWSER_USE_PROFILE_ID = os.environ.get("BROWSER_USE_PROFILE_ID")
-DOCSEND_DEBUG_DIR = os.environ.get("DOCSEND_DEBUG_DIR")
+API_KEY = secret("BROWSER_USE_API_KEY", "")
+BROWSER_USE_PROXY_COUNTRY = os.environ.get("BROWSER_USE_PROXY_COUNTRY", "")  # noqa: TID251
+BROWSER_USE_PROFILE_ID = os.environ.get("BROWSER_USE_PROFILE_ID", "")  # noqa: TID251
+DOCSEND_DEBUG_DIR = os.environ.get("DOCSEND_DEBUG_DIR")  # noqa: TID251
 MAX_PARALLEL = 5
 
 
@@ -135,7 +126,7 @@ async def enter_email(page: Page, email: str, config: ScrapeConfig = DEFAULT_CON
                     if box and box['width'] > 50:
                         email_field = field
                         break
-            except:
+            except Exception:
                 continue
 
         if not email_field:
@@ -158,7 +149,7 @@ async def enter_email(page: Page, email: str, config: ScrapeConfig = DEFAULT_CON
                     await btn.click(timeout=5000)
                     clicked = True
                     break
-            except:
+            except Exception:
                 continue
         if not clicked:
             await page.keyboard.press('Enter')
@@ -171,8 +162,7 @@ async def enter_email(page: Page, email: str, config: ScrapeConfig = DEFAULT_CON
 
     except PlaywrightTimeout:
         return False
-    except Exception as e:
-        print(f"[WARN] Email entry error: {e}")
+    except Exception:
         return False
 
 
@@ -219,7 +209,7 @@ async def detect_docsend_state(
                 result.state = DocSendState.BLOCKED
                 result.error = "cloudfront_blocked"
                 return result
-        except:
+        except Exception:
             pass
 
         if '404' in title or 'not found' in title.lower() or 'expired' in title.lower():
@@ -260,7 +250,7 @@ async def detect_docsend_state(
                 email_locator = page.locator('#prompt input[type="email"]').first
                 await email_locator.wait_for(state='visible', timeout=config.auth_timeout)
                 has_email_field = True
-            except:
+            except Exception:
                 # Try fallback selectors (including folder-style ReactModal email)
                 fallback_selectors = [
                     '.modal input[type="email"], [class*="auth"] input[type="email"]',
@@ -275,7 +265,7 @@ async def detect_docsend_state(
                             box = await modal_email.bounding_box(timeout=2000)
                             if box and box['width'] > 50:
                                 has_email_field = True
-                    except:
+                    except Exception:
                         pass
 
             if has_email_field:
@@ -293,7 +283,7 @@ async def detect_docsend_state(
                     if expired_text:
                         result.state = DocSendState.LINK_EXPIRED
                         return result
-            except:
+            except Exception:
                 pass
 
         # Check for folder/space (Download as ZIP or per-file Download buttons)
@@ -302,14 +292,14 @@ async def detect_docsend_state(
             if await zip_btn.is_visible(timeout=2000):
                 result.state = DocSendState.FOLDER
                 return result
-        except:
+        except Exception:
             pass
         try:
             file_dl_btn = page.locator('button[aria-label="Download file"]').first
             if await file_dl_btn.is_visible(timeout=2000):
                 result.state = DocSendState.FOLDER
                 return result
-        except:
+        except Exception:
             pass
 
         # Check for download button
@@ -327,7 +317,7 @@ async def detect_docsend_state(
                 if await download_btn.is_visible(timeout=2000):
                     result.state = DocSendState.DOWNLOAD_ENABLED
                     break
-            except:
+            except Exception:
                 continue
 
         # If no download button found, check if we can access slides
@@ -389,8 +379,7 @@ async def download_docsend_pdf(
                 return save_path
         except PlaywrightTimeout:
             continue
-        except Exception as e:
-            print(f"[WARN] Download attempt with {selector} failed: {e}")
+        except Exception:
             continue
 
     return None
@@ -417,8 +406,6 @@ async def _intercept_cloudfront_download(
         content_disp = response.headers.get('content-disposition', '')
         if 'cloudfront.net' in response.url and 'attachment' in content_disp:
             download_url = response.url
-            # Extract filename from content-disposition
-            import re
             fn_match = re.search(r'filename="?([^";\n]+)"?', content_disp)
             if fn_match:
                 suggested_filename = fn_match.group(1)
@@ -465,14 +452,11 @@ async def download_folder(
     try:
         zip_btn = page.locator('button[aria-label="Download as ZIP"]').first
         if await zip_btn.is_visible(timeout=3000):
-            print(f"[ZIP] Waiting for ZIP generation...")
             url, fname = await _intercept_cloudfront_download(page, zip_btn)
             if not url:
-                print(f"[WARN] ZIP download URL not intercepted after timeout")
                 return None
 
             save_path = output_dir / f"{filename}.zip"
-            print(f"[ZIP] Downloading ZIP from CloudFront...")
             try:
                 async with httpx.AsyncClient(follow_redirects=True, timeout=300) as client:
                     async with client.stream('GET', url) as resp:
@@ -480,25 +464,19 @@ async def download_folder(
                         with open(save_path, 'wb') as f:
                             async for chunk in resp.aiter_bytes(chunk_size=65536):
                                 f.write(chunk)
-                size = save_path.stat().st_size
-                print(f"[ZIP] Saved: {save_path} ({size:,} bytes / {size/1024/1024:.1f} MB)")
                 return save_path
-            except Exception as e:
-                print(f"[WARN] ZIP download failed: {e}")
+            except Exception:
                 if save_path.exists():
                     save_path.unlink()
                 return None
-    except:
+    except Exception:
         pass
 
     # --- Variant 2: Per-file downloads ---
     dl_buttons = page.locator('button[aria-label="Download file"]')
     count = await dl_buttons.count()
     if count == 0:
-        print(f"[WARN] No download buttons found in folder")
         return None
-
-    print(f"[FOLDER] Downloading {count} files individually...")
     downloaded = []
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=120) as client:
@@ -507,7 +485,6 @@ async def download_folder(
             try:
                 url, fname = await _intercept_cloudfront_download(page, btn, timeout_seconds=60)
                 if not url:
-                    print(f"  [WARN] File {i+1}/{count}: no download URL intercepted")
                     continue
 
                 safe_fname = fname or f"file_{i+1}"
@@ -521,11 +498,9 @@ async def download_folder(
                         async for chunk in resp.aiter_bytes(chunk_size=65536):
                             f.write(chunk)
 
-                size = save_path.stat().st_size
-                print(f"  [{i+1}/{count}] {safe_fname} ({size:,} bytes)")
                 downloaded.append(save_path)
-            except Exception as e:
-                print(f"  [WARN] File {i+1}/{count}: download failed: {e}")
+            except Exception:
+                pass
 
             # Brief pause between downloads
             await asyncio.sleep(1)
@@ -533,7 +508,6 @@ async def download_folder(
     if not downloaded:
         return None
 
-    print(f"[FOLDER] Downloaded {len(downloaded)}/{count} files")
     # Return the output directory itself as the "path"
     return output_dir
 
@@ -573,17 +547,14 @@ async def scrape_slides(
         return result
 
     result.total_pages = total_pages
-    print(f"[FOUND] {company}: {total_pages} slides")
 
     # Create output directory
     company_dir = output_dir / company.replace(" ", "_").replace("/", "_")
     company_dir.mkdir(parents=True, exist_ok=True)
 
     # Fetch all slide URLs via API
-    print(f"[FETCH] {company}: Getting slide URLs...")
     slide_urls, fetch_failed = await fetch_slide_urls(page, total_pages, company, config)
     valid_urls = [u for u in slide_urls if u]
-    print(f"[FETCH] {company}: Got {len(valid_urls)}/{total_pages} URLs")
 
     if len(valid_urls) == 0:
         result.status = ScrapeStatus.ERROR
@@ -592,18 +563,15 @@ async def scrape_slides(
         return result
 
     # Download images
-    print(f"[DOWNLOAD] {company}: Downloading images...")
     downloaded, download_failed = await download_images(slide_urls, company_dir, company, config)
     result.downloaded = len(downloaded)
     result.failed_slides = list(set(fetch_failed + download_failed))
-    print(f"[DOWNLOAD] {company}: {len(downloaded)}/{total_pages} slides")
 
     # Create PDF even with partial results
     if downloaded:
         pdf_path = company_dir / f"{company.replace(' ', '_')}.pdf"
         await create_pdf(downloaded, pdf_path)
         result.pdf_path = str(pdf_path)
-        print(f"[PDF] {company}: {pdf_path}")
 
     # Determine final status
     if len(downloaded) == total_pages:
@@ -651,7 +619,6 @@ async def route_docsend(
         ScrapeResult with status and details
     """
     async def _route():
-        print(f"\n[ROUTER] {company}: {url}")
         result = ScrapeResult(url=url, company=company)
 
         bu_client = AsyncBrowserUse(api_key=API_KEY)
@@ -660,7 +627,6 @@ async def route_docsend(
 
         try:
             # Create cloud browser session
-            print(f"[CLOUD] {company}: Creating browser session...")
 
             async def create_session():
                 session_kwargs = {
@@ -679,7 +645,6 @@ async def route_docsend(
                     create_session,
                     max_retries=config.max_retries,
                     delay=config.retry_delay,
-                    on_retry=lambda a, m, e, w: print(f"[RETRY] {company}: Browser session attempt {a}/{m}..."),
                 )
             except Exception as e:
                 result.status = ScrapeStatus.ERROR
@@ -687,13 +652,11 @@ async def route_docsend(
                 return result
 
             cdp_url = _session_value(browser_session, "cdp_url", "cdpUrl")
-            live_url = _session_value(browser_session, "live_url", "liveUrl")
             session_id = _session_value(browser_session, "id", "session_id", "sessionId")
             if not cdp_url or not session_id:
                 result.status = ScrapeStatus.ERROR
                 result.error = "Browser session missing required fields (cdp_url/session_id)"
                 return result
-            print(f"[LIVE] {company}: {live_url}")
 
             async with async_playwright() as p:
                 playwright_browser = await p.chromium.connect_over_cdp(cdp_url)
@@ -708,7 +671,6 @@ async def route_docsend(
                     page = await context.new_page()
 
                 # Navigate to URL
-                print(f"[NAV] {company}: Navigating to DocSend...")
                 await asyncio.sleep(15)
                 try:
                     response = await page.goto(url, wait_until='networkidle', timeout=config.page_load_timeout)
@@ -723,25 +685,18 @@ async def route_docsend(
                     if await accept_btn.is_visible(timeout=2000):
                         await accept_btn.click()
                         await asyncio.sleep(1)
-                except:
+                except Exception:
                     pass
 
                 if DOCSEND_DEBUG_DIR:
                     debug_dir = Path(DOCSEND_DEBUG_DIR)
                     debug_dir.mkdir(parents=True, exist_ok=True)
-                    debug_prefix = f"{company.replace(' ', '_').replace('/', '_') or 'unknown'}"
-                    try:
-                        await page.screenshot(path=str(debug_dir / f"{debug_prefix}.png"), full_page=True)
-                    except Exception as exc:
-                        print(f"[WARN] {company}: Debug screenshot failed: {exc}")
-                    try:
-                        html_path = debug_dir / f"{debug_prefix}.html"
-                        html_path.write_text(await page.content())
-                    except Exception as exc:
-                        print(f"[WARN] {company}: Debug HTML dump failed: {exc}")
+                    debug_prefix = company.replace(' ', '_').replace('/', '_') or 'unknown'
+                    await page.screenshot(path=str(debug_dir / f"{debug_prefix}.png"), full_page=True)
+                    html_path = debug_dir / f"{debug_prefix}.html"
+                    html_path.write_text(await page.content())
 
                 # Detect state
-                print(f"[TRIAGE] {company}: Detecting state...")
                 state_result = await detect_docsend_state(
                     page,
                     url,
@@ -749,30 +704,25 @@ async def route_docsend(
                     response.status if response else None,
                     config,
                 )
-                print(f"[STATE] {company}: {state_result.state.value}")
 
                 # Route based on state
                 match state_result.state:
                     case DocSendState.LINK_EXPIRED:
                         result.status = ScrapeStatus.LINK_EXPIRED
-                        print(f"[SKIP] {company}: Link expired")
                         return result
 
                     case DocSendState.BLOCKED:
                         result.status = ScrapeStatus.ERROR
                         result.error = state_result.error or "Blocked by CloudFront/WAF"
-                        print(f"[SKIP] {company}: Blocked by CloudFront/WAF")
                         return result
 
                     case DocSendState.PASSWORD_REQUIRED:
                         result.status = ScrapeStatus.PASSWORD_REQUIRED
                         result.error = state_result.error or "Password required but not provided or rejected"
-                        print(f"[SKIP] {company}: Password required")
                         return result
 
                     case DocSendState.EMAIL_GATED:
                         # Enter email and re-triage
-                        print(f"[AUTH] {company}: Entering email...")
                         success = await enter_email(page, email, config)
                         if not success:
                             # Email entry failed — check if the page is actually
@@ -786,9 +736,8 @@ async def route_docsend(
                                 expired_text = await expired_el.text_content(timeout=2000)
                                 if expired_text:
                                     result.status = ScrapeStatus.LINK_EXPIRED
-                                    print(f"[SKIP] {company}: Link expired (detected after auth failure)")
                                     return result
-                            except:
+                            except Exception:
                                 pass
                             result.status = ScrapeStatus.AUTH_FAILED
                             result.error = "Failed to enter email"
@@ -796,18 +745,15 @@ async def route_docsend(
 
                         # Re-detect state after email entry
                         state_result = await detect_docsend_state(page, url, password, None, config)
-                        print(f"[STATE] {company}: After email: {state_result.state.value}")
 
                         if state_result.state == DocSendState.FOLDER:
                             # Folder — download as ZIP
-                            print(f"[FOLDER] {company}: Downloading folder as ZIP...")
                             company_dir = output_dir / company.replace(" ", "_").replace("/", "_")
                             company_dir.mkdir(parents=True, exist_ok=True)
                             zip_path = await download_folder(page, company_dir, company.replace(" ", "_"), config)
                             if zip_path:
                                 result.status = ScrapeStatus.SUCCESS
                                 result.pdf_path = str(zip_path)
-                                print(f"[ZIP] {company}: Downloaded to {zip_path}")
                             else:
                                 result.status = ScrapeStatus.ERROR
                                 result.error = "Folder ZIP download failed"
@@ -820,7 +766,6 @@ async def route_docsend(
                             if pdf_path:
                                 result.status = ScrapeStatus.SUCCESS
                                 result.pdf_path = str(pdf_path)
-                                print(f"[PDF] {company}: Downloaded to {pdf_path}")
                             else:
                                 # Fall back to scraping
                                 return await scrape_slides(page, company, output_dir, config)
@@ -830,14 +775,12 @@ async def route_docsend(
 
                     case DocSendState.FOLDER:
                         # Folder already authenticated — download as ZIP
-                        print(f"[FOLDER] {company}: Downloading folder as ZIP...")
                         company_dir = output_dir / company.replace(" ", "_").replace("/", "_")
                         company_dir.mkdir(parents=True, exist_ok=True)
                         zip_path = await download_folder(page, company_dir, company.replace(" ", "_"), config)
                         if zip_path:
                             result.status = ScrapeStatus.SUCCESS
                             result.pdf_path = str(zip_path)
-                            print(f"[ZIP] {company}: Downloaded to {zip_path}")
                         else:
                             result.status = ScrapeStatus.ERROR
                             result.error = "Folder ZIP download failed"
@@ -845,28 +788,23 @@ async def route_docsend(
 
                     case DocSendState.DOWNLOAD_ENABLED:
                         # Download directly
-                        print(f"[DOWNLOAD] {company}: Download enabled, downloading PDF...")
                         company_dir = output_dir / company.replace(" ", "_").replace("/", "_")
                         company_dir.mkdir(parents=True, exist_ok=True)
                         pdf_path = await download_docsend_pdf(page, company_dir, company.replace(" ", "_"), config)
                         if pdf_path:
                             result.status = ScrapeStatus.SUCCESS
                             result.pdf_path = str(pdf_path)
-                            print(f"[PDF] {company}: Downloaded to {pdf_path}")
                             return result
                         else:
                             # Fall back to slide scraping
-                            print(f"[WARN] {company}: Download failed, falling back to slide scrape...")
                             return await scrape_slides(page, company, output_dir, config)
 
                     case DocSendState.DOWNLOAD_DISABLED:
                         # Scrape slides
-                        print(f"[SCRAPE] {company}: Download disabled, scraping slides...")
                         return await scrape_slides(page, company, output_dir, config)
 
                     case DocSendState.UNKNOWN:
                         # Try scraping anyway
-                        print(f"[WARN] {company}: Unknown state, attempting slide scrape...")
                         return await scrape_slides(page, company, output_dir, config)
 
                 return result
@@ -874,14 +812,13 @@ async def route_docsend(
         except Exception as e:
             result.status = ScrapeStatus.ERROR
             result.error = str(e)
-            print(f"[ERROR] {company}: {e}")
             return result
 
         finally:
             if playwright_browser:
                 try:
                     await playwright_browser.close()
-                except:
+                except Exception:
                     pass
 
             if browser_session:
@@ -889,7 +826,7 @@ async def route_docsend(
                     session_id = _session_value(browser_session, "id", "session_id", "sessionId")
                     if session_id:
                         await _stop_browser_session(bu_client, str(session_id))
-                except:
+                except Exception:
                     pass
 
     if semaphore:
@@ -919,22 +856,13 @@ async def route_all_docsends(
         List of ScrapeResult objects
     """
     if not urls:
-        print("No URLs to process.")
         return []
 
     if not API_KEY:
-        print("ERROR: BROWSER_USE_API_KEY not set!")
         return []
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print("=" * 60)
-    print("DocSend Router")
-    print("=" * 60)
-    print(f"URLs to process: {len(urls)}")
-    print(f"Max parallel: {max_parallel}")
-    print(f"Output: {output_dir}")
-    print("-" * 60)
 
     semaphore = asyncio.Semaphore(max_parallel)
 
@@ -967,79 +895,4 @@ async def route_all_docsends(
                 error=str(r),
             ))
 
-    # Print summary
-    print("\n" + "=" * 60)
-    print("ROUTING SUMMARY")
-    print("=" * 60)
-
-    success = [r for r in processed_results if r.status == ScrapeStatus.SUCCESS]
-    partial = [r for r in processed_results if r.status == ScrapeStatus.PARTIAL]
-    expired = [r for r in processed_results if r.status == ScrapeStatus.LINK_EXPIRED]
-    password = [r for r in processed_results if r.status == ScrapeStatus.PASSWORD_REQUIRED]
-    failed = [r for r in processed_results if r.status in (ScrapeStatus.ERROR, ScrapeStatus.TIMEOUT, ScrapeStatus.NO_SLIDES, ScrapeStatus.AUTH_FAILED)]
-
-    print(f"SUCCESS: {len(success)}")
-    print(f"PARTIAL: {len(partial)}")
-    print(f"EXPIRED: {len(expired)}")
-    print(f"PASSWORD_REQUIRED: {len(password)}")
-    print(f"FAILED: {len(failed)}")
-
-    for r in processed_results:
-        status_icon = {
-            ScrapeStatus.SUCCESS: "+",
-            ScrapeStatus.PARTIAL: "~",
-            ScrapeStatus.LINK_EXPIRED: "-",
-            ScrapeStatus.PASSWORD_REQUIRED: "!",
-        }.get(r.status, "x")
-
-        slides_info = f" ({r.downloaded}/{r.total_pages})" if r.total_pages else ""
-        print(f"  [{status_icon}] {r.company}: {r.status.value}{slides_info}")
-        if r.error:
-            print(f"      Error: {r.error}")
-
     return processed_results
-
-
-async def main():
-    """Example usage - process URLs from command line or hardcoded list."""
-    import json
-    import sys
-
-    # Example: Load from results.json
-    if len(sys.argv) > 1:
-        results_file = Path(sys.argv[1])
-        if results_file.exists():
-            with open(results_file) as f:
-                data = json.load(f)
-
-            # Extract DocSend links
-            urls = []
-            for email_data in data:
-                for link in email_data.get("links", []):
-                    if link.get("type") == "docsend":
-                        urls.append({
-                            "url": link["url"],
-                            "company": email_data.get("subject", "Unknown")[:50],
-                            "password": link.get("password"),
-                        })
-
-            if urls:
-                results = await route_all_docsends(urls, output_dir=Path("./docsend_output"))
-                return
-
-    # Fallback: hardcoded test URLs
-    docsend_urls = [
-        # Add your DocSend URLs here for testing
-        # {"url": "https://docsend.com/view/abc123", "company": "Example", "password": "optional"},
-    ]
-
-    if not docsend_urls:
-        print("Usage: python docsend_router.py [results.json]")
-        print("Or add URLs to docsend_urls list in main().")
-        return
-
-    results = await route_all_docsends(docsend_urls, output_dir=Path("./docsend_output"))
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

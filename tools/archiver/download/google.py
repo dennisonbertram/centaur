@@ -14,9 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-import requests
-
-from ..telemetry import get_logger, log_event, step_timer
+import httpx
 
 
 # Export formats by Google doc type
@@ -26,20 +24,12 @@ EXPORT_FORMATS = {
     "spreadsheets": "xlsx",
 }
 
-# Direct export MIME types for Google native formats
-_EXPORT_MIMES = {
-    "document": "application/pdf",
-    "presentation": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    "spreadsheets": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-}
-
 # Base URLs for direct export (works for publicly shared docs)
 _EXPORT_URL_TEMPLATES = {
     "document": "https://docs.google.com/document/d/{file_id}/export?format={fmt}",
     "presentation": "https://docs.google.com/presentation/d/{file_id}/export/{fmt}",
     "spreadsheets": "https://docs.google.com/spreadsheets/d/{file_id}/export?format={fmt}",
 }
-logger = get_logger(__name__)
 
 
 @dataclass
@@ -110,18 +100,14 @@ def _gog_is_authed(account: str) -> bool:
 def run_gog(args: list[str], account: str) -> tuple[bool, str, str]:
     """Run a gog command. Returns (success, stdout, stderr)."""
     cmd = ["gog"] + args + ["--account", account]
-    with step_timer(logger, "google.run_gog", account=account, command=" ".join(args)) as step:
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-            ok = result.returncode == 0
-            step.set(success=ok, return_code=result.returncode)
-            return ok, result.stdout, result.stderr
-        except subprocess.TimeoutExpired:
-            step.set(success=False, return_code=None, timeout=True)
-            return False, "", "Command timed out"
-        except Exception as e:
-            step.set(success=False, return_code=None)
-            return False, "", str(e)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        ok = result.returncode == 0
+        return ok, result.stdout, result.stderr
+    except subprocess.TimeoutExpired:
+        return False, "", "Command timed out"
+    except Exception as e:
+        return False, "", str(e)
 
 
 def _direct_export_doc(
@@ -131,63 +117,60 @@ def _direct_export_doc(
     known_title: str | None = None,
 ) -> DownloadResult:
     """Export a Google Doc/Slides/Sheets via direct HTTP (works for public docs)."""
-    with step_timer(logger, "google.direct_export_doc", file_id=file_id, link_type=link_type) as step:
-        export_format = EXPORT_FORMATS.get(link_type, "pdf")
-        url_template = _EXPORT_URL_TEMPLATES.get(link_type)
-        if not url_template:
-            return DownloadResult(
-                file_id=file_id, link_type=link_type, status="error",
-                error=f"No direct export URL for type: {link_type}",
-            )
+    export_format = EXPORT_FORMATS.get(link_type, "pdf")
+    url_template = _EXPORT_URL_TEMPLATES.get(link_type)
+    if not url_template:
+        return DownloadResult(
+            file_id=file_id, link_type=link_type, status="error",
+            error=f"No direct export URL for type: {link_type}",
+        )
 
-        url = url_template.format(file_id=file_id, fmt=export_format)
-        try:
-            resp = requests.get(url, timeout=60, allow_redirects=True)
-        except Exception as e:
-            return DownloadResult(
-                file_id=file_id, link_type=link_type, status="error",
-                error=f"HTTP export request failed: {e}",
-            )
+    url = url_template.format(file_id=file_id, fmt=export_format)
+    try:
+        resp = httpx.get(url, timeout=60, follow_redirects=True)
+    except Exception as e:
+        return DownloadResult(
+            file_id=file_id, link_type=link_type, status="error",
+            error=f"HTTP export request failed: {e}",
+        )
 
-        step.set(http_status=resp.status_code)
-        if resp.status_code == 200:
-            content_type = resp.headers.get("content-type", "")
-            # Google returns HTML when auth is required or doc doesn't exist
-            if "text/html" in content_type:
-                return DownloadResult(
-                    file_id=file_id, link_type=link_type, status="forbidden",
-                    title=known_title,
-                    error="Document requires authentication (not publicly shared)",
-                )
-
-            title = known_title or "untitled"
-            slug = slugify(title)
-            filename = f"{slug}__{file_id[:10]}.{export_format}"
-            output_path = output_dir / filename
-            output_path.write_bytes(resp.content)
-            step.set(result_status="ok", size_bytes=output_path.stat().st_size)
-            return DownloadResult(
-                file_id=file_id, link_type=link_type, status="ok",
-                output_path=str(output_path), title=title,
-            )
-        elif resp.status_code in (401, 403):
+    if resp.status_code == 200:
+        content_type = resp.headers.get("content-type", "")
+        # Google returns HTML when auth is required or doc doesn't exist
+        if "text/html" in content_type:
             return DownloadResult(
                 file_id=file_id, link_type=link_type, status="forbidden",
                 title=known_title,
-                error=f"Access denied (HTTP {resp.status_code})",
+                error="Document requires authentication (not publicly shared)",
             )
-        elif resp.status_code == 404:
-            return DownloadResult(
-                file_id=file_id, link_type=link_type, status="not_found",
-                title=known_title,
-                error="Document not found (HTTP 404)",
-            )
-        else:
-            return DownloadResult(
-                file_id=file_id, link_type=link_type, status="error",
-                title=known_title,
-                error=f"HTTP export failed with status {resp.status_code}",
-            )
+
+        title = known_title or "untitled"
+        slug = slugify(title)
+        filename = f"{slug}__{file_id[:10]}.{export_format}"
+        output_path = output_dir / filename
+        output_path.write_bytes(resp.content)
+        return DownloadResult(
+            file_id=file_id, link_type=link_type, status="ok",
+            output_path=str(output_path), title=title,
+        )
+    elif resp.status_code in (401, 403):
+        return DownloadResult(
+            file_id=file_id, link_type=link_type, status="forbidden",
+            title=known_title,
+            error=f"Access denied (HTTP {resp.status_code})",
+        )
+    elif resp.status_code == 404:
+        return DownloadResult(
+            file_id=file_id, link_type=link_type, status="not_found",
+            title=known_title,
+            error="Document not found (HTTP 404)",
+        )
+    else:
+        return DownloadResult(
+            file_id=file_id, link_type=link_type, status="error",
+            title=known_title,
+            error=f"HTTP export failed with status {resp.status_code}",
+        )
 
 
 def _direct_drive_file(
@@ -196,52 +179,49 @@ def _direct_drive_file(
     known_name: str | None = None,
 ) -> DownloadResult:
     """Download a Google Drive file via direct HTTP (works for public files)."""
-    with step_timer(logger, "google.direct_drive_file", file_id=file_id) as step:
-        url = f"https://drive.google.com/uc?export=download&id={file_id}"
-        try:
-            resp = requests.get(url, timeout=120, allow_redirects=True, stream=True)
-        except Exception as e:
-            return DownloadResult(
-                file_id=file_id, link_type="file", status="error",
-                error=f"HTTP download failed: {e}",
-            )
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    try:
+        resp = httpx.get(url, timeout=120, follow_redirects=True)
+    except Exception as e:
+        return DownloadResult(
+            file_id=file_id, link_type="file", status="error",
+            error=f"HTTP download failed: {e}",
+        )
 
-        step.set(http_status=resp.status_code)
-        if resp.status_code == 200:
-            content_type = resp.headers.get("content-type", "")
-            if "text/html" in content_type:
-                return DownloadResult(
-                    file_id=file_id, link_type="file", status="forbidden",
-                    error="File requires authentication (not publicly shared)",
-                )
-
-            name = known_name or "unknown"
-            safe_name = re.sub(r'[<>:"/\\|?*]', "_", name)
-            stem = Path(safe_name).stem
-            ext = Path(safe_name).suffix or ""
-            filename = f"{stem}__{file_id[:8]}{ext}"
-            output_path = output_dir / filename
-            output_path.write_bytes(resp.content)
-            step.set(result_status="ok", size_bytes=output_path.stat().st_size)
-            return DownloadResult(
-                file_id=file_id, link_type="file", status="ok",
-                output_path=str(output_path), title=name,
-            )
-        elif resp.status_code in (401, 403):
+    if resp.status_code == 200:
+        content_type = resp.headers.get("content-type", "")
+        if "text/html" in content_type:
             return DownloadResult(
                 file_id=file_id, link_type="file", status="forbidden",
-                error=f"Access denied (HTTP {resp.status_code})",
+                error="File requires authentication (not publicly shared)",
             )
-        elif resp.status_code == 404:
-            return DownloadResult(
-                file_id=file_id, link_type="file", status="not_found",
-                error="File not found (HTTP 404)",
-            )
-        else:
-            return DownloadResult(
-                file_id=file_id, link_type="file", status="error",
-                error=f"HTTP download failed with status {resp.status_code}",
-            )
+
+        name = known_name or "unknown"
+        safe_name = re.sub(r'[<>:"/\\|?*]', "_", name)
+        stem = Path(safe_name).stem
+        ext = Path(safe_name).suffix or ""
+        filename = f"{stem}__{file_id[:8]}{ext}"
+        output_path = output_dir / filename
+        output_path.write_bytes(resp.content)
+        return DownloadResult(
+            file_id=file_id, link_type="file", status="ok",
+            output_path=str(output_path), title=name,
+        )
+    elif resp.status_code in (401, 403):
+        return DownloadResult(
+            file_id=file_id, link_type="file", status="forbidden",
+            error=f"Access denied (HTTP {resp.status_code})",
+        )
+    elif resp.status_code == 404:
+        return DownloadResult(
+            file_id=file_id, link_type="file", status="not_found",
+            error="File not found (HTTP 404)",
+        )
+    else:
+        return DownloadResult(
+            file_id=file_id, link_type="file", status="error",
+            error=f"HTTP download failed with status {resp.status_code}",
+        )
 
 
 def get_file_info(file_id: str, link_type: str, account: str) -> dict | None:
@@ -285,90 +265,73 @@ def download_doc(
     known_title: str | None = None,
 ) -> DownloadResult:
     """Download a Google Doc/Slides/Sheets file."""
-    with step_timer(
-        logger,
-        "google.download_doc",
-        file_id=file_id,
-        link_type=link_type,
-        account=account,
-    ) as step:
-        # Check if gog has auth — if not, fall back to direct HTTP export
-        if not _gog_is_authed(account):
-            print(f"  [FALLBACK] gog not authenticated for {account}, trying direct HTTP export")
-            log_event(logger, "google.auth_fallback", account=account, mode="direct_export")
-            result = _direct_export_doc(file_id, link_type, output_dir, known_title)
-            step.set(result_status=result.status)
-            return result
+    # Check if gog has auth — if not, fall back to direct HTTP export
+    if not _gog_is_authed(account):
+        return _direct_export_doc(file_id, link_type, output_dir, known_title)
 
-        # Get file info first
-        info = get_file_info(file_id, link_type, account)
+    # Get file info first
+    info = get_file_info(file_id, link_type, account)
 
-        if info is None:
-            # Try direct HTTP fallback before giving up
-            print(f"  [FALLBACK] gog info failed, trying direct HTTP export")
-            log_event(logger, "google.info_fallback", file_id=file_id, link_type=link_type)
-            result = _direct_export_doc(file_id, link_type, output_dir, known_title)
-            step.set(result_status=result.status)
-            return result
+    if info is None:
+        # Try direct HTTP fallback before giving up
+        return _direct_export_doc(file_id, link_type, output_dir, known_title)
 
-        # Extract title
-        title = None
-        if link_type == "document":
-            title = info.get("document", {}).get("title") or info.get("file", {}).get("name")
-        elif link_type == "presentation":
-            title = info.get("file", {}).get("name")
-        elif link_type == "spreadsheets":
-            title = info.get("title")
+    # Extract title
+    title = None
+    if link_type == "document":
+        title = info.get("document", {}).get("title") or info.get("file", {}).get("name")
+    elif link_type == "presentation":
+        title = info.get("file", {}).get("name")
+    elif link_type == "spreadsheets":
+        title = info.get("title")
 
-        title = title or known_title or "untitled"
+    title = title or known_title or "untitled"
 
-        # Determine export format and command
-        export_format = EXPORT_FORMATS.get(link_type, "pdf")
-        slug = slugify(title)
-        filename = f"{slug}__{file_id[:10]}.{export_format}"
-        output_path = output_dir / filename
+    # Determine export format and command
+    export_format = EXPORT_FORMATS.get(link_type, "pdf")
+    slug = slugify(title)
+    filename = f"{slug}__{file_id[:10]}.{export_format}"
+    output_path = output_dir / filename
 
-        # Run export command
-        if link_type == "document":
-            cmd = ["docs", "export", file_id, "--format", export_format, "--output", str(output_path)]
-        elif link_type == "presentation":
-            cmd = ["slides", "export", file_id, "--format", export_format, "--output", str(output_path)]
-        elif link_type == "spreadsheets":
-            cmd = ["sheets", "export", file_id, "--format", export_format, "--output", str(output_path)]
-        else:
-            return DownloadResult(
-                file_id=file_id,
-                link_type=link_type,
-                status="error",
-                error=f"Unknown link type: {link_type}",
-            )
+    # Run export command
+    if link_type == "document":
+        cmd = ["docs", "export", file_id, "--format", export_format, "--output", str(output_path)]
+    elif link_type == "presentation":
+        cmd = ["slides", "export", file_id, "--format", export_format, "--output", str(output_path)]
+    elif link_type == "spreadsheets":
+        cmd = ["sheets", "export", file_id, "--format", export_format, "--output", str(output_path)]
+    else:
+        return DownloadResult(
+            file_id=file_id,
+            link_type=link_type,
+            status="error",
+            error=f"Unknown link type: {link_type}",
+        )
 
-        success, _stdout, stderr = run_gog(cmd, account)
+    success, _stdout, stderr = run_gog(cmd, account)
 
-        if success and output_path.exists():
-            step.set(result_status="ok", size_bytes=output_path.stat().st_size)
-            return DownloadResult(
-                file_id=file_id,
-                link_type=link_type,
-                status="ok",
-                output_path=str(output_path),
-                title=title,
-            )
-        else:
-            # Parse error type
-            status: Literal["ok", "forbidden", "not_found", "error", "skipped"] = "error"
-            if "403" in stderr or "forbidden" in stderr.lower() or "permission" in stderr.lower():
-                status = "forbidden"
-            elif "404" in stderr or "not found" in stderr.lower():
-                status = "not_found"
-            step.set(result_status=status)
-            return DownloadResult(
-                file_id=file_id,
-                link_type=link_type,
-                status=status,
-                title=title,
-                error=stderr.strip() or "Unknown error",
-            )
+    if success and output_path.exists():
+        return DownloadResult(
+            file_id=file_id,
+            link_type=link_type,
+            status="ok",
+            output_path=str(output_path),
+            title=title,
+        )
+    else:
+        # Parse error type
+        status: Literal["ok", "forbidden", "not_found", "error", "skipped"] = "error"
+        if "403" in stderr or "forbidden" in stderr.lower() or "permission" in stderr.lower():
+            status = "forbidden"
+        elif "404" in stderr or "not found" in stderr.lower():
+            status = "not_found"
+        return DownloadResult(
+            file_id=file_id,
+            link_type=link_type,
+            status=status,
+            title=title,
+            error=stderr.strip() or "Unknown error",
+        )
 
 
 def download_drive_file(
@@ -378,93 +341,77 @@ def download_drive_file(
     known_name: str | None = None,
 ) -> DownloadResult:
     """Download a file from Google Drive."""
-    with step_timer(logger, "google.download_drive_file", file_id=file_id, account=account) as step:
-        # Check if gog has auth — if not, fall back to direct HTTP
-        if not _gog_is_authed(account):
-            print(f"  [FALLBACK] gog not authenticated for {account}, trying direct HTTP download")
-            result = _direct_drive_file(file_id, output_dir, known_name)
-            step.set(result_status=result.status)
-            return result
+    # Check if gog has auth — if not, fall back to direct HTTP
+    if not _gog_is_authed(account):
+        return _direct_drive_file(file_id, output_dir, known_name)
 
-        # Get file info
-        success, stdout, stderr = run_gog(["drive", "get", file_id, "--json"], account)
+    # Get file info
+    success, stdout, stderr = run_gog(["drive", "get", file_id, "--json"], account)
 
-        if not success:
-            # Try direct HTTP fallback
-            print(f"  [FALLBACK] gog drive get failed, trying direct HTTP download")
-            direct_result = _direct_drive_file(file_id, output_dir, known_name)
-            if direct_result.status == "ok":
-                step.set(result_status=direct_result.status)
-                return direct_result
-            # Return original gog error if direct also failed
-            status: Literal["ok", "forbidden", "not_found", "error", "skipped"] = (
-                "not_found" if "404" in stderr else "error"
-            )
-            step.set(result_status=status)
-            return DownloadResult(
-                file_id=file_id,
-                link_type="file",
-                status=status,
-                error=stderr.strip(),
-            )
-
-        try:
-            info = json.loads(stdout)
-        except json.JSONDecodeError:
-            step.set(result_status="error")
-            return DownloadResult(
-                file_id=file_id,
-                link_type="file",
-                status="error",
-                error="Failed to parse file info",
-            )
-
-        name = info.get("name") or known_name or "unknown"
-        mime_type = info.get("mimeType", "")
-
-        # Check if it's a Google native format - need to export
-        if mime_type == "application/vnd.google-apps.document":
-            result = download_doc(file_id, "document", output_dir, account, known_title=name)
-            step.set(result_status=result.status)
-            return result
-        elif mime_type == "application/vnd.google-apps.presentation":
-            result = download_doc(file_id, "presentation", output_dir, account, known_title=name)
-            step.set(result_status=result.status)
-            return result
-        elif mime_type == "application/vnd.google-apps.spreadsheet":
-            result = download_doc(file_id, "spreadsheets", output_dir, account, known_title=name)
-            step.set(result_status=result.status)
-            return result
-
-        # Regular file - download directly, preserve original filename
-        safe_name = re.sub(r'[<>:"/\\|?*]', "_", name)  # Remove invalid chars
-        stem = Path(safe_name).stem
-        ext = Path(safe_name).suffix or ""
-        filename = f"{stem}__{file_id[:8]}{ext}"
-        output_path = output_dir / filename
-
-        success, _stdout, stderr = run_gog(
-            ["drive", "download", file_id, "--output", str(output_path)],
-            account,
+    if not success:
+        # Try direct HTTP fallback
+        direct_result = _direct_drive_file(file_id, output_dir, known_name)
+        if direct_result.status == "ok":
+            return direct_result
+        # Return original gog error if direct also failed
+        status: Literal["ok", "forbidden", "not_found", "error", "skipped"] = (
+            "not_found" if "404" in stderr else "error"
+        )
+        return DownloadResult(
+            file_id=file_id,
+            link_type="file",
+            status=status,
+            error=stderr.strip(),
         )
 
-        if success and output_path.exists():
-            step.set(result_status="ok", size_bytes=output_path.stat().st_size)
-            return DownloadResult(
-                file_id=file_id,
-                link_type="file",
-                status="ok",
-                output_path=str(output_path),
-                title=name,
-            )
-        else:
-            step.set(result_status="error")
-            return DownloadResult(
-                file_id=file_id,
-                link_type="file",
-                status="error",
-                error=stderr.strip() or "Download failed",
-            )
+    try:
+        info = json.loads(stdout)
+    except json.JSONDecodeError:
+        return DownloadResult(
+            file_id=file_id,
+            link_type="file",
+            status="error",
+            error="Failed to parse file info",
+        )
+
+    name = info.get("name") or known_name or "unknown"
+    mime_type = info.get("mimeType", "")
+
+    # Check if it's a Google native format - need to export
+    if mime_type == "application/vnd.google-apps.document":
+        return download_doc(file_id, "document", output_dir, account, known_title=name)
+    elif mime_type == "application/vnd.google-apps.presentation":
+        return download_doc(file_id, "presentation", output_dir, account, known_title=name)
+    elif mime_type == "application/vnd.google-apps.spreadsheet":
+        return download_doc(file_id, "spreadsheets", output_dir, account, known_title=name)
+
+    # Regular file - download directly, preserve original filename
+    safe_name = re.sub(r'[<>:"/\\|?*]', "_", name)  # Remove invalid chars
+    stem = Path(safe_name).stem
+    ext = Path(safe_name).suffix or ""
+    filename = f"{stem}__{file_id[:8]}{ext}"
+    output_path = output_dir / filename
+
+    success, _stdout, stderr = run_gog(
+        ["drive", "download", file_id, "--output", str(output_path)],
+        account,
+    )
+
+    if success and output_path.exists():
+        return DownloadResult(
+            file_id=file_id,
+            link_type="file",
+            status="ok",
+            output_path=str(output_path),
+            title=name,
+        )
+    else:
+        return DownloadResult(
+            file_id=file_id,
+            link_type="file",
+            status="error",
+            error=stderr.strip() or "Download failed",
+        )
 
 
 def _direct_drive_folder(
@@ -496,106 +443,83 @@ def download_folder(
     parent_path: str = "",
 ) -> list[DownloadResult]:
     """Recursively download a Google Drive folder."""
-    with step_timer(
-        logger,
-        "google.download_folder",
-        folder_id=folder_id,
-        account=account,
-        depth=depth,
-        max_depth=max_depth,
-    ) as step:
-        results: list[DownloadResult] = []
+    results: list[DownloadResult] = []
 
-        if depth > max_depth:
-            print(f"  {'  ' * depth}Max depth reached, skipping subfolder")
-            step.set(result_status="max_depth_reached", item_count=0)
-            return results
-
-        # Check gog auth for folder listing (no HTTP fallback available)
-        if not _gog_is_authed(account):
-            print(f"  [FALLBACK] gog not authenticated, cannot list Drive folder")
-            direct_results = _direct_drive_folder(folder_id, output_dir)
-            step.set(result_status="fallback_error", item_count=len(direct_results))
-            return direct_results
-
-        # List folder contents
-        success, stdout, stderr = run_gog(
-            ["drive", "ls", "--parent", folder_id, "--json"],
-            account,
-        )
-
-        if not success:
-            results.append(
-                DownloadResult(
-                    file_id=folder_id,
-                    link_type="folder",
-                    status="error",
-                    error=stderr.strip() or "Failed to list folder",
-                )
-            )
-            step.set(result_status="error", item_count=len(results))
-            return results
-
-        try:
-            data = json.loads(stdout)
-            files = data.get("files", [])
-        except json.JSONDecodeError:
-            results.append(
-                DownloadResult(
-                    file_id=folder_id,
-                    link_type="folder",
-                    status="error",
-                    error="Failed to parse folder listing",
-                )
-            )
-            step.set(result_status="error", item_count=len(results))
-            return results
-
-        for item in files:
-            item_id = item.get("id", "")
-            item_name = item.get("name", "unknown")
-            mime_type = item.get("mimeType", "")
-
-            item_path = f"{parent_path}/{item_name}" if parent_path else item_name
-            indent = "  " * (depth + 1)
-            result = None
-
-            if mime_type == "application/vnd.google-apps.folder":
-                # Recurse into subfolder
-                print(f"{indent}📁 {item_name}/")
-                subfolder_dir = output_dir / slugify(item_name)
-                subfolder_dir.mkdir(parents=True, exist_ok=True)
-                sub_results = download_folder(
-                    item_id,
-                    subfolder_dir,
-                    account,
-                    depth=depth + 1,
-                    max_depth=max_depth,
-                    parent_path=item_path,
-                )
-                results.extend(sub_results)
-
-            elif mime_type == "application/vnd.google-apps.document":
-                print(f"{indent}📄 {item_name} (doc)")
-                result = download_doc(item_id, "document", output_dir, account, known_title=item_name)
-                results.append(result)
-
-            elif mime_type == "application/vnd.google-apps.presentation":
-                print(f"{indent}📊 {item_name} (slides)")
-                result = download_doc(item_id, "presentation", output_dir, account, known_title=item_name)
-                results.append(result)
-
-            elif mime_type == "application/vnd.google-apps.spreadsheet":
-                print(f"{indent}📈 {item_name} (sheet)")
-                result = download_doc(item_id, "spreadsheets", output_dir, account, known_title=item_name)
-                results.append(result)
-
-            else:
-                # Regular file
-                print(f"{indent}📎 {item_name}")
-                result = download_drive_file(item_id, output_dir, account, known_name=item_name)
-                results.append(result)
-
-        ok_count = len([r for r in results if r.status == "ok"])
-        step.set(result_status="ok", item_count=len(results), ok_count=ok_count)
+    if depth > max_depth:
         return results
+
+    # Check gog auth for folder listing (no HTTP fallback available)
+    if not _gog_is_authed(account):
+        return _direct_drive_folder(folder_id, output_dir)
+
+    # List folder contents
+    success, stdout, stderr = run_gog(
+        ["drive", "ls", "--parent", folder_id, "--json"],
+        account,
+    )
+
+    if not success:
+        results.append(
+            DownloadResult(
+                file_id=folder_id,
+                link_type="folder",
+                status="error",
+                error=stderr.strip() or "Failed to list folder",
+            )
+        )
+        return results
+
+    try:
+        data = json.loads(stdout)
+        files = data.get("files", [])
+    except json.JSONDecodeError:
+        results.append(
+            DownloadResult(
+                file_id=folder_id,
+                link_type="folder",
+                status="error",
+                error="Failed to parse folder listing",
+            )
+        )
+        return results
+
+    for item in files:
+        item_id = item.get("id", "")
+        item_name = item.get("name", "unknown")
+        mime_type = item.get("mimeType", "")
+
+        if mime_type == "application/vnd.google-apps.folder":
+            subfolder_dir = output_dir / slugify(item_name)
+            subfolder_dir.mkdir(parents=True, exist_ok=True)
+            sub_path = f"{parent_path}/{item_name}" if parent_path else item_name
+            sub_results = download_folder(
+                item_id,
+                subfolder_dir,
+                account,
+                depth=depth + 1,
+                max_depth=max_depth,
+                parent_path=sub_path,
+            )
+            results.extend(sub_results)
+
+        elif mime_type == "application/vnd.google-apps.document":
+            results.append(
+                download_doc(item_id, "document", output_dir, account, known_title=item_name)
+            )
+
+        elif mime_type == "application/vnd.google-apps.presentation":
+            results.append(
+                download_doc(item_id, "presentation", output_dir, account, known_title=item_name)
+            )
+
+        elif mime_type == "application/vnd.google-apps.spreadsheet":
+            results.append(
+                download_doc(item_id, "spreadsheets", output_dir, account, known_title=item_name)
+            )
+
+        else:
+            results.append(
+                download_drive_file(item_id, output_dir, account, known_name=item_name)
+            )
+
+    return results
