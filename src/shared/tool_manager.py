@@ -900,7 +900,7 @@ class ToolManager:
         import time as _time
 
         t0 = _time.monotonic()
-        log.info("tool_call_started", tool_name=tool_name, method_name=method_name)
+        log.info("tool_call_started", tool_name=tool_name, tool_method=method_name)
 
         token = set_tool_context(method.ctx)
         try:
@@ -913,7 +913,7 @@ class ToolManager:
             log.info(
                 "tool_call_completed",
                 tool_name=tool_name,
-                method_name=method_name,
+                tool_method=method_name,
                 duration_ms=duration_ms,
                 success=True,
             )
@@ -925,7 +925,7 @@ class ToolManager:
             log.warning(
                 "tool_call_completed",
                 tool_name=tool_name,
-                method_name=method_name,
+                tool_method=method_name,
                 duration_ms=duration_ms,
                 success=False,
                 error=f"sys.exit({e.code})",
@@ -942,7 +942,7 @@ class ToolManager:
             log.warning(
                 "tool_call_completed",
                 tool_name=tool_name,
-                method_name=method_name,
+                tool_method=method_name,
                 duration_ms=duration_ms,
                 success=False,
                 error=str(e),
