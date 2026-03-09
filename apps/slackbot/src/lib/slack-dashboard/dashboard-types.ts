@@ -1,4 +1,4 @@
-export type CellFormat = "currency" | "percent" | "number" | "date" | "text";
+export type CellFormat = "currency" | "compact-currency" | "percent" | "number" | "date" | "text";
 
 export type ColumnDef = {
   key: string;
