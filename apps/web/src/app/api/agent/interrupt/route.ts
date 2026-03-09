@@ -1,6 +1,6 @@
 /** Proxy POST /api/agent/interrupt -> FastAPI /pipe/stop */
 
-import { resilientFetch, API_URL, ApiError } from "@/lib/bot/api-client";
+import { resilientFetch, API_URL, ApiError } from "@/lib/api-client";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";

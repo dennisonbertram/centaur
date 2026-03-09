@@ -18,7 +18,7 @@ import {
   parseJsonEventStream,
 } from "ai";
 import type { UIMessage } from "ai";
-import { resilientFetch, API_URL, ApiError } from "@/lib/bot/api-client";
+import { resilientFetch, API_URL, ApiError } from "@/lib/api-client";
 import {
   harnessEventToUiChunks,
   createConversionState,

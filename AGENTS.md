@@ -91,7 +91,8 @@ ai_v2/
 │   ├── auth/             # Starlette password-session auth sidecar (:4000)
 │   └── firewall/         # mitmproxy addon — credential injection proxy
 ├── apps/
-│   └── slackbot/         # Next.js — Bolt event listener + thread viewer UI (pnpm)
+│   ├── slackbot/         # Next.js — Slack Bolt event listener (pnpm)
+│   └── web/              # Next.js — Thread viewer UI, dashboards, portfolio (pnpm)
 ├── sandbox/
 │   ├── Dockerfile        # Agent container image (Ubuntu 24.04 + uv + gh + node + amp)
 │   ├── entrypoint.sh     # Writes harness configs, signals readiness
@@ -171,7 +172,7 @@ Sandbox containers never see real API keys. The firewall (`services/firewall/add
 - On API restart: `recover_sessions()` reconciles Postgres state with live Docker containers
 - Containers discoverable via Docker labels even if DB is out of sync
 
-## Thread Viewer (apps/slackbot)
+## Thread Viewer (apps/web)
 
 Next.js app serving the agent conversation UI:
 - Root `/` = thread list, `/[id]` = thread detail (route group `(threads)`)
@@ -191,6 +192,7 @@ All deploys happen automatically via GitHub Actions on merge to `main`. **Never 
 | `src/**` | `docker compose up -d --build api` |
 | `src/etl/` or `src/shared/` | `docker compose up -d --build etl` |
 | `apps/slackbot/**` | `docker compose up -d --build slackbot` |
+| `apps/web/**` | `docker compose up -d --build web` |
 | `sandbox/**` | `docker build -t agent2:latest sandbox/` |
 | `Dockerfile`, `pyproject.toml`, `uv.lock`, `docker-compose.yml`, `migrations/` | Rebuild API + ETL |
 

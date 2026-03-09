@@ -1,24 +1,23 @@
-# Slackbot — Thread Viewer & Design System
+# Web — Thread Viewer & Design System
 
 ## Local Development
 
-**Run the slackbot natively on the host** — never rebuild the Docker container for UI dev. Stop the container and use `pnpm dev` directly:
+**Run the web app natively on the host** — never rebuild the Docker container for UI dev. Stop the container and use `pnpm dev` directly:
 
 ```bash
 # From repo root
-docker stop ai_v2-slackbot-1
+docker stop ai_v2-web-1
 
 # Run natively (uses hosted API for backend data)
-cd apps/slackbot
+cd apps/web
 source ../../.env
 AI_V2_API_URL=https://svc-ai.paradigm.xyz \
 AI_V2_API_KEY="$API_SECRET_KEY" \
 DATABASE_URL="postgresql://tempo:tempo_dev@localhost:5432/ai_v2" \
-REDIS_URL="redis://localhost:6379" \
 pnpm dev --port 3001
 ```
 
-The rest of the stack (postgres, redis, api, etc.) still runs in Docker. Only the slackbot runs on the host for instant HMR. Access the UI at `http://localhost:3001`.
+The rest of the stack (postgres, api, etc.) still runs in Docker. Only the web app runs on the host for instant HMR. Access the UI at `http://localhost:3001`.
 
 To point at the **local** API instead of hosted, use `AI_V2_API_URL=http://localhost:8000`.
 
@@ -94,18 +93,6 @@ Historical threads load from Postgres immediately; SSE connects only if the thre
 3. If `running`/`working` → connects SSE via `useChat().resumeStream()`
 4. If `stopped`/`idle` → no SSE, pure Postgres rendering
 
-### Slack ↔ Thread Viewer Duality
-
-The bot path (`bot.ts`) and thread viewer path (`/api/agent/execute/route.ts`) both call the same Python API endpoint but handle results differently:
-
-| Aspect | Slack (bot.ts) | Thread Viewer (route.ts) |
-|--------|---------------|------------------------|
-| Calls | `execute()` from `harness.ts` | `resilientFetch()` to Python API |
-| Gets back | Plain text result | Raw NDJSON SSE stream |
-| Renders | `toSlackMessage()` → Slack blocks | `canonicalEventToStreamChunks()` → AI SDK |
-| Persists | `chat_messages` (user + assistant text) | Same `chat_messages` + streaming parts |
-| Follow-ups | `executeWithBusyRetries()` | Client-side via `useChat()` |
-
 ## Technical Conventions
 
 ### Libraries (DO NOT add alternatives)
@@ -113,7 +100,6 @@ The bot path (`bot.ts`) and thread viewer path (`/api/agent/execute/route.ts`) b
 - **Package manager**: `pnpm` only — single lockfile `pnpm-lock.yaml`
 - **Styling**: Tailwind CSS v4 — no CSS modules, no styled-components
 - **Components**: shadcn/ui + Radix UI primitives
-- **Chat SDK**: Vercel AI SDK v6 (`ai` package) — `useChat`, `UIMessage`, `createUIMessageStream`
 - **Diffs**: `@pierre/diffs` for file and diff rendering
 - **Charts**: Recharts (via dashboard components)
 - **Virtualization**: `@tanstack/react-virtual` (sidebar), `use-stick-to-bottom` (chat scroll)
@@ -144,13 +130,9 @@ The bot path (`bot.ts`) and thread viewer path (`/api/agent/execute/route.ts`) b
 
 | File | Purpose |
 |------|---------|
-| `harness.ts` | `execute()`, flag parsing (`extractRunOptions`), thread context |
-| `bot.ts` | Slack event handling, harness selection, thread history |
-| `modes/common.ts` | `executeWithBusyRetries()` — retry on "already in progress" |
+| `api-client.ts` | `resilientFetch()`, `apiPost()`, `apiGet()` — API communication with retry |
 | `normalize-harness-event.ts` | Raw JSON → CanonicalEvent (ported from Python) |
 | `harness-to-ui-chunks.ts` | CanonicalEvent → AI SDK StreamChunks |
-| `slack-post.ts` | `postRichReplyToSlack()` — formats and posts to Slack |
-| `slack-blocks.ts` | Markdown → Slack block kit formatting |
 | `dashboard-parser.ts` | Parses LLM text output into DashboardSpec |
 | `types.ts` | ThreadSummary, Participant, and other shared types |
 | `thread-selectors.ts` | Pure functions for deriving display state from thread data |

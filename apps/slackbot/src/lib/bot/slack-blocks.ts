@@ -1,5 +1,5 @@
-import { formatValue } from "@/components/dashboard/format-value";
-import { extractDashboardBlocks } from "@/lib/viewer/dashboard-parser";
+import { formatValue } from "@/lib/slack-dashboard/format-value";
+import { extractDashboardBlocks } from "@/lib/slack-dashboard/dashboard-parser";
 import type {
   BarChartProps,
   DashboardSpec,
@@ -7,7 +7,7 @@ import type {
   KPICardProps,
   LineChartProps,
   PieChartProps,
-} from "@/lib/viewer/dashboard-types";
+} from "@/lib/slack-dashboard/dashboard-types";
 
 const MAX_MARKDOWN_TEXT = 3_800;
 const MAX_FALLBACK_TEXT = 4_000;

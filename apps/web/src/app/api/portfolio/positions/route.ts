@@ -4,7 +4,7 @@
  * enriched with latest CoinGecko prices. Results are cached for 5 min.
  */
 
-import { resilientFetch, API_URL, ApiError } from "@/lib/bot/api-client";
+import { resilientFetch, API_URL, ApiError } from "@/lib/api-client";
 import { decode } from "@toon-format/toon";
 
 export const dynamic = "force-dynamic";

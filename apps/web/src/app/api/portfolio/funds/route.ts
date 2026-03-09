@@ -1,6 +1,6 @@
 /** GET /api/portfolio/funds -> POST /tools/paradigmdb/db_query (list fund names) */
 
-import { resilientFetch, API_URL, ApiError } from "@/lib/bot/api-client";
+import { resilientFetch, API_URL, ApiError } from "@/lib/api-client";
 import { decode } from "@toon-format/toon";
 
 export const dynamic = "force-dynamic";

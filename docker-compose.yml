@@ -147,7 +147,6 @@ services:
       AI_V2_API_URL: http://api:8000
       SECRET_MANAGER_URL: http://secrets:8100
       DATABASE_URL: postgresql://tempo:tempo_dev@postgres:5432/ai_v2
-      PIPE_API_URL: http://api:8000
       SECRET_MANAGER_TOKEN: ${SECRET_MANAGER_TOKEN:-}
     networks:
       - default
@@ -158,6 +157,28 @@ services:
       api:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      secrets:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: apps/web
+    environment:
+      AI_V2_API_URL: http://api:8000
+      SECRET_MANAGER_URL: http://secrets:8100
+      DATABASE_URL: postgresql://tempo:tempo_dev@postgres:5432/ai_v2
+      SECRET_MANAGER_TOKEN: ${SECRET_MANAGER_TOKEN:-}
+    ports:
+      - "127.0.0.1:3001:3001"
+    networks:
+      - default
+      - secrets_net
+      - app_net
+      - data_net
+    depends_on:
+      api:
         condition: service_healthy
       secrets:
         condition: service_healthy
@@ -186,6 +207,7 @@ services:
       - auth
       - api
       - slackbot
+      - web
       - grafana
     networks:
       - default
@@ -202,13 +224,14 @@ services:
       GF_AUTH_PROXY_ENABLED: "true"
       GF_AUTH_PROXY_HEADER_NAME: X-Forwarded-User
       GF_AUTH_PROXY_AUTO_SIGN_UP: "true"
+      GF_INSTALL_PLUGINS: victoriametrics-logs-datasource
     volumes:
       - grafanadata:/var/lib/grafana
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
     depends_on:
       - prometheus
-      - loki
+      - victorialogs
     networks:
       - default
       - obs_net
@@ -224,11 +247,13 @@ services:
       - obs_net
     restart: unless-stopped
 
-  loki:
-    image: grafana/loki:latest
+  victorialogs:
+    image: docker.io/victoriametrics/victoria-logs:latest
+    command:
+      - -storageDataPath=/victoria-logs-data
+      - -retentionPeriod=7d
     volumes:
-      - ./monitoring/loki.yml:/etc/loki/local-config.yaml:ro
-      - lokidata:/loki
+      - vldata:/victoria-logs-data
     networks:
       - default
       - obs_net
@@ -240,7 +265,7 @@ services:
       - ./monitoring/promtail.yml:/etc/promtail/config.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
-      - loki
+      - victorialogs
     networks:
       - default
       - obs_net
@@ -257,9 +282,9 @@ volumes:
   prometheusdata:
     external: true
     name: ai_v2_prometheusdata
-  lokidata:
+  vldata:
     external: true
-    name: ai_v2_lokidata
+    name: ai_v2_vldata
   firewall-certs:
     external: true
     name: ai_v2_firewall-certs

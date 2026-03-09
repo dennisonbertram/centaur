@@ -1,5 +1,5 @@
 {
-  "name": "paradigm-slackbot",
+  "name": "paradigm-web",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.28.1",
@@ -11,9 +11,6 @@
   },
   "dependencies": {
     "@ai-sdk/react": "^3.0.107",
-    "@chat-adapter/slack": "4.18.0",
-    "@chat-adapter/state-memory": "4.18.0",
-    "@chat-adapter/state-redis": "4.18.0",
     "@pierre/diffs": "^1.0.11",
     "@radix-ui/react-scroll-area": "^1.2.10",
     "@radix-ui/react-use-controllable-state": "^1.2.2",
@@ -29,7 +26,6 @@
     "ai": "^6.0.105",
     "ansi-to-react": "^6.2.6",
     "autoprefixer": "10.4.27",
-    "chat": "4.18.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "^1.1.1",
@@ -51,7 +47,6 @@
     "react-jsx-parser": "^2.4.1",
     "react-resizable": "^3.1.3",
     "recharts": "^3.7.0",
-    "redis": "4.7.0",
     "shiki": "^3.23.0",
     "sonner": "^2.0.7",
     "streamdown": "^2.3.0",
@@ -74,11 +69,5 @@
     "eslint-plugin-tailwindcss": "4.0.0-beta.0",
     "typescript": "5.9.3"
   },
-  "pnpm": {
-    "patchedDependencies": {
-      "chat@4.18.0": "patches/chat@4.18.0.patch",
-      "@chat-adapter/state-redis@4.18.0": "patches/@chat-adapter__state-redis@4.18.0.patch",
-      "@chat-adapter/state-memory@4.18.0": "patches/@chat-adapter__state-memory@4.18.0.patch"
-    }
-  }
+  "pnpm": {}
 }

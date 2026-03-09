@@ -1,7 +1,7 @@
 /** /api/threads/detail?key=... — thread detail from Postgres + pipe status enrichment */
 
 import { getPool } from "@/lib/db";
-import { resilientFetch, API_URL } from "@/lib/bot/api-client";
+import { resilientFetch, API_URL } from "@/lib/api-client";
 import type { Harness, ThreadDetail, ThreadState } from "@/lib/types";
 
 export const dynamic = "force-dynamic";

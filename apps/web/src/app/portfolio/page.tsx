@@ -1,4 +1,4 @@
-import { resilientFetch, API_URL, ApiError } from "@/lib/bot/api-client";
+import { resilientFetch, API_URL, ApiError } from "@/lib/api-client";
 import { decode } from "@toon-format/toon";
 import { PortfolioClient } from "./portfolio-client";
 import type { Position } from "./types";
