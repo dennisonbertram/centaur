@@ -139,6 +139,17 @@ class TestMethodFiltering:
         self.injector.request(flow)
         assert flow.response is None
 
+    def test_post_allowed_for_ampcode_provider_rewrite(self):
+        """ampcode.com POSTs are rewritten to LLM hosts, not blocked by method filter."""
+        flow = _make_flow(
+            method="POST",
+            host="ampcode.com",
+            path="/api/provider/anthropic/v1/messages",
+        )
+        self.injector.request(flow)
+        assert flow.response is None
+        assert flow.request.host == "api.anthropic.com"
+
     def test_post_allowed_for_unrestricted_host(self):
         self.addon.UNRESTRICTED_METHOD_HOSTS = frozenset({"custom-api.example.com"})
         flow = _make_flow(method="POST", host="custom-api.example.com")

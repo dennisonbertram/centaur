@@ -46,6 +46,13 @@ _DEFAULT_INJECTION_HOSTS = (
     "generativelanguage.googleapis.com,"
     "api.x.ai"
 )
+
+# Hosts that need POST/PUT/DELETE but don't get secret injection.
+# These are essential sandbox services (git, GitHub API).
+_DEFAULT_UNRESTRICTED_METHOD_HOSTS = (
+    "github.com,"
+    "api.github.com"
+)
 SECRET_INJECTION_HOSTS: frozenset[str] = frozenset(
     h.strip().lower()
     for h in os.environ.get(
@@ -71,7 +78,7 @@ SENSITIVE_INBOUND_HEADERS: frozenset[str] = frozenset(
 UNRESTRICTED_METHOD_HOSTS: frozenset[str] = frozenset(
     h.strip().lower()
     for h in os.environ.get(
-        "FIREWALL_UNRESTRICTED_METHOD_HOSTS", ""
+        "FIREWALL_UNRESTRICTED_METHOD_HOSTS", _DEFAULT_UNRESTRICTED_METHOD_HOSTS
     ).split(",")
     if h.strip()
 )
