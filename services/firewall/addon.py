@@ -346,6 +346,38 @@ class CredentialInjector:
                     self.send_response(404)
                     self.end_headers()
 
+            def do_POST(self) -> None:
+                if self.path == "/injection-map":
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = self.rfile.read(length) if length else b""
+                    try:
+                        data = json.loads(body.decode())
+                        new_map: dict[str, set[str]] = {}
+                        for host_pattern, key_list in data.items():
+                            new_map[host_pattern] = set(key_list)
+                        with parent._injection_map_lock:
+                            parent._injection_map = new_map
+                        log.info(
+                            "injection_map_pushed",
+                            extra={
+                                "event": "injection_map_pushed",
+                                "host_count": len(new_map),
+                                "key_count": sum(len(v) for v in new_map.values()),
+                            },
+                        )
+                        self.send_response(200)
+                        self.send_header("Content-Type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"status": "ok"}).encode())
+                    except Exception as e:
+                        self.send_response(400)
+                        self.send_header("Content-Type", "application/json")
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"error": str(e)}).encode())
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
             def log_message(self, fmt: str, *args: object) -> None:
                 pass
 

@@ -106,8 +106,35 @@ async def _watch_tools(pm: ToolManager) -> None:
         try:
             result = await run_in_threadpool(pm.reload)
             log.info("tools_auto_reloaded", **result)
+            await _push_injection_map()
         except Exception as e:
             log.error("tool_auto_reload_failed", error=str(e))
+
+
+async def _push_injection_map() -> None:
+    """Push the tool injection map to the firewall on startup.
+
+    The API depends on the firewall (service_healthy), so the firewall is
+    guaranteed to be up.  This eliminates the race condition where the
+    firewall polls the API for the map before the API is ready.
+    """
+    firewall_url = os.environ.get("FIREWALL_HEALTH_URL", "http://firewall:8081")
+    injection_map = tool_manager.build_injection_map()
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{firewall_url}/injection-map",
+                json=injection_map,
+                timeout=5,
+            )
+            resp.raise_for_status()
+        log.info(
+            "injection_map_pushed",
+            hosts=len(injection_map),
+            keys=sum(len(v) for v in injection_map.values()),
+        )
+    except Exception:
+        log.warning("injection_map_push_failed", exc_info=True)
 
 
 @asynccontextmanager
@@ -116,6 +143,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     svc_keys_result = await ensure_service_keys(app.state.db_pool)
     log.info("service_keys_ensured", **svc_keys_result)
     _warm_tool_caches()
+    await _push_injection_map()
     result = await recover_sessions()
     log.info("pipe_sessions_recovered", **result)
     watcher_task = asyncio.create_task(_watch_tools(tool_manager))
