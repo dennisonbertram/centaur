@@ -152,7 +152,7 @@ class SigmaClient:
 
         token = jwt.encode(claims, embed_secret, algorithm="HS256")
 
-        base_embed_url = os.environ.get(
+        base_embed_url = os.environ.get(  # noqa: TID251
             "SIGMA_EMBED_BASE_URL", "https://app.sigmacomputing.com/embed"
         )
         return f"{base_embed_url}/{workbook_id}?:jwt={token}"

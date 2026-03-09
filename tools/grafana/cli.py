@@ -5,6 +5,7 @@ import json
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
+
 from shared.cli_tables import Table
 
 load_dotenv()
@@ -146,38 +147,34 @@ def query_prometheus(
                 console.print(f"  {v[0]} → {v[1]}")
 
 
-@app.command("loki")
-def query_loki(
-    query: str = typer.Argument(..., help="LogQL expression"),
-    datasource: str = typer.Option("loki", "--ds", help="Datasource UID"),
+@app.command("vlogs")
+def query_victorialogs(
+    query: str = typer.Argument(..., help="LogsQL expression"),
+    datasource: str = typer.Option("victorialogs", "--ds", help="Datasource UID"),
     start: str = typer.Option(None, "--start", "-s", help="Range start"),
     end: str = typer.Option(None, "--end", "-e", help="Range end"),
     limit: int = typer.Option(100, "--limit", "-n", help="Max log lines"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
-    """Run a LogQL query via datasource proxy."""
+    """Run a LogsQL query via VictoriaLogs datasource proxy."""
     client = get_client()
-    result = client.query_loki(
+    results = client.query_victorialogs(
         query=query, datasource_uid=datasource, start=start, end=end, limit=limit
     )
 
     if json_output:
-        print(json.dumps(result, indent=2))
+        print(json.dumps(results, indent=2))
         return
 
-    data = result.get("data", {})
-    streams = data.get("result", [])
-
-    if not streams:
+    if not results:
         console.print("[yellow]No results[/]")
         return
 
-    for stream in streams:
-        labels = stream.get("stream", {})
-        label_str = ", ".join(f"{k}={v}" for k, v in labels.items())
-        console.print(f"[cyan]--- {label_str} ---[/]")
-        for ts, line in stream.get("values", [])[-20:]:
-            console.print(f"  {line}")
+    for entry in results:
+        msg = entry.get("_msg", "")
+        stream = entry.get("_stream", "")
+        time = entry.get("_time", "")
+        console.print(f"[dim]{time}[/] [cyan]{stream}[/] {msg}")
 
 
 @app.command("alerts")

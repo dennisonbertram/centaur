@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 import jwt
+from shared.tool_sdk import secret
 
 BASE_URL = "https://openbanking.jpmorgan.com"
 OAUTH_TOKEN_URL = "https://idag2.jpmorganchase.com/adfs/oauth2/token/"
@@ -27,7 +28,7 @@ class JPMClient:
         raw_key = private_key or secret("JPM_API_PRIVATE_KEY", "") or ""
         self._private_key = raw_key.replace("\\n", "\n")
 
-        raw_ids = os.getenv("JPM_API_ACCOUNT_IDS") or ""
+        raw_ids = secret("JPM_API_ACCOUNT_IDS", "")
         self._account_ids = account_ids or [
             a.strip() for a in raw_ids.split(",") if a.strip()
         ]

@@ -259,7 +259,7 @@ class Database:
         3. Start a new gcloud SSH tunnel (requires gcloud CLI — local dev only)
         """
         if self._conn is None or self._conn.closed:
-            direct_dsn = os.getenv("RESHIFT_DB_DSN")
+            direct_dsn = os.getenv("RESHIFT_DB_DSN")  # noqa: TID251
             if direct_dsn:
                 self._conn = psycopg.connect(
                     direct_dsn, row_factory=dict_row, autocommit=True

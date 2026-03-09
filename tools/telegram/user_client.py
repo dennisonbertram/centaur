@@ -4,14 +4,15 @@ import os
 from pathlib import Path
 from typing import Any
 
+from shared.tool_sdk import secret
 from telethon import TelegramClient as TelethonClient
 from telethon.tl.types import Channel, Chat, User, Message
 
 
 def get_api_credentials() -> tuple[int, str]:
     """Get Telegram API credentials from environment."""
-    api_id = os.getenv("TELEGRAM_API_ID")
-    api_hash = os.getenv("TELEGRAM_API_HASH")
+    api_id = secret("TELEGRAM_API_ID", "")
+    api_hash = secret("TELEGRAM_API_HASH", "")
 
     if not api_id or not api_hash:
         raise RuntimeError(

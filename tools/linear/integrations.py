@@ -8,21 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from dotenv import load_dotenv
-
-# Load env files (don't override existing vars)
-_cli_dir = Path(__file__).parent.parent.parent
-_repo_root = _cli_dir.parent.parent
-
-# Load Linear API key from linear/.env or repo root
-for _env in [_cli_dir / ".env", _repo_root / ".env"]:
-    if _env.exists():
-        load_dotenv(_env, override=False)
-
-# Load Slack token from paradigm-slack/.env (separate from bot tokens)
-_slack_env = _repo_root / "cli" / "paradigm-slack" / ".env"
-if _slack_env.exists():
-    load_dotenv(_slack_env, override=False)
+from shared.tool_sdk import secret
 
 
 def _get_gh_token() -> str | None:
@@ -45,7 +31,7 @@ class GitHubClient:
     """Simple GitHub API client for searching PRs and commits."""
 
     def __init__(self, token: str | None = None):
-        self.token = token or os.getenv("GITHUB_TOKEN") or _get_gh_token()
+        self.token = token or secret("GITHUB_TOKEN", "") or _get_gh_token()
         headers = {"Accept": "application/vnd.github+json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
@@ -126,7 +112,7 @@ class SlackSearchClient:
         if self._client is not None:
             return self._client
 
-        token = os.getenv("SLACK_BOT_TOKEN")
+        token = secret("SLACK_BOT_TOKEN", "")
         if not token:
             return None
 

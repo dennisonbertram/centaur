@@ -66,7 +66,7 @@ class PostHogClient:
         """Get API host."""
         if self._host:
             return self._host
-        return os.getenv("POSTHOG_HOST", "us.posthog.com")
+        return os.getenv("POSTHOG_HOST", "us.posthog.com")  # noqa: TID251
 
     @property
     def base_url(self) -> str:

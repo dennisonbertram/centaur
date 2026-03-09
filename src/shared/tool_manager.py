@@ -221,43 +221,6 @@ def _install_deps(deps: list[str]) -> None:
     subprocess.run(cmd, check=True, capture_output=True)
 
 
-def _fetch_backend_secrets() -> dict[str, str]:
-    """Bulk-fetch all secrets from the pluggable secret backend.
-
-    Returns an empty dict if the backend is unavailable (e.g. no
-    ``SECRET_MANAGER_URL`` configured or the sidecar is down).
-    """
-    try:
-        from secret_backends.registry import get_backend
-
-        backend = get_backend()
-
-        import asyncio
-        import concurrent.futures
-
-        async def _list():
-            return await backend.list_keys()
-
-        try:
-            asyncio.get_running_loop()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                keys = pool.submit(asyncio.run, _list()).result(timeout=10)
-        except RuntimeError:
-            keys = asyncio.run(_list())
-
-        secrets: dict[str, str] = {}
-        for key in keys:
-            val = backend.get_sync(key)
-            if val is not None:
-                secrets[key] = val
-        if secrets:
-            log.info("loaded_backend_secrets", count=len(secrets))
-        return secrets
-    except Exception:
-        log.debug("failed to fetch secrets from backend", exc_info=True)
-        return {}
-
-
 def load_plugins_config(config_path: Path) -> list[Path]:
     """Read a tools.toml and return resolved plugin directory paths.
 

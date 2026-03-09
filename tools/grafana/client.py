@@ -1,16 +1,18 @@
 """Grafana HTTP API client for dashboards, datasource queries, alerts, and annotations."""
 
+import json as _json
 import os
 from typing import Any
 
 import httpx
+
 from shared.tool_sdk import secret
 
 
 class GrafanaClient:
     """Client for the Grafana HTTP API.
 
-    Supports dashboard search, Prometheus/Loki datasource proxy queries,
+    Supports dashboard search, Prometheus/VictoriaLogs datasource proxy queries,
     alert rules, and annotations. Authenticates via service-account token
     (GRAFANA_API_KEY) or basic auth (GRAFANA_USER / GRAFANA_PASSWORD).
     """
@@ -38,7 +40,7 @@ class GrafanaClient:
         key = self._api_key or secret("GRAFANA_API_KEY", "")
         if key:
             return {"Authorization": f"Bearer {key}"}
-        user = self._username or os.getenv("GRAFANA_USER", "admin")
+        user = self._username or os.getenv("GRAFANA_USER", "admin")  # noqa: TID251
         pw = self._password or secret("GRAFANA_PASSWORD", "")
         if pw:
             import base64
@@ -68,6 +70,19 @@ class GrafanaClient:
         if resp.status_code >= 400:
             raise RuntimeError(f"Grafana API error ({resp.status_code}): {resp.text}")
         return resp.json()
+
+    def _raw_request(
+        self,
+        method: str,
+        path: str,
+        params: dict | None = None,
+        data: dict | None = None,
+    ) -> httpx.Response:
+        """Like _request but returns the raw httpx.Response (for non-JSON APIs)."""
+        resp = self.client.request(method, path, params=params, data=data)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Grafana API error ({resp.status_code}): {resp.text}")
+        return resp
 
     # -- Dashboards ----------------------------------------------------------
 
@@ -155,56 +170,62 @@ class GrafanaClient:
         )
         return data.get("data", [])
 
-    # -- Loki queries via datasource proxy ------------------------------------
+    # -- VictoriaLogs queries via datasource proxy ----------------------------
 
-    def query_loki(
+    def query_victorialogs(
         self,
         query: str,
-        datasource_uid: str = "loki",
+        datasource_uid: str = "victorialogs",
         start: str | None = None,
         end: str | None = None,
         limit: int = 100,
-    ) -> dict:
-        """Run a LogQL query via the Loki datasource proxy.
+    ) -> list[dict]:
+        """Run a LogsQL query via the VictoriaLogs datasource proxy.
 
         Args:
-            query: LogQL expression (e.g. '{job="api"} |= "error"').
-            datasource_uid: Datasource UID (default: 'loki').
-            start: Range start (RFC3339 or Unix nanoseconds). Omit for instant.
+            query: LogsQL expression (e.g. '_time:5m error').
+            datasource_uid: Datasource UID (default: 'victorialogs').
+            start: Range start (RFC3339 or Unix nanoseconds). Omit for last 1h.
             end: Range end.
             limit: Max log lines.
         """
-        params: dict[str, Any] = {"query": query, "limit": limit}
+        params: dict[str, Any] = {"query": f"{query} | limit {limit}"}
         if start:
             params["start"] = start
-            if end:
-                params["end"] = end
-            return self._request(
-                "GET",
-                f"/api/datasources/proxy/uid/{datasource_uid}/loki/api/v1/query_range",
-                params=params,
-            )
-        return self._request(
-            "GET",
-            f"/api/datasources/proxy/uid/{datasource_uid}/loki/api/v1/query",
-            params=params,
+        if end:
+            params["end"] = end
+        resp = self._raw_request(
+            "POST",
+            f"/api/datasources/proxy/uid/{datasource_uid}/select/logsql/query",
+            data=params,
         )
+        lines = []
+        for line in resp.text.strip().split("\n"):
+            if line:
+                lines.append(_json.loads(line))
+        return lines
 
-    def loki_labels(self, datasource_uid: str = "loki") -> list[str]:
-        """List all Loki label names."""
-        data = self._request(
-            "GET",
-            f"/api/datasources/proxy/uid/{datasource_uid}/loki/api/v1/labels",
+    def victorialogs_field_names(self, datasource_uid: str = "victorialogs") -> list[str]:
+        """List all VictoriaLogs field names."""
+        resp = self._raw_request(
+            "POST",
+            f"/api/datasources/proxy/uid/{datasource_uid}/select/logsql/field_names",
+            data={"query": "*"},
         )
-        return data.get("data", [])
+        result = resp.json()
+        return [v["value"] for v in result.get("values", [])]
 
-    def loki_label_values(self, label: str, datasource_uid: str = "loki") -> list[str]:
-        """Get values for a Loki label."""
-        data = self._request(
-            "GET",
-            f"/api/datasources/proxy/uid/{datasource_uid}/loki/api/v1/label/{label}/values",
+    def victorialogs_field_values(
+        self, field: str, datasource_uid: str = "victorialogs"
+    ) -> list[str]:
+        """Get values for a VictoriaLogs field."""
+        resp = self._raw_request(
+            "POST",
+            f"/api/datasources/proxy/uid/{datasource_uid}/select/logsql/field_values",
+            data={"query": "*", "field": field},
         )
-        return data.get("data", [])
+        result = resp.json()
+        return [v["value"] for v in result.get("values", [])]
 
     # -- Alerts --------------------------------------------------------------
 

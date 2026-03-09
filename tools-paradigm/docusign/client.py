@@ -27,10 +27,10 @@ class DocuSignClient:
         env: str | None = None,
     ):
         self.integration_key = integration_key or secret("DOCUSIGN_INTEGRATION_KEY", "")
-        self.user_id = user_id or os.environ.get("DOCUSIGN_USER_ID")
+        self.user_id = user_id or secret("DOCUSIGN_USER_ID", "")
         self.account_id = account_id or secret("DOCUSIGN_ACCOUNT_ID", "")
 
-        private_key_path = private_key_path or os.environ.get("DOCUSIGN_PRIVATE_KEY_PATH")
+        private_key_path = private_key_path or secret("DOCUSIGN_PRIVATE_KEY_PATH", "")
         self.private_key = private_key or secret("DOCUSIGN_PRIVATE_KEY", "")
 
         if private_key_path and not self.private_key:
@@ -52,7 +52,7 @@ class DocuSignClient:
                 f"DocuSign authentication required. Missing: {', '.join(missing)}"
             )
 
-        env = env or os.environ.get("DOCUSIGN_ENV", "demo")
+        env = env or os.environ.get("DOCUSIGN_ENV", "demo")  # noqa: TID251
         is_prod = env.lower() in ("production", "prod")
 
         self.auth_url = PROD_AUTH_URL if is_prod else DEMO_AUTH_URL

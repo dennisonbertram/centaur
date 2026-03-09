@@ -23,7 +23,7 @@ def get_bigquery_client() -> bigquery.Client:
         gcloud auth login svc_ai@paradigm.xyz --update-adc
         gcloud auth application-default set-quota-project ai-svc-485017
     """
-    creds_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    creds_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")  # noqa: TID251
     if creds_file and os.path.exists(creds_file):
         import json
 

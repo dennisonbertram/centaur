@@ -36,7 +36,7 @@ build-backend = "hatchling.build"
 allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/api", "src/etl", "src/shared", "src/secret_manager", "src/secret_backends"]
+packages = ["src/api", "src/shared", "src/secret_manager", "src/secret_backends"]
 
 [dependency-groups]
 dev = [
@@ -51,31 +51,41 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "TID"]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "TID", "T201"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
-# These files legitimately need os.getenv / os.environ / dotenv
+# TID251: These files legitimately need os.getenv / os.environ / dotenv
 "src/secret_backends/*" = ["TID251"]
 "src/secret_manager/*" = ["TID251"]
 "src/shared/*" = ["TID251"]
 "src/api/*" = ["TID251"]
-"src/etl/*" = ["TID251"]
 "services/*" = ["TID251"]
-"scripts/*" = ["TID251"]
-"tests/*" = ["TID251"]
+"scripts/*" = ["TID251", "T201"]
+"tests/*" = ["TID251", "T201"]
 "apps/*" = ["TID251"]
-# Tool CLIs are standalone entrypoints that use load_dotenv
-"tools/*/cli.py" = ["TID251"]
-"tools-paradigm/*/cli.py" = ["TID251"]
+# Tool CLIs are standalone entrypoints that use load_dotenv and print
+"tools/*/cli.py" = ["TID251", "T201"]
+"tools-paradigm/*/cli.py" = ["TID251", "T201"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "os.getenv".msg = "Use `from shared.tool_sdk import secret; secret('KEY')` instead of os.getenv(). Secrets come from the secret manager, not environment variables."
 "os.environ.get".msg = "Use `from shared.tool_sdk import secret; secret('KEY')` instead of os.environ.get(). Secrets come from the secret manager, not environment variables."
 "dotenv.load_dotenv".msg = "Do not use load_dotenv() in tools. Secrets come from the secret manager sidecar."
+"secret_backends.env.EnvBackend".msg = "EnvBackend is banned in server code (security invariant S1). Secrets must go through the firewall via StubBackend. EnvBackend is only for CLI tools."
+"secret_backends.EnvBackend".msg = "EnvBackend is banned in server code (security invariant S1). Secrets must go through the firewall via StubBackend. EnvBackend is only for CLI tools."
+"secret_backends.dotenv.DotEnvBackend".msg = "DotEnvBackend is banned in server code (security invariant S1). Secrets must go through the firewall via StubBackend. DotEnvBackend is only for CLI tools."
+"secret_backends.DotEnvBackend".msg = "DotEnvBackend is banned in server code (security invariant S1). Secrets must go through the firewall via StubBackend. DotEnvBackend is only for CLI tools."
+"secret_backends.http.HttpBackend".msg = "HttpBackend is banned in server code (security invariant S4). The API must never query the secret manager directly — only the firewall does."
+"secret_backends.HttpBackend".msg = "HttpBackend is banned in server code (security invariant S4). The API must never query the secret manager directly — only the firewall does."
+"requests.get".msg = "Use httpx instead of requests. httpx respects HTTPS_PROXY for firewall credential injection; requests has inconsistent proxy behavior."
+"requests.post".msg = "Use httpx instead of requests. httpx respects HTTPS_PROXY for firewall credential injection; requests has inconsistent proxy behavior."
+"requests.put".msg = "Use httpx instead of requests. httpx respects HTTPS_PROXY for firewall credential injection; requests has inconsistent proxy behavior."
+"requests.delete".msg = "Use httpx instead of requests. httpx respects HTTPS_PROXY for firewall credential injection; requests has inconsistent proxy behavior."
+"requests.Session".msg = "Use httpx instead of requests. httpx respects HTTPS_PROXY for firewall credential injection; requests has inconsistent proxy behavior."
 
 [tool.ruff.lint.isort]
-known-first-party = ["api", "etl", "shared", "secret_manager", "secret_backends"]
+known-first-party = ["api", "shared", "secret_manager", "secret_backends"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -4,6 +4,7 @@ import os
 
 from anthropic import Anthropic
 from rich.console import Console
+from shared.tool_sdk import secret
 
 from .db import get_unprocessed_posts, save_signal
 
@@ -28,7 +29,7 @@ Respond with ONLY a JSON object (no markdown, no code fences):
 
 
 def classify_post(content: str, person_name: str, company: str | None = None) -> dict | None:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = secret("ANTHROPIC_API_KEY", "")
     if not api_key:
         logger.error("ANTHROPIC_API_KEY not set")
         return None

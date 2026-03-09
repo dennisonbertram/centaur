@@ -14,7 +14,7 @@ from .models import Deal, DealStatus, TermSheet
 
 
 def _get_store_path() -> Path:
-    store_dir = Path(os.getenv("TERMSHEET_STORE_DIR", "/tmp/termsheet"))
+    store_dir = Path(os.getenv("TERMSHEET_STORE_DIR", "/tmp/termsheet"))  # noqa: TID251
     store_dir.mkdir(parents=True, exist_ok=True)
     return store_dir / "deals.json"
 

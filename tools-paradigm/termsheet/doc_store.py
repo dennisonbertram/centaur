@@ -12,7 +12,7 @@ import asyncpg
 
 
 def _database_url() -> str:
-    url = os.getenv("DATABASE_URL", "").strip()
+    url = os.getenv("DATABASE_URL", "").strip()  # noqa: TID251
     if not url:
         raise RuntimeError("DATABASE_URL is required for legal document storage")
     return url

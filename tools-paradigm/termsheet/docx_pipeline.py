@@ -858,7 +858,7 @@ def generate_redline_docx(previous_docx: bytes, current_docx: bytes) -> bytes:
 
 
 def convert_docx_to_pdf(docx_bytes: bytes, gotenberg_url: str | None = None) -> bytes:
-    url = (gotenberg_url or os.getenv("GOTENBERG_URL") or "http://gotenberg:3000").rstrip("/")
+    url = (gotenberg_url or os.getenv("GOTENBERG_URL") or "http://gotenberg:3000").rstrip("/")  # noqa: TID251
     endpoint = f"{url}/forms/libreoffice/convert"
     with httpx.Client(timeout=60.0) as client:
         response = client.post(

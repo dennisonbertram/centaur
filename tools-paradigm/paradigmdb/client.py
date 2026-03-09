@@ -6,7 +6,7 @@ class ParadigmDBClient:
 
     def _ensure_tunnel(self) -> None:
         import os
-        if os.getenv("RESHIFT_DB_DSN"):
+        if os.getenv("RESHIFT_DB_DSN"):  # noqa: TID251
             return  # Direct connection, no tunnel needed
         from .database import is_tunnel_running, start_persistent_tunnel
         if not is_tunnel_running():

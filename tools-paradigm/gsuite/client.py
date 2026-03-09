@@ -1675,7 +1675,7 @@ def get_analytics_property_id() -> str:
     """Get the current GA4 property ID."""
     if _analytics_property_id:
         return _analytics_property_id
-    env_prop = os.environ.get("GA_PROPERTY_ID")
+    env_prop = os.environ.get("GA_PROPERTY_ID")  # noqa: TID251
     if env_prop:
         return env_prop
     raise RuntimeError(

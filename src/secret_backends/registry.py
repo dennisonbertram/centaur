@@ -1,8 +1,14 @@
-"""Module-level singleton for the active secret backend."""
+"""Module-level singleton for the active secret backend.
+
+Server mode (default): ``StubBackend`` — returns key names as values so the
+firewall can replace them with real secrets in-flight.  ``EnvBackend`` is
+**banned** in server mode; see the ruff per-file-ignores in pyproject.toml.
+
+CLI mode: call ``configure()`` explicitly with ``EnvBackend`` or
+``DotEnvBackend`` before using ``secret()``.
+"""
 
 from __future__ import annotations
-
-import os
 
 from secret_backends.base import SecretBackend
 
@@ -16,18 +22,17 @@ def configure(backend: SecretBackend) -> None:
 
 
 def auto_configure() -> SecretBackend:
-    """Build a default backend chain based on environment variables.
+    """Configure the default backend for server mode.
 
-    - If ``SECRET_MANAGER_URL`` is set → ``CompositeBackend([EnvBackend(), HttpBackend(url)])``
-    - Otherwise → ``EnvBackend()``
+    Returns a ``StubBackend`` that yields key names as placeholder values.
+    The firewall replaces these with real secrets in outbound HTTPS headers.
+
+    **Do not use ``EnvBackend`` here.** Real secrets must never be resolvable
+    inside the API process.  See README.md § Security Architecture, invariant S1.
     """
-    from secret_backends.composite import CompositeBackend
-    from secret_backends.env import EnvBackend
-    from secret_backends.http import HttpBackend
+    from secret_backends.stub import StubBackend
 
-    url = os.environ.get("SECRET_MANAGER_URL", "")
-    token = os.environ.get("SECRET_MANAGER_TOKEN", "")
-    backend = CompositeBackend([EnvBackend(), HttpBackend(url, token=token)]) if url else EnvBackend()
+    backend = StubBackend()
     configure(backend)
     return backend
 

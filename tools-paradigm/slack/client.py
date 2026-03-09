@@ -673,8 +673,8 @@ class SlackClient:
         Returns:
             Attribution string like "_(requested by <@U123>)_" or empty string.
         """
-        requester_id = os.getenv("SLACK_REQUESTER_ID")
-        requester_name = os.getenv("SLACK_REQUESTER_NAME")
+        requester_id = os.getenv("SLACK_REQUESTER_ID")  # noqa: TID251
+        requester_name = os.getenv("SLACK_REQUESTER_NAME")  # noqa: TID251
 
         if requester_id:
             return f"\n\n_(requested by <@{requester_id}>)_"

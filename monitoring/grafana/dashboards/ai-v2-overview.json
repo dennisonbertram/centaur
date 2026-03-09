@@ -490,7 +490,7 @@
       "type": "logs",
       "title": "Service Logs",
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 37 },
-      "datasource": { "type": "loki", "uid": "loki" },
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "options": {
         "showTime": true,
         "showLabels": true,
@@ -503,7 +503,7 @@
       },
       "targets": [
         {
-          "expr": "{project=\"ai-v2\"} |= ``",
+          "expr": "*",
           "legendFormat": "",
           "refId": "A"
         }
@@ -515,8 +515,8 @@
       {
         "name": "service",
         "type": "query",
-        "datasource": { "type": "loki", "uid": "loki" },
-        "query": "label_values(service)",
+        "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+        "query": "service",
         "refresh": 2,
         "includeAll": true,
         "multi": true,

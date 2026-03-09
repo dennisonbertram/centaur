@@ -26,7 +26,7 @@ class IroncladClient:
         client_secret: str | None = None,
         base_url: str | None = None,
     ):
-        self.base_url = (base_url or os.environ.get("IRONCLAD_BASE_URL", DEFAULT_BASE_URL)).rstrip(
+        self.base_url = (base_url or os.environ.get("IRONCLAD_BASE_URL", DEFAULT_BASE_URL)).rstrip(  # noqa: TID251
             "/"
         )
         self.api_url = f"{self.base_url}/public/api/v1"
@@ -78,7 +78,7 @@ class IroncladClient:
     ) -> dict:
         """Make an authenticated request to the Ironclad API."""
         # SECURITY: Reject any attempt to override the impersonation email via env var.
-        env_override = os.environ.get("IRONCLAD_IMPERSONATE_EMAIL")
+        env_override = os.environ.get("IRONCLAD_IMPERSONATE_EMAIL")  # noqa: TID251
         if env_override and env_override != _IMPERSONATE_EMAIL:
             raise RuntimeError(
                 f"Impersonating other users is not permitted. "
