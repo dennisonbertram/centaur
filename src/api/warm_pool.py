@@ -1,7 +1,7 @@
-"""Pre-warmed container pool — keeps N containers ready with stdin sockets open.
+"""Pre-warmed sandbox pool — keeps N sandboxes ready for instant claiming.
 
-Eliminates container startup latency (~15s) by maintaining a pool of idle
-containers that can be instantly claimed when a new thread arrives.
+Eliminates sandbox startup latency (~15s) by maintaining a pool of idle
+sandboxes that can be instantly claimed when a new thread arrives.
 """
 
 from __future__ import annotations
@@ -15,11 +15,8 @@ from dataclasses import dataclass, field
 
 import structlog
 
-from api.pipe_agent import (
-    PipeSession,
-    _create_container,
-    _docker_client,
-)
+from api.sandbox.base import SandboxSession
+from api.sandbox.registry import get_backend
 
 log = structlog.get_logger()
 
@@ -31,8 +28,9 @@ POOL_REPLENISH_INTERVAL = float(os.getenv("WARM_POOL_REPLENISH_INTERVAL", "5.0")
 
 @dataclass
 class WarmContainer:
-    """A pre-warmed container not yet bound to any thread."""
-    container_id: str
+    """A pre-warmed sandbox not yet bound to any thread."""
+
+    sandbox_id: str
     harness: str
     engine: str
     created_at: float = field(default_factory=time.time)
@@ -45,7 +43,7 @@ _replenish_task: asyncio.Task | None = None
 
 
 def pool_size() -> int:
-    """Current number of warm containers ready."""
+    """Current number of warm sandboxes ready."""
     with _pool_lock:
         return len(_pool)
 
@@ -54,7 +52,7 @@ def pool_status() -> dict:
     """Return pool diagnostics."""
     with _pool_lock:
         containers = [
-            {"container_id": w.container_id[:12], "age_s": round(time.time() - w.created_at, 1)}
+            {"sandbox_id": w.sandbox_id[:12], "age_s": round(time.time() - w.created_at, 1)}
             for w in _pool
         ]
     return {
@@ -66,22 +64,23 @@ def pool_status() -> dict:
 
 
 def _spawn_warm_container() -> WarmContainer | None:
-    """Synchronously create one warm container. Returns None on failure."""
+    """Synchronously create one warm sandbox. Returns None on failure."""
+    backend = get_backend()
+    if not backend.supports_warm_pool:
+        return None
+
     engines = {"amp": "amp", "claude-code": "claude-code", "codex": "codex"}
     engine = engines.get(POOL_HARNESS, "amp")
 
-    # Use a unique placeholder thread key — will be relabeled on claim
     placeholder_key = f"warm-{int(time.time() * 1000)}-{id(threading.current_thread())}"
     try:
-        client = _docker_client()
-        container = _create_container(client, placeholder_key, POOL_HARNESS, engine, warm=True)
-
+        session = backend.create(placeholder_key, POOL_HARNESS, engine, warm=True)
         warm = WarmContainer(
-            container_id=container.id,
+            sandbox_id=session.sandbox_id,
             harness=POOL_HARNESS,
             engine=engine,
         )
-        log.info("warm_container_created", container=container.id[:12])
+        log.info("warm_container_created", sandbox=session.sandbox_id[:12])
         return warm
     except Exception as exc:
         log.warning("warm_container_spawn_failed", error=str(exc))
@@ -89,7 +88,11 @@ def _spawn_warm_container() -> WarmContainer | None:
 
 
 def _replenish_sync() -> int:
-    """Spawn containers until the pool reaches target size. Returns count spawned."""
+    """Spawn sandboxes until the pool reaches target size. Returns count spawned."""
+    backend = get_backend()
+    if not backend.supports_warm_pool:
+        return 0
+
     spawned = 0
     while True:
         with _pool_lock:
@@ -105,10 +108,10 @@ def _replenish_sync() -> int:
     return spawned
 
 
-def claim_container(thread_key: str, harness: str = "amp") -> PipeSession | None:
-    """Try to claim a warm container from the pool. Returns PipeSession or None.
+def claim_container(thread_key: str, harness: str = "amp") -> SandboxSession | None:
+    """Try to claim a warm sandbox from the pool. Returns SandboxSession or None.
 
-    Only returns a container if the requested harness matches the pool harness.
+    Only returns a sandbox if the requested harness matches the pool harness.
     """
     if harness != POOL_HARNESS:
         return None
@@ -121,51 +124,67 @@ def claim_container(thread_key: str, harness: str = "amp") -> PipeSession | None
     if warm is None:
         return None
 
-    # Verify container is still running
-    try:
-        client = _docker_client()
-        container = client.containers.get(warm.container_id)
-        if container.status != "running":
-            log.warning("warm_container_dead_on_claim", container=warm.container_id[:12])
-            with contextlib.suppress(Exception):
-                container.remove(force=True)
-            return None
-    except Exception:
+    backend = get_backend()
+
+    # Verify sandbox is still running
+    dummy_session = SandboxSession(
+        sandbox_id=warm.sandbox_id,
+        thread_key="",
+        harness=warm.harness,
+        engine=warm.engine,
+        backend_name=backend.name,
+    )
+    st = backend.status(dummy_session)
+    if st != "running":
+        log.warning("warm_container_dead_on_claim", sandbox=warm.sandbox_id[:12])
+        with contextlib.suppress(Exception):
+            backend.stop(dummy_session)
         return None
 
-    # Rename container to match the thread key
+    # Rename sandbox to match the thread key
     new_name = f"pipe-{thread_key.replace(':', '-').replace('.', '-')[:40]}"
-    with contextlib.suppress(Exception):
-        container.rename(new_name)
+    backend.rename(dummy_session, new_name)
 
-    session = PipeSession(
-        container_id=warm.container_id,
+    session = SandboxSession(
+        sandbox_id=warm.sandbox_id,
         thread_key=thread_key,
         harness=harness,
         engine=warm.engine,
         started_at=time.time(),
+        backend_name=backend.name,
     )
+    # Initialize orchestration metadata
+    session.metadata["turn_counter"] = 0
+    session.metadata["_active_turn_id"] = 0
+    session.metadata["_turn_lock"] = threading.Lock()
+    session.metadata["_active_queue"] = None
+
     log.info(
         "warm_container_claimed",
         thread_key=thread_key,
-        container=warm.container_id[:12],
+        sandbox=warm.sandbox_id[:12],
         pool_age_s=round(time.time() - warm.created_at, 1),
     )
     return session
 
 
 def _cleanup_pool_sync() -> int:
-    """Stop and remove all warm containers. Returns count cleaned."""
+    """Stop and remove all warm sandboxes. Returns count cleaned."""
     with _pool_lock:
         to_clean = list(_pool)
         _pool.clear()
     cleaned = 0
-    client = _docker_client()
+    backend = get_backend()
     for warm in to_clean:
         with contextlib.suppress(Exception):
-            c = client.containers.get(warm.container_id)
-            c.stop(timeout=3)
-            c.remove()
+            dummy = SandboxSession(
+                sandbox_id=warm.sandbox_id,
+                thread_key="",
+                harness=warm.harness,
+                engine=warm.engine,
+                backend_name=backend.name,
+            )
+            backend.stop(dummy)
             cleaned += 1
     return cleaned
 
@@ -174,37 +193,32 @@ def _cleanup_pool_sync() -> int:
 
 
 async def replenish() -> int:
-    """Async wrapper — spawn missing warm containers."""
+    """Async wrapper — spawn missing warm sandboxes."""
     return await asyncio.to_thread(_replenish_sync)
 
 
 async def cleanup_pool() -> int:
-    """Async wrapper — tear down all warm containers."""
+    """Async wrapper — tear down all warm sandboxes."""
     return await asyncio.to_thread(_cleanup_pool_sync)
 
 
 def _recover_warm_sync() -> int:
-    """Recover existing warm containers from Docker on API restart."""
-    client = _docker_client()
-    recovered = 0
-    try:
-        containers = client.containers.list(filters={"label": "ai2.warm=true"})
-    except Exception:
+    """Recover existing warm sandboxes from backend on API restart."""
+    backend = get_backend()
+    if not backend.supports_warm_pool:
         return 0
-    for container in containers:
-        if container.status != "running":
-            with contextlib.suppress(Exception):
-                container.remove(force=True)
-            continue
-        with _pool_lock:
-            # Don't exceed target
+
+    recovered = 0
+    sessions = backend.recover_warm(POOL_HARNESS)
+    with _pool_lock:
+        for session in sessions:
             if len(_pool) >= POOL_SIZE:
                 break
             _pool.append(
                 WarmContainer(
-                    container_id=container.id,
-                    harness=container.labels.get("ai2.harness", POOL_HARNESS),
-                    engine=container.labels.get("ai2.engine", "amp"),
+                    sandbox_id=session.sandbox_id,
+                    harness=session.harness,
+                    engine=session.engine,
                 )
             )
             recovered += 1
@@ -216,7 +230,7 @@ async def start_replenish_loop() -> asyncio.Task:
     global _replenish_task
 
     async def _loop() -> None:
-        # Recover any surviving warm containers from a previous run
+        # Recover any surviving warm sandboxes from a previous run
         recovered = await asyncio.to_thread(_recover_warm_sync)
         if recovered:
             log.info("warm_pool_recovered", recovered=recovered)
