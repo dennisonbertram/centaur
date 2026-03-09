@@ -182,7 +182,13 @@ SERVICE_KEYS: dict[str, dict] = {
     },
     "web": {
         "secret_name": "WEB_API_KEY",
-        "scopes": ["threads:read", "agent:status"],
+        "scopes": [
+            "agent:execute",
+            "agent:status",
+            "agent:stop",
+            "threads:read",
+            "tools:paradigmdb",
+        ],
     },
 }
 
