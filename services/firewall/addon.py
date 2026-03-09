@@ -806,13 +806,26 @@ class CredentialInjector:
     # ------------------------------------------------------------------
 
     def _sanitize_outbound_headers(self, flow: http.HTTPFlow) -> None:
-        """Strip non-whitelisted headers and force a fixed User-Agent."""
+        """Strip non-whitelisted headers and force a fixed User-Agent.
+
+        Headers whose values contain a known secret key placeholder are kept
+        even if not in the static allowlist — they need to survive until
+        ``_replace_in_headers`` swaps the placeholder for the real secret.
+        """
         flow.request.headers["user-agent"] = FIXED_USER_AGENT
+
+        with self._keys_lock:
+            keys = self._known_keys
 
         to_remove = []
         for header_name in flow.request.headers:
-            if header_name.lower() not in ALLOWED_OUTBOUND_HEADERS and header_name.lower() != "user-agent":
-                to_remove.append(header_name)
+            if header_name.lower() in ALLOWED_OUTBOUND_HEADERS or header_name.lower() == "user-agent":
+                continue
+            # Keep headers that carry a secret placeholder (e.g. x-cg-pro-api-key)
+            value = flow.request.headers[header_name]
+            if keys and any(k in value for k in keys):
+                continue
+            to_remove.append(header_name)
 
         for header_name in to_remove:
             log.debug("stripped outbound header: %s", header_name)
