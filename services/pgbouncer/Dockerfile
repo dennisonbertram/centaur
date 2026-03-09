@@ -1,7 +1,7 @@
 FROM edoburu/pgbouncer:latest
 
 USER root
-RUN apt-get update && apt-get install -y --no-install-recommends curl jq && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache curl jq
 USER postgres
 
 COPY --chmod=755 entrypoint.sh /custom-entrypoint.sh
