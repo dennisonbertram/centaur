@@ -83,7 +83,8 @@ _DEFAULT_INJECTION_HOSTS = (
 # These are essential sandbox services (git, GitHub API).
 _DEFAULT_UNRESTRICTED_METHOD_HOSTS = (
     "github.com,"
-    "api.github.com"
+    "api.github.com,"
+    "ampcode.com"
 )
 SECRET_INJECTION_HOSTS: frozenset[str] = frozenset(
     h.strip().lower()
