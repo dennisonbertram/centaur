@@ -3,7 +3,7 @@
 import { Component, type ReactNode } from "react";
 import type { DashboardSpec } from "./types";
 import { DashboardLayout } from "./layout";
-import { parseDashboardSpec as parseToonSpec } from "@/lib/dashboard-parser";
+import { parseDashboardSpec as parseToonSpec } from "@/lib/viewer/dashboard-parser";
 
 interface ErrorBoundaryProps {
   fallback: ReactNode;

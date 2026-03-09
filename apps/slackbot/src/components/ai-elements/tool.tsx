@@ -20,7 +20,7 @@ import { isValidElement } from "react";
 
 import { CodeBlock } from "./code-block";
 import { ToolOutputRenderer } from "./tool-output-renderer";
-import { detectContentBlocks } from "@/lib/tool-output-detect";
+import { detectContentBlocks } from "@/lib/viewer/tool-output-detect";
 
 export type ToolProps = ComponentProps<typeof Collapsible>;
 

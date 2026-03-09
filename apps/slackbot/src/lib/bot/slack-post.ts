@@ -2,7 +2,7 @@ import {
   resultToSlackMessages,
   splitMarkdownChunks,
   type SlackReplyMetadata,
-} from "@/lib/slack-blocks";
+} from "@/lib/bot/slack-blocks";
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const SLACK_RETRY_ATTEMPTS = 3;

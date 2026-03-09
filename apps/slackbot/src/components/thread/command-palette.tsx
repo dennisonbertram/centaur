@@ -9,7 +9,7 @@ import {
   CompactDensityIcon,
   ThreadContextIcon,
 } from "@/components/thread/icons/thread-icons";
-import { threadName } from "@/lib/thread-name";
+import { threadName } from "@/lib/viewer/thread-name";
 import type { ThreadSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
 

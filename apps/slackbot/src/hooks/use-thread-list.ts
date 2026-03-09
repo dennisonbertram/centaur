@@ -8,8 +8,8 @@ import {
   getThreadFilterCounts,
   pickActiveThreadHref,
   type ThreadStatusFilter,
-} from "@/lib/thread-selectors";
-import { isActiveState } from "@/lib/thread-ordering";
+} from "@/lib/viewer/thread-selectors";
+import { isActiveState } from "@/lib/viewer/thread-ordering";
 
 const THREADS_POLL_INTERVAL_MS = 5000;
 

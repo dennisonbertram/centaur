@@ -1,4 +1,4 @@
-import type { SlackMessagePayload } from "@/lib/slack-blocks";
+import type { SlackMessagePayload } from "@/lib/bot/slack-blocks";
 
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 

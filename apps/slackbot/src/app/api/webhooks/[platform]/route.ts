@@ -1,5 +1,5 @@
 import { after } from "next/server";
-import { getBot, getSlackBootstrapState } from "@/lib/bot";
+import { getBot, getSlackBootstrapState } from "@/lib/bot/bot";
 
 export async function POST(
   request: Request,

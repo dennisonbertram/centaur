@@ -18,7 +18,7 @@ import { useHaptics } from "@/components/haptics-provider";
 import { OverlayBackdrop } from "@/components/ui/overlay-backdrop";
 import { ThreadSidebar, type ThreadSidebarHandle } from "@/components/thread/thread-sidebar";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { isTextInputTarget } from "@/lib/thread-utils";
+import { isTextInputTarget } from "@/lib/viewer/thread-utils";
 
 export const THREAD_SIDEBAR_COLLAPSE_STORAGE_KEY = "threads.sidebar.collapsed.v1";
 export const THREAD_SIDEBAR_COLLAPSE_CLASS = "threads-sidebar-collapsed";

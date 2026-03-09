@@ -4,8 +4,8 @@ import { generateId } from "ai";
 import type { UIMessage } from "ai";
 import type { ThreadDetail, ThreadTokenUsage } from "@/lib/types";
 import { BASE } from "@/lib/constants";
-import { AgentThreadTransport } from "@/lib/agent-transport";
-import { isActiveState } from "@/lib/thread-ordering";
+import { AgentThreadTransport } from "@/lib/viewer/agent-transport";
+import { isActiveState } from "@/lib/viewer/thread-ordering";
 import { dataPartSchemas } from "@/lib/data-part-schemas";
 
 type SendRoute = "execute";

@@ -1,5 +1,5 @@
-import { threadName } from "@/lib/thread-name";
-import { isActiveState, isRunningState, sortThreads } from "@/lib/thread-ordering";
+import { threadName } from "@/lib/viewer/thread-name";
+import { isActiveState, isRunningState, sortThreads } from "@/lib/viewer/thread-ordering";
 import type { ThreadState, ThreadSummary } from "@/lib/types";
 
 export type ThreadStatusFilter = "all" | "active" | "idle" | "error";

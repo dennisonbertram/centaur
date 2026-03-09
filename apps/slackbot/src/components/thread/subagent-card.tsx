@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { useHaptics } from "@/components/haptics-provider";
 import type { SubagentStep } from "@/lib/describe";
-import { getSubagentPreviewText, normalizeSubagentStatus, subagentStatusLabel } from "@/lib/subagent-steps";
+import { getSubagentPreviewText, normalizeSubagentStatus, subagentStatusLabel } from "@/lib/viewer/subagent-steps";
 import { cn } from "@/lib/utils";
 
 function statusTone(status: string): "default" | "destructive" | "secondary" {

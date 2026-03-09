@@ -22,10 +22,10 @@ import { type VisibleThreadStatusFilter } from "@/components/thread/thread-ui-co
 import { useThreadList } from "@/hooks/use-thread-list";
 
 import { cn } from "@/lib/utils";
-import { detailHrefWithEntrySource, nextListQueryString } from "@/lib/thread-navigation";
-import { isRunningState } from "@/lib/thread-ordering";
-import { runningSubtitle, type ThreadStatusFilter } from "@/lib/thread-selectors";
-import { isTextInputTarget } from "@/lib/thread-utils";
+import { detailHrefWithEntrySource, nextListQueryString } from "@/lib/viewer/thread-navigation";
+import { isRunningState } from "@/lib/viewer/thread-ordering";
+import { runningSubtitle, type ThreadStatusFilter } from "@/lib/viewer/thread-selectors";
+import { isTextInputTarget } from "@/lib/viewer/thread-utils";
 import Link from "next/link";
 
 export type ThreadSidebarHandle = {

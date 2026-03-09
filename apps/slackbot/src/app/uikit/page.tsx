@@ -3,7 +3,7 @@
 import { useState, useMemo, useCallback, useRef } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { DashboardLayout } from "@/components/dashboard/layout";
-import { parseDashboardSpec } from "@/lib/dashboard-parser";
+import { parseDashboardSpec } from "@/lib/viewer/dashboard-parser";
 import type { DashboardSpec, ComponentNode } from "@/components/dashboard/types";
 import { RenderNode } from "@/components/dashboard/component-renderer";
 import ReactGridLayout, { useContainerWidth, verticalCompactor } from "react-grid-layout";
@@ -92,7 +92,7 @@ import { Progress } from "@/components/ui/progress";
 import { ParticipantAvatars } from "@/components/thread/participant-avatars";
 import type { VisibleThreadStatusFilter } from "@/components/thread/thread-ui-constants";
 import type { ThreadSummary, Participant } from "@/lib/types";
-import { getThreadDisplayName } from "@/lib/thread-selectors";
+import { getThreadDisplayName } from "@/lib/viewer/thread-selectors";
 
 // UI Primitives
 import { Badge } from "@/components/ui/badge";

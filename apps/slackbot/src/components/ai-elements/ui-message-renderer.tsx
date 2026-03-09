@@ -18,8 +18,8 @@ import {
   type ToolCall,
 } from "@/lib/describe";
 import { asString, asRecord, asNumber, asBoolean } from "@/lib/parse-utils";
-import { dedupeSources, extractSourcesFromUnknown, type StepSource } from "@/lib/source-utils";
-import { stringifyToolOutput } from "@/lib/tool-output-detect";
+import { dedupeSources, extractSourcesFromUnknown, type StepSource } from "@/lib/viewer/source-utils";
+import { stringifyToolOutput } from "@/lib/viewer/tool-output-detect";
 import type { Participant } from "@/lib/types";
 
 import dynamic from "next/dynamic";
@@ -41,7 +41,7 @@ import {
 } from "@/components/ai-elements/terminal";
 import { SubagentCard } from "@/components/thread/subagent-card";
 import type { SubagentStep } from "@/lib/describe";
-import { normalizeSubagentStatus, subagentSelectionKey } from "@/lib/subagent-steps";
+import { normalizeSubagentStatus, subagentSelectionKey } from "@/lib/viewer/subagent-steps";
 import {
   Checkpoint,
   CheckpointIcon,

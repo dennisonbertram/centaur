@@ -28,7 +28,7 @@ import {
   normalizeSubagentStatus,
   subagentSelectionKey,
   subagentStatusLabel,
-} from "@/lib/subagent-steps";
+} from "@/lib/viewer/subagent-steps";
 import { subagentIdentityIcon } from "@/components/thread/subagent-card";
 import { cn } from "@/lib/utils";
 

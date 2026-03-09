@@ -18,19 +18,19 @@ import { MobileTabBar } from "@/components/thread/mobile-tab-bar";
 import { ThreadDetailHeader } from "@/components/thread/thread-detail-header";
 import { useThreadLayout } from "@/components/thread/thread-layout";
 import { THREAD_SHORTCUTS_LABEL } from "@/components/thread/thread-ui-constants";
-import { threadName } from "@/lib/thread-name";
+import { threadName } from "@/lib/viewer/thread-name";
 import { useThreadStream } from "@/hooks/use-thread-stream";
 import { useThreadDetailActions } from "@/hooks/use-thread-detail-actions";
 import { useThreadDetailShortcuts } from "@/hooks/use-thread-detail-shortcuts";
 import { useElapsed } from "@/hooks/use-elapsed";
 import { useStableStatus } from "@/hooks/use-stable-status";
-import { isActiveState, isRunningState } from "@/lib/thread-ordering";
+import { isActiveState, isRunningState } from "@/lib/viewer/thread-ordering";
 import { asRecord, asString } from "@/lib/parse-utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useThreadList } from "@/hooks/use-thread-list";
 import { Shimmer } from "@/components/ai-elements/shimmer";
-import { subagentSelectionKey } from "@/lib/subagent-steps";
+import { subagentSelectionKey } from "@/lib/viewer/subagent-steps";
 import {
   entrySourceLabel,
   listQueryFromSearchParams,
@@ -38,7 +38,7 @@ import {
   parseEntryAnchor,
   parseEntrySource,
   detailHrefWithEntrySource,
-} from "@/lib/thread-navigation";
+} from "@/lib/viewer/thread-navigation";
 import { BASE } from "@/lib/constants";
 
 const ThreadInfoSheet = dynamic(

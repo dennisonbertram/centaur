@@ -1,5 +1,5 @@
-import { postMarkdownToSlack, postRichReplyToSlack } from "@/lib/slack-post";
-import type { SlackReplyMetadata } from "@/lib/slack-blocks";
+import { postMarkdownToSlack, postRichReplyToSlack } from "@/lib/bot/slack-post";
+import type { SlackReplyMetadata } from "@/lib/bot/slack-blocks";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";

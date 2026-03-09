@@ -32,7 +32,7 @@ import {
   useState,
 } from "react";
 import { Streamdown } from "streamdown";
-import { extractDashboardBlocks } from "@/lib/dashboard-parser";
+import { extractDashboardBlocks } from "@/lib/viewer/dashboard-parser";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];

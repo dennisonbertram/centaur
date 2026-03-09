@@ -21,7 +21,7 @@ import {
   type ContentBlock,
   type EntityBlock,
   type TableBlock,
-} from "@/lib/tool-output-detect";
+} from "@/lib/viewer/tool-output-detect";
 
 const RenderNode = lazy(() =>
   import("@/components/dashboard/component-renderer").then((module) => ({

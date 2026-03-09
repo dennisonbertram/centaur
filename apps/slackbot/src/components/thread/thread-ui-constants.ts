@@ -1,4 +1,4 @@
-import type { ThreadStatusFilter } from "@/lib/thread-selectors";
+import type { ThreadStatusFilter } from "@/lib/viewer/thread-selectors";
 
 export type VisibleThreadStatusFilter = Extract<ThreadStatusFilter, "all" | "active" | "error">;
 

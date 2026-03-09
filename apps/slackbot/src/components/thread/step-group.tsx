@@ -5,7 +5,7 @@ import { CheckCircle, ChevronRight, CircleX, LoaderCircle } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useHaptics } from "@/components/haptics-provider";
 import { describeToolCall, type ToolCall } from "@/lib/describe";
-import { summarizeToolOutput } from "@/lib/tool-output-detect";
+import { summarizeToolOutput } from "@/lib/viewer/tool-output-detect";
 import {
   Tool,
   ToolHeader,
@@ -31,7 +31,7 @@ import {
   StackTraceFrames,
   StackTraceHeader,
 } from "@/components/ai-elements/stack-trace";
-import type { StepSource } from "@/lib/source-utils";
+import type { StepSource } from "@/lib/viewer/source-utils";
 
 function mapToolState(call: ToolCall): NonNullable<ToolCall["uiState"]> {
   if (call.uiState) return call.uiState;

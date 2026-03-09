@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { NextRequest, NextResponse } from "next/server";
-import { verifySlackSignature } from "@/lib/slack-client";
-import { getBot, getSlackBootstrapState } from "@/lib/bot";
+import { verifySlackSignature } from "@/lib/bot/slack-client";
+import { getBot, getSlackBootstrapState } from "@/lib/bot/bot";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";

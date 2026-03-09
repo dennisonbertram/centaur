@@ -8,8 +8,8 @@ import { ParticipantAvatars } from "@/components/thread/participant-avatars";
 import { Progress } from "@/components/ui/progress";
 import { PHASES, type ThreadSummary } from "@/lib/types";
 import { useElapsed } from "@/hooks/use-elapsed";
-import { getThreadDisplayName, parseActivePhase, runningSubtitle } from "@/lib/thread-selectors";
-import { isRunningState } from "@/lib/thread-ordering";
+import { getThreadDisplayName, parseActivePhase, runningSubtitle } from "@/lib/viewer/thread-selectors";
+import { isRunningState } from "@/lib/viewer/thread-ordering";
 import { cn } from "@/lib/utils";
 
 type ThreadSummaryCardProps = {
