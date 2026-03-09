@@ -20,3 +20,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["api.notion.com"]
+secrets = ["NOTION_API_KEY"]

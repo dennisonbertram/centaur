@@ -21,3 +21,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["api.anchorage.com"]
+secrets = ["ANCHORAGE_PF_API_KEY", "ANCHORAGE_PF_SIGNING_KEY", "ANCHORAGE_P1_API_KEY", "ANCHORAGE_P1_SIGNING_KEY", "ANCHORAGE_P2_API_KEY", "ANCHORAGE_P2_SIGNING_KEY"]

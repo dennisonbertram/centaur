@@ -18,3 +18,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["api.tardis.dev"]
+secrets = ["TARDIS_API_KEY"]

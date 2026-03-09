@@ -17,3 +17,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["api.sigmacomputing.com", "app.sigmacomputing.com"]
+secrets = ["SIGMA_CLIENT_ID", "SIGMA_CLIENT_SECRET", "SIGMA_EMBED_SECRET"]

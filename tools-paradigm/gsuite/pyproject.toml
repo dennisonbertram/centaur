@@ -24,3 +24,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["*.googleapis.com"]
+secrets = []

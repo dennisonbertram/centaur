@@ -20,3 +20,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["app.bitgo.com"]
+secrets = ["BITGO_API_KEY"]

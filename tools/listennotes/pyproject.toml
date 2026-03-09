@@ -16,3 +16,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["listen-api.listennotes.com"]
+secrets = ["LISTENNOTES_KEY"]

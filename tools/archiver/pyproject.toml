@@ -19,3 +19,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["platform.reducto.ai", "docs.google.com", "drive.google.com"]
+secrets = ["REDUCTO_API_KEY", "BROWSER_USE_API_KEY"]

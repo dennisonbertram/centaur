@@ -17,3 +17,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["balanceapi-pd-prod.app.unit410.com"]
+secrets = ["UNIT410_API_KEY"]

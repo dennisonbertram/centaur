@@ -21,3 +21,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["openbanking.jpmorgan.com", "idag2.jpmorganchase.com"]
+secrets = ["JPM_API_PRIVATE_KEY", "JPM_API_ACCOUNT_IDS"]

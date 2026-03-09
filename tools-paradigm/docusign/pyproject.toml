@@ -18,3 +18,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["account-d.docusign.com", "demo.docusign.net", "account.docusign.com", "*.docusign.net"]
+secrets = ["DOCUSIGN_INTEGRATION_KEY", "DOCUSIGN_ACCOUNT_ID", "DOCUSIGN_PRIVATE_KEY", "DOCUSIGN_USER_ID"]

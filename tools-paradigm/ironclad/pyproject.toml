@@ -16,3 +16,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
+hosts = ["na1.ironcladapp.com"]
+secrets = ["IRONCLAD_API_TOKEN", "IRONCLAD_CLIENT_ID", "IRONCLAD_CLIENT_SECRET"]
