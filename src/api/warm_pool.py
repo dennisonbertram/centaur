@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 import structlog
 
+from api.agent import _init_session_metadata
 from api.deps import mint_sandbox_token
 from api.sandbox.base import SandboxSession
 from api.sandbox.registry import get_backend
@@ -70,8 +71,7 @@ def _spawn_warm_container() -> WarmContainer | None:
     if not backend.supports_warm_pool:
         return None
 
-    engines = {"amp": "amp", "claude-code": "claude-code", "codex": "codex"}
-    engine = engines.get(POOL_HARNESS, "amp")
+    engine = POOL_HARNESS if POOL_HARNESS in {"amp", "claude-code", "codex"} else "amp"
 
     placeholder_key = f"warm-{int(time.time() * 1000)}-{id(threading.current_thread())}"
     try:
@@ -162,11 +162,7 @@ def claim_container(thread_key: str, harness: str = "amp") -> SandboxSession | N
         started_at=time.time(),
         backend_name=backend.name,
     )
-    # Initialize orchestration metadata
-    session.metadata["turn_counter"] = 0
-    session.metadata["_active_turn_id"] = 0
-    session.metadata["_turn_lock"] = threading.Lock()
-    session.metadata["_active_queue"] = None
+    _init_session_metadata(session)
 
     log.info(
         "warm_container_claimed",

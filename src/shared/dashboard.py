@@ -5,34 +5,12 @@ from typing import Any
 
 from toon_format import encode as toon_encode
 
+from shared.tool_manager import _flatten_for_tabular
+
 _SCALAR_TYPES = (str, int, float, bool)
 
 _DATA_KEY = "data"
 _LIST_JOIN_KEYS = frozenset({"yKeys"})
-
-
-def _flatten_for_tabular(data: list[dict]) -> list[dict]:
-    """Flatten nested dicts in arrays so TOON can use tabular encoding."""
-    if not data or not all(isinstance(item, dict) for item in data):
-        return data
-    keys = set(data[0].keys())
-    if not all(set(d.keys()) == keys for d in data):
-        return data
-    has_nested = any(
-        isinstance(v, (dict, list)) for item in data for v in item.values()
-    )
-    if not has_nested:
-        return data
-    flat = []
-    for item in data:
-        row = {}
-        for k, v in item.items():
-            if isinstance(v, (dict, list)):
-                row[k] = json.dumps(v, separators=(",", ":"), default=str)
-            else:
-                row[k] = v
-        flat.append(row)
-    return flat
 
 
 def _encode_data(data: list[dict]) -> str:

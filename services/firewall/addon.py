@@ -545,33 +545,6 @@ class CredentialInjector:
     # Header-value replacement
     # ------------------------------------------------------------------
 
-    def _replace_key_names(self, value: str) -> str:
-        """Replace any known key names in a header value with real secrets.
-
-        Applies unicode normalization before matching to defeat homoglyph
-        and zero-width character bypass attempts.
-        """
-        with self._keys_lock:
-            keys = self._known_keys
-            canonicalize_google_key = self._canonicalize_google_key
-
-        # Normalize to catch homoglyph/zero-width smuggling
-        normalized = _normalize_text(value)
-        if normalized != value:
-            log.warning("unicode normalization changed header value (possible bypass attempt)")
-            value = normalized
-
-        if canonicalize_google_key and "GOOGLE_API_KEY" in value:
-            value = value.replace("GOOGLE_API_KEY", "GEMINI_API_KEY")
-
-        for key_name in keys:
-            if key_name not in value:
-                continue
-            secret = self._get_secret(key_name)
-            if secret is not None:
-                value = value.replace(key_name, secret)
-        return value
-
     def _replace_key_names_filtered(
         self,
         value: str,
@@ -689,32 +662,6 @@ class CredentialInjector:
         replaced = self._replace_key_names_filtered(url, host, allowed_keys, source_ip)
         if replaced != url:
             flow.request.url = replaced
-
-    def _strip_key_placeholders(self, flow: http.HTTPFlow) -> None:
-        """Remove any header values that contain known key placeholders."""
-        with self._keys_lock:
-            keys = self._known_keys
-        if not keys:
-            return
-
-        host = flow.request.pretty_host.lower().rstrip(".")
-        source_ip = flow.client_conn.peername[0] if flow.client_conn.peername else "unknown"
-        for header_name in list(flow.request.headers.keys()):
-            value = flow.request.headers[header_name]
-            matched = [k for k in keys if k in value]
-            if matched:
-                for key_name in matched:
-                    log.warning(
-                        "placeholder_stripped",
-                        extra={
-                            "event": "placeholder_stripped",
-                            "key_name": key_name,
-                            "host": host,
-                            "header_name": header_name,
-                            "container_ip": source_ip,
-                        },
-                    )
-                del flow.request.headers[header_name]
 
     # ------------------------------------------------------------------
     # SSRF protection

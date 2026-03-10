@@ -22,13 +22,6 @@ log = structlog.get_logger()
 # ── Helpers (module-level, not backend methods) ──────────────────────────────
 
 
-def _docker_client() -> docker.DockerClient:
-    docker_host = os.getenv("DOCKER_HOST")
-    if docker_host:
-        return docker.DockerClient(base_url=docker_host)
-    return docker.from_env()
-
-
 def _image() -> str:
     return os.getenv("AGENT_IMAGE", "agent2:latest")
 
@@ -141,6 +134,18 @@ def _wait_ready(container: Any, timeout: int = 15) -> float:
 class DockerSandboxBackend(SandboxBackend):
     """Runs agent sandboxes as local Docker containers."""
 
+    def __init__(self) -> None:
+        self._client: docker.DockerClient | None = None
+
+    def _get_client(self) -> docker.DockerClient:
+        if self._client is None:
+            docker_host = os.getenv("DOCKER_HOST")
+            if docker_host:
+                self._client = docker.DockerClient(base_url=docker_host)
+            else:
+                self._client = docker.from_env()
+        return self._client
+
     @property
     def name(self) -> str:
         return "docker"
@@ -157,7 +162,7 @@ class DockerSandboxBackend(SandboxBackend):
         *,
         warm: bool = False,
     ) -> SandboxSession:
-        client = _docker_client()
+        client = self._get_client()
         repos_dir = os.path.abspath(_repos_host_dir())
 
         container_name = f"pipe-{thread_key.replace(':', '-').replace('.', '-')[:40]}"
@@ -222,7 +227,7 @@ class DockerSandboxBackend(SandboxBackend):
     def attach(self, session: SandboxSession, *, logs: bool = False) -> None:
         if session.metadata.get("_stdin_sock") and session.metadata.get("_stdout_sock"):
             return
-        client = _docker_client()
+        client = self._get_client()
         api = client.api
 
         stdin_attach = api.attach_socket(session.sandbox_id, params={"stdin": True, "stream": True})
@@ -258,7 +263,7 @@ class DockerSandboxBackend(SandboxBackend):
         with contextlib.suppress(Exception):
             self.write_stdin(session, {"type": "interrupt"})
         self.close_streams(session)
-        client = _docker_client()
+        client = self._get_client()
         with contextlib.suppress(Exception):
             container = client.containers.get(session.sandbox_id)
             container.stop(timeout=5)
@@ -271,7 +276,7 @@ class DockerSandboxBackend(SandboxBackend):
         )
 
     def status(self, session: SandboxSession) -> str:
-        client = _docker_client()
+        client = self._get_client()
         try:
             container = client.containers.get(session.sandbox_id)
             return container.status
@@ -279,7 +284,7 @@ class DockerSandboxBackend(SandboxBackend):
             return "gone"
 
     def recover(self) -> list[SandboxSession]:
-        client = _docker_client()
+        client = self._get_client()
         sessions: list[SandboxSession] = []
         try:
             containers = client.containers.list(filters={"label": "ai2.pipe=true"})
@@ -320,7 +325,7 @@ class DockerSandboxBackend(SandboxBackend):
                 stdout.close()
 
     def recent_logs(self, session: SandboxSession, tail: int = 40) -> str:
-        client = _docker_client()
+        client = self._get_client()
         try:
             container = client.containers.get(session.sandbox_id)
             return _container_recent_logs(container, tail=tail)
@@ -328,7 +333,7 @@ class DockerSandboxBackend(SandboxBackend):
             return ""
 
     def rename(self, session: SandboxSession, new_name: str) -> None:
-        client = _docker_client()
+        client = self._get_client()
         with contextlib.suppress(Exception):
             container = client.containers.get(session.sandbox_id)
             container.rename(new_name)
@@ -338,7 +343,7 @@ class DockerSandboxBackend(SandboxBackend):
 
         Uses an env var to pass the token safely, avoiding shell injection.
         """
-        client = _docker_client()
+        client = self._get_client()
         container = client.containers.get(session.sandbox_id)
         exit_code, _ = container.exec_run(
             ["sh", "-c", 'printf "%s" "$_TOKEN" > /home/agent/.api_key'],
@@ -354,7 +359,7 @@ class DockerSandboxBackend(SandboxBackend):
 
     def recover_warm(self, pool_harness: str) -> list[SandboxSession]:
         """Recover existing warm containers from Docker on API restart."""
-        client = _docker_client()
+        client = self._get_client()
         sessions: list[SandboxSession] = []
         try:
             containers = client.containers.list(filters={"label": "ai2.warm=true"})
@@ -383,7 +388,7 @@ class DockerSandboxBackend(SandboxBackend):
 
     def verify_running(self, sandbox_id: str) -> bool:
         """Check if a container is still running. Returns False if gone."""
-        client = _docker_client()
+        client = self._get_client()
         try:
             container = client.containers.get(sandbox_id)
             return container.status == "running"
@@ -392,7 +397,7 @@ class DockerSandboxBackend(SandboxBackend):
 
     def force_remove(self, sandbox_id: str) -> None:
         """Force-remove a container by ID."""
-        client = _docker_client()
+        client = self._get_client()
         with contextlib.suppress(Exception):
             c = client.containers.get(sandbox_id)
             c.stop(timeout=3)

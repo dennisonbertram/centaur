@@ -25,28 +25,10 @@ from api.routers import agent as agent_router_mod
 from api.warm_pool import start_replenish_loop, stop_replenish_loop
 from shared.config import settings
 from shared.db import close_pool, create_pool
+from shared.logging_config import configure_structlog
 from shared.tool_manager import ToolManager, load_plugins_config
 
-# ---------------------------------------------------------------------------
-# Structlog configuration — JSON in prod (non-tty), console in dev
-# ---------------------------------------------------------------------------
-_LOG_LEVELS = {"critical": 50, "error": 40, "warning": 30, "info": 20, "debug": 10}
-_log_level = _LOG_LEVELS.get(
-    (os.getenv("AI_V2_LOG_LEVEL") or os.getenv("LOG_LEVEL") or "info").lower(), 20
-)
-
-structlog.configure(
-    logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
-    wrapper_class=structlog.make_filtering_bound_logger(_log_level),
-    processors=[
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso", key="timestamp"),
-        structlog.dev.ConsoleRenderer()
-        if sys.stderr.isatty()
-        else structlog.processors.JSONRenderer(),
-    ],
-)
+configure_structlog()
 
 log = structlog.get_logger().bind(service="api")
 
@@ -57,13 +39,15 @@ log = structlog.get_logger().bind(service="api")
 
 class _UvicornJsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        return json.dumps({
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
-            "level": record.levelname.lower(),
-            "service": "api",
-            "event": "http_request",
-            "msg": record.getMessage(),
-        })
+        return json.dumps(
+            {
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z",
+                "level": record.levelname.lower(),
+                "service": "api",
+                "event": "http_request",
+                "msg": record.getMessage(),
+            }
+        )
 
 
 for _uvi_name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
@@ -185,9 +169,9 @@ if _tool_dirs_env:
 else:
     _plugins_config = _app_root / "tools.toml"
     _plugin_dirs = load_plugins_config(_plugins_config)
-    _tools_dirs = _plugin_dirs if _plugin_dirs else [
-        Path(os.environ.get("PLUGINS_DIR", _app_root / "tools"))
-    ]
+    _tools_dirs = (
+        _plugin_dirs if _plugin_dirs else [Path(os.environ.get("PLUGINS_DIR", _app_root / "tools"))]
+    )
 
 tool_manager = ToolManager(_tools_dirs)
 tool_manager.discover()
@@ -197,11 +181,6 @@ app.include_router(tool_manager.create_rest_router())
 
 def get_tool_manager() -> ToolManager:
     return tool_manager
-
-
-# ---------------------------------------------------------------------------
-def _get_api_secret_key() -> str:
-    return os.environ.get("API_SECRET_KEY", "")
 
 
 # ---------------------------------------------------------------------------

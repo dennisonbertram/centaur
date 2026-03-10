@@ -32,19 +32,15 @@ _NGINX_TRUSTED_IPS = tuple(
 )
 _NGINX_TRUSTED_IP_PREFIX = os.environ.get("NGINX_TRUSTED_IP_PREFIX", "").strip()
 _NGINX_TRUSTED_HOSTS = tuple(
-    host.strip() for host in os.environ.get("NGINX_TRUSTED_HOSTS", "nginx").split(",") if host.strip()
+    host.strip()
+    for host in os.environ.get("NGINX_TRUSTED_HOSTS", "nginx").split(",")
+    if host.strip()
 )
 _NGINX_RESOLVE_TTL_S = max(5, int(os.environ.get("NGINX_RESOLVE_TTL_S", "60")))
 _nginx_ips_cache_lock = threading.Lock()
 _nginx_ips_cache: tuple[str, ...] = tuple(sorted(_NGINX_TRUSTED_IPS))
 _nginx_ips_cache_expires_at = 0.0
 _SANDBOX_ALLOWED_PATH_PREFIXES = ("/agent", "/pipe", "/tools")
-_TRUSTED_SERVICE_HOSTS = tuple(
-    host.strip() for host in os.environ.get("TRUSTED_SERVICE_HOSTS", "nginx,slackbot,auth").split(",") if host.strip()
-)
-_trusted_service_ips_cache_lock = threading.Lock()
-_trusted_service_ips_cache: tuple[str, ...] = ()
-_trusted_service_ips_cache_expires_at = 0.0
 
 
 def _resolve_nginx_ips_uncached() -> tuple[str, ...]:
@@ -87,41 +83,6 @@ def _is_trusted_nginx_ip(client_ip: str) -> bool:
     if _NGINX_TRUSTED_IP_PREFIX.endswith("."):
         return client_ip.startswith(_NGINX_TRUSTED_IP_PREFIX)
     return client_ip == _NGINX_TRUSTED_IP_PREFIX
-
-
-def _resolve_trusted_service_ips_uncached() -> tuple[str, ...]:
-    resolved: set[str] = set()
-    for host in _TRUSTED_SERVICE_HOSTS:
-        try:
-            infos = socket.getaddrinfo(host, None, family=socket.AF_UNSPEC)
-        except OSError:
-            continue
-        for info in infos:
-            sockaddr = info[4]
-            if isinstance(sockaddr, tuple) and sockaddr and isinstance(sockaddr[0], str):
-                resolved.add(sockaddr[0])
-    return tuple(sorted(resolved))
-
-
-def _resolved_trusted_service_ips() -> tuple[str, ...]:
-    global _trusted_service_ips_cache_expires_at, _trusted_service_ips_cache
-    now = time.monotonic()
-    with _trusted_service_ips_cache_lock:
-        if _trusted_service_ips_cache and now < _trusted_service_ips_cache_expires_at:
-            return _trusted_service_ips_cache
-        resolved = _resolve_trusted_service_ips_uncached()
-        if resolved:
-            _trusted_service_ips_cache = resolved
-            _trusted_service_ips_cache_expires_at = now + _NGINX_RESOLVE_TTL_S
-        else:
-            _trusted_service_ips_cache_expires_at = now + min(5, _NGINX_RESOLVE_TTL_S)
-        return _trusted_service_ips_cache
-
-
-def _is_trusted_service_ip(client_ip: str) -> bool:
-    if not client_ip:
-        return False
-    return client_ip in _resolved_trusted_service_ips()
 
 
 def _is_loopback_ip(client_ip: str) -> bool:
@@ -198,7 +159,6 @@ def _is_sandbox_allowed_path(path: str) -> bool:
     return path.startswith(_SANDBOX_ALLOWED_PATH_PREFIXES)
 
 
-
 async def verify_api_key(
     request: Request,
     x_api_key: Annotated[str | None, Header()] = None,
@@ -206,7 +166,11 @@ async def verify_api_key(
     client_ip = request.client.host if request.client else ""
     if _is_loopback_ip(client_ip):
         request.state.api_key_info = APIKeyInfo(
-            id="localhost", name="localhost", key_prefix="", scopes=["*"], created_by="system",
+            id="localhost",
+            name="localhost",
+            key_prefix="",
+            scopes=["*"],
+            created_by="system",
             source="localhost",
         )
         return "localhost-bypass"
@@ -226,8 +190,12 @@ async def verify_api_key(
         claims = verify_sandbox_token(token)
         if claims is not None:
             request.state.api_key_info = APIKeyInfo(
-                id=claims["container_id"], name="sandbox", key_prefix="sbx1",
-                scopes=["agent", "tools:*"], created_by="system", source="sandbox",
+                id=claims["container_id"],
+                name="sandbox",
+                key_prefix="sbx1",
+                scopes=["agent", "tools:*"],
+                created_by="system",
+                source="sandbox",
             )
             return f"sandbox:{claims['container_id']}"
         log.warning(
@@ -242,7 +210,11 @@ async def verify_api_key(
     # Root key check — any caller with the root key is fully trusted.
     if token and secrets.compare_digest(token, api_key):
         request.state.api_key_info = APIKeyInfo(
-            id="root", name="root", key_prefix="root", scopes=["*"], created_by="system",
+            id="root",
+            name="root",
+            key_prefix="root",
+            scopes=["*"],
+            created_by="system",
             source="root",
         )
         return token
@@ -251,8 +223,12 @@ async def verify_api_key(
     svc_key = os.environ.get("SLACKBOT_API_KEY", "")
     if token and svc_key and secrets.compare_digest(token, svc_key):
         request.state.api_key_info = APIKeyInfo(
-            id="service", name="service", key_prefix="svc", created_by="system",
-            scopes=["agent", "threads:read"], source="service",
+            id="service",
+            name="service",
+            key_prefix="svc",
+            created_by="system",
+            scopes=["agent", "threads:read"],
+            source="service",
         )
         return token
 
@@ -272,8 +248,12 @@ def get_key_info(request: Request) -> APIKeyInfo:
     info = getattr(request.state, "api_key_info", None)
     if info is None:
         return APIKeyInfo(
-            id="unknown", name="unknown", key_prefix="", scopes=["*"],
-            created_by="system", source="unknown",
+            id="unknown",
+            name="unknown",
+            key_prefix="",
+            scopes=["*"],
+            created_by="system",
+            source="unknown",
         )
     return info
 
@@ -323,8 +303,12 @@ async def verify_ui_or_api_key(
 
     if _is_loopback_ip(client_ip):
         request.state.api_key_info = APIKeyInfo(
-            id="localhost", name="localhost", key_prefix="", scopes=["*"],
-            created_by="system", source="localhost",
+            id="localhost",
+            name="localhost",
+            key_prefix="",
+            scopes=["*"],
+            created_by="system",
+            source="localhost",
         )
         return "localhost-bypass"
 
@@ -333,8 +317,12 @@ async def verify_ui_or_api_key(
         raise HTTPException(status_code=403, detail="Untrusted forwarded identity header")
     if forwarded_user and _is_trusted_nginx_ip(client_ip):
         request.state.api_key_info = APIKeyInfo(
-            id="nginx", name=forwarded_user, key_prefix="", scopes=["*"],
-            created_by="nginx", source="nginx",
+            id="nginx",
+            name=forwarded_user,
+            key_prefix="",
+            scopes=["*"],
+            created_by="nginx",
+            source="nginx",
         )
         return "nginx"
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shlex
 import sys
 from pathlib import Path
@@ -14,32 +13,10 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 from shared.cli_tables import render_text_table  # noqa: E402
+from shared.logging_config import configure_structlog  # noqa: E402
 from shared.tool_manager import ToolManager  # noqa: E402
 
-_LOG_LEVELS = {
-    "critical": 50,
-    "error": 40,
-    "warning": 30,
-    "info": 20,
-    "debug": 10,
-}
-_default_level = (os.getenv("AI_V2_LOG_LEVEL") or os.getenv("LOG_LEVEL") or "info").lower()
-_log_level = _LOG_LEVELS.get(_default_level, 20)
-
-_renderer: structlog.types.Processor = (
-    structlog.dev.ConsoleRenderer() if sys.stderr.isatty() else structlog.processors.JSONRenderer()
-)
-
-structlog.configure(
-    logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
-    wrapper_class=structlog.make_filtering_bound_logger(_log_level),
-    processors=[
-        structlog.contextvars.merge_contextvars,
-        structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso", key="timestamp"),
-        _renderer,
-    ],
-)
+configure_structlog()
 log = structlog.get_logger()
 
 
