@@ -64,6 +64,9 @@ jobs:
         run: |
           # Secrets must be healthy before anything else starts (firewall, pgbouncer,
           # api, slackbot, web, auth all depend on it transitively).
+          # Clean up any stale/conflicting containers from previous failed deploys.
+          docker rm -f ai_v2-secrets-1 2>/dev/null || true
+          docker container prune -f --filter "label=com.docker.compose.service=secrets" 2>/dev/null || true
           docker compose up -d secrets
           for i in $(seq 1 90); do
             FMT='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}'
