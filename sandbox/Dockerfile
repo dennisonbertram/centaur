@@ -57,7 +57,9 @@ USER agent
 RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace \
     && git config --global init.defaultBranch main \
     && git config --global push.autoSetupRemote true \
-    && git config --global --add safe.directory '*'
+    && git config --global --add safe.directory '*' \
+    && git config --global user.name "Paradigm AI" \
+    && git config --global user.email "ai@paradigm.xyz"
 
 # ── Stable helpers (change rarely → cached) ──────────────────────────────────
 COPY --chmod=755 call.sh /usr/local/bin/call
