@@ -54,8 +54,9 @@ COPY sandbox/SYSTEM_PROMPT_ENG.md sandbox/SYSTEM_PROMPT_LEGAL.md sandbox/
 # Copy migrations
 COPY migrations/ migrations/
 
+COPY scripts/bootstrap-secrets.sh /app/scripts/bootstrap-secrets.sh
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN chmod +x /entrypoint.sh /app/scripts/bootstrap-secrets.sh
 
 EXPOSE 8000
 

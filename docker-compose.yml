@@ -62,6 +62,7 @@ services:
   # To redeploy: gh workflow run deploy.yml --repo paradigmxyz/ai_v2
   secrets:
     build: .
+    entrypoint: []
     command: ["/app/.venv/bin/uvicorn", "secret_manager.app:app", "--host", "0.0.0.0", "--port", "8100"]
     environment:
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
@@ -105,7 +106,9 @@ services:
     restart: unless-stopped
 
   pgbouncer:
-    build: services/pgbouncer
+    build:
+      context: .
+      dockerfile: services/pgbouncer/Dockerfile
     environment:
       SECRET_MANAGER_URL: http://firewall:8081
       AUTH_TYPE: scram-sha-256
@@ -181,7 +184,8 @@ services:
 
   slackbot:
     build:
-      context: apps/slackbot
+      context: .
+      dockerfile: apps/slackbot/Dockerfile
     environment:
       REDIS_URL: redis://redis:6379
       AI_V2_API_URL: http://api:8000
@@ -207,7 +211,8 @@ services:
 
   web:
     build:
-      context: apps/web
+      context: .
+      dockerfile: apps/web/Dockerfile
     environment:
       AI_V2_API_URL: http://api:8000
       SECRET_MANAGER_URL: http://firewall:8081
@@ -225,7 +230,9 @@ services:
     restart: unless-stopped
 
   auth:
-    build: services/auth
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
     environment:
       SECRET_MANAGER_URL: http://firewall:8081
     networks:
