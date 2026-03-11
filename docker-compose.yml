@@ -122,7 +122,9 @@ services:
     restart: unless-stopped
 
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
     environment:
       SECRET_MANAGER_URL: http://firewall:8081
       SLACKBOT_URL: http://slackbot:3001
