@@ -1,15 +1,6 @@
 import type { Harness, ThreadState } from "@/lib/types";
 
-const SUPPORTED_HARNESSES = new Set<Harness>([
-  "amp",
-  "claude-code",
-  "codex",
-  "pi-mono",
-  "eng",
-  "engineer",
-  "invest",
-  "legal",
-]);
+const ENGINES = new Set(["amp", "claude-code", "codex", "pi-mono"]);
 
 const SUPPORTED_THREAD_STATES = new Set<ThreadState>([
   "running",
@@ -64,8 +55,8 @@ export function normalizeThreadHarness(
   for (const value of candidates) {
     const normalized = normalizeText(value);
     if (!normalized) continue;
-    if (normalized === "eng" || normalized === "engineer") return normalized as Harness;
-    if (SUPPORTED_HARNESSES.has(normalized as Harness)) return normalized as Harness;
+    // Accept any non-empty string — engines and personas alike
+    return normalized;
   }
   return "amp";
 }

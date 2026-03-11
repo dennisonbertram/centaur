@@ -4,7 +4,8 @@ import { getPool } from "@/lib/db";
 import { normalizeHarnessEvent, normalizeThreadKey, type CanonicalEvent } from "@centaur/harness-events";
 
 export type Engine = "amp" | "claude-code" | "codex" | "pi-mono";
-export type Harness = Engine | "eng" | "legal" | "invest" | "events";
+export type Harness = string;
+const ENGINES = new Set<Engine>(["amp", "claude-code", "codex", "pi-mono"]);
 export type BudgetMode = "simple" | "auto" | "complex";
 export type FileAttachment = { url: string; name: string };
 export type ExecuteSource = "slack" | "thread_ui" | "api";
@@ -74,17 +75,19 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
   let budgetExplicit = false;
   const activeHarness = context.activeHarness ?? null;
 
-  const isPersonaHarness = (value: Harness): value is "eng" | "legal" | "invest" | "events" =>
-    value === "eng" || value === "legal" || value === "invest" || value === "events";
+  const isEngine = (value: string): value is Engine =>
+    ENGINES.has(value as Engine);
 
-  const applyHarness = (value: Harness): void => {
-    if (isPersonaHarness(value)) {
+  const applyHarness = (value: string): void => {
+    if (!isEngine(value)) {
+      // Persona flag — set harness, preserve engine if already set
       harness = value;
       harnessExplicit = true;
       return;
     }
-    if (isPersonaHarness(harness)) {
-      engine = value;
+    if (!isEngine(harness)) {
+      // Already in persona mode — treat engine flag as engine override
+      engine = value as Engine;
       engineExplicit = true;
       return;
     }
@@ -94,47 +97,16 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
     engineExplicit = false;
   };
 
-  // Persona flags
-  const engRegex = /(^|\s)--eng(?=\s|$)/gi;
-  if (engRegex.test(cleaned)) {
-    applyHarness("eng");
-    cleaned = cleaned.replace(engRegex, " ");
-    engRegex.lastIndex = 0;
-  }
-  // --legal flag -> harness="legal"
-  const legalRegex = /(^|\s)--legal(?=\s|$)/gi;
-  if (legalRegex.test(cleaned)) {
-    applyHarness("legal");
-    cleaned = cleaned.replace(legalRegex, " ");
-    legalRegex.lastIndex = 0;
-  }
-  // --invest flag -> harness="invest"
-  const investRegex = /(^|\s)--invest(?=\s|$)/gi;
-  if (investRegex.test(cleaned)) {
-    applyHarness("invest");
-    cleaned = cleaned.replace(investRegex, " ");
-    investRegex.lastIndex = 0;
-  }
-  // --events flag -> harness="events"
-  const eventsRegex = /(^|\s)--events(?=\s|$)/gi;
-  if (eventsRegex.test(cleaned)) {
-    applyHarness("events");
-    cleaned = cleaned.replace(eventsRegex, " ");
-    eventsRegex.lastIndex = 0;
-  }
-
-  // harness=<value> key-value
-  const kvMatch = cleaned.match(
-    /\bharness\s*=\s*(amp|claude-code|codex|pi-mono|eng|legal|invest|events)\b/i
-  );
+  // harness=<value> key-value (accepts any value — API validates)
+  const kvMatch = cleaned.match(/\bharness\s*=\s*([A-Za-z0-9_-]+)\b/i);
   if (kvMatch) {
-    applyHarness(kvMatch[1].toLowerCase() as Harness);
+    applyHarness(kvMatch[1].toLowerCase());
     cleaned = (
       cleaned.slice(0, kvMatch.index) + cleaned.slice(kvMatch.index! + kvMatch[0].length)
     ).trim();
   }
 
-  // Harness flags: --amp, --claude, --codex, --pi
+  // Engine flags: --amp, --claude, --codex, --pi
   const harnessFlags: Array<{ regex: RegExp; value: Harness }> = [
     { regex: /(^|\s)--amp(?=\s|$)/gi, value: "amp" },
     { regex: /(^|\s)--claude(?=\s|$)/gi, value: "claude-code" },
@@ -159,15 +131,15 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
   );
   if (engineFlagMatch) {
     const parsedEngine = engineFlagMatch[2].toLowerCase() as Engine;
-    const personaContextHarness =
-      isPersonaHarness(harness)
+    const personaContext =
+      !isEngine(harness)
         ? harness
-        : activeHarness && isPersonaHarness(activeHarness)
+        : activeHarness && !isEngine(activeHarness)
           ? activeHarness
           : null;
-    if (personaContextHarness) {
-      if (!isPersonaHarness(harness)) {
-        harness = personaContextHarness;
+    if (personaContext) {
+      if (isEngine(harness)) {
+        harness = personaContext;
       }
       engine = parsedEngine;
       engineExplicit = true;
@@ -240,6 +212,23 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
       regex.lastIndex = 0;
     }
   }
+
+  // Generic --<flag> catch-all: any remaining --<word> flags are treated as persona names.
+  // Known engine/budget/model flags were already consumed above.
+  const knownFlags = new Set([
+    "amp", "claude", "claude-code", "codex", "pi", "pi-mono",
+    "simple", "fast", "auto", "balanced", "complex", "deep",
+    "opus", "sonnet", "haiku", "engine", "model",
+  ]);
+  const genericFlagRegex = /(^|\s)--([a-z][a-z0-9-]*)(?=\s|$)/gi;
+  let genericMatch: RegExpExecArray | null;
+  while ((genericMatch = genericFlagRegex.exec(cleaned)) !== null) {
+    const flag = genericMatch[2];
+    if (knownFlags.has(flag)) continue;
+    harness = flag;
+    harnessExplicit = true;
+  }
+  cleaned = cleaned.replace(genericFlagRegex, " ");
 
   cleaned = cleaned.replace(/\s+/g, " ").trim();
   return {

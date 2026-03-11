@@ -100,8 +100,9 @@ export function getSlackBootstrapState(): { ready: boolean; missingEnvKeys: stri
   };
 }
 
-function isPersonaHarness(harness: Harness): boolean {
-  return harness === "legal" || harness === "eng" || harness === "invest" || harness === "events";
+const ENGINE_SET = new Set(["amp", "claude-code", "codex", "pi-mono"]);
+function isPersonaHarness(harness: string): boolean {
+  return !!harness && !ENGINE_SET.has(harness);
 }
 
 type SlackReply = {

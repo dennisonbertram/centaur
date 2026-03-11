@@ -66,7 +66,6 @@ export function harnessIconFor(harness: Harness | string): React.ComponentType<{
   if (harness === "claude-code") return ClaudeIcon;
   if (harness === "codex") return OpenAIIcon;
   if (harness === "pi-mono") return PiMonoIcon;
-  if (harness === "eng" || harness === "engineer") return ParadigmIcon;
-  if (harness === "legal" || harness === "invest" || harness === "events") return ParadigmIcon;
-  return PiMonoIcon;
+  // Any non-engine harness is a persona — use ParadigmIcon as default
+  return ParadigmIcon;
 }

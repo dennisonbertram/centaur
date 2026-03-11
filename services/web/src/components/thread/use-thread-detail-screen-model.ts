@@ -167,12 +167,13 @@ export function useThreadDetailScreenModel(threadKey: string) {
   const listQuery = listQueryFromSearchParams(new URLSearchParams(searchParams.toString()));
   const upHref = listQuery ? `/?${listQuery}` : "/";
   const backHref = listHrefWithAnchor(listQuery, entryAnchor);
-  const isEngineer = thread?.harness === "engineer" || thread?.harness === "eng";
+  const ENGINES = new Set(["amp", "claude-code", "codex", "pi-mono"]);
+  const isPersona = !!thread?.harness && !ENGINES.has(thread.harness);
   const isStreaming = chatStatus === "submitted" || chatStatus === "streaming";
   const isRunning = thread ? isActiveState(thread.state) || isStreaming : false;
   const effectiveThreadState =
     thread && isStreaming && !isActiveState(thread.state) ? "running" : thread?.state;
-  const canInterrupt = !!thread && !isEngineer && (isRunningState(thread.state) || isStreaming);
+  const canInterrupt = !!thread && !isPersona && (isRunningState(thread.state) || isStreaming);
   const liveElapsed = useElapsed(thread?.last_activity ?? null, Boolean(isRunning));
   useFaviconStatus(effectiveThreadState);
   const stableStatus = useStableStatus(agentStatus);
