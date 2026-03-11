@@ -23,7 +23,7 @@ class CheckRule:
 
 
 def _load_policy() -> dict[str, Any]:
-    policy_path = Path(__file__).resolve().parents[2] / "docs" / "legal_policy_v1.json"
+    policy_path = Path(__file__).resolve().parents[2] / "tools" / "personas" / "legal" / "legal_policy_v1.json"
     return json.loads(policy_path.read_text())
 
 
@@ -67,7 +67,7 @@ class LegalPlaybookClient:
 
     def __init__(self) -> None:
         self._policy = _load_policy()
-        self._policy_path = Path(__file__).resolve().parents[2] / "docs" / "legal_policy_v1.json"
+        self._policy_path = Path(__file__).resolve().parents[2] / "tools" / "personas" / "legal" / "legal_policy_v1.json"
         self._playbook_path = Path(__file__).resolve().parent / "paradigm-playbook.md"
         self._checks = tuple(
             _check_from_policy(item) for item in self._policy.get("compliance_rules", [])

@@ -34,7 +34,7 @@ def _meaningful_owner(ts: TermSheet) -> bool:
 
 
 def _policy() -> dict[str, Any]:
-    path = Path(__file__).resolve().parents[2] / "docs" / "legal_policy_v1.json"
+    path = Path(__file__).resolve().parents[2] / "tools" / "personas" / "legal" / "legal_policy_v1.json"
     return json.loads(path.read_text())
 
 

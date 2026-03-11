@@ -1499,8 +1499,8 @@ def _load_legal_playbook_client() -> Any:
 
 
 def _run_knowledge_wiring_eval() -> list[dict[str, Any]]:
-    policy_path = Path("docs/legal_policy_v1.json").resolve()
-    kb_path = Path("docs/legal_knowledge_base.json").resolve()
+    policy_path = Path("tools/personas/legal/legal_policy_v1.json").resolve()
+    kb_path = Path("tools/personas/legal/legal_knowledge_base.json").resolve()
     if not policy_path.exists() or not kb_path.exists():
         return [
             {
