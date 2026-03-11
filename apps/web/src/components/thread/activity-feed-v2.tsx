@@ -11,7 +11,7 @@
  * This component can be used alongside the existing ActivityFeed during migration.
  */
 
-import { ChevronUp, LoaderCircle, MessagesSquare } from "lucide-react";
+import { ChevronUp, LoaderCircle } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { UIMessage } from "ai";
 import { Button } from "@/components/ui/button";
@@ -122,21 +122,13 @@ export const ActivityFeedV2 = memo(function ActivityFeedV2({
         )}
 
         {isEmpty ? (
-          <ConversationEmptyState
-            icon={
-              isIdle ? (
-                <MessagesSquare className="size-8 text-muted-foreground/70" />
-              ) : (
-                <LoaderCircle className="size-8 animate-spin text-muted-foreground/70" />
-              )
-            }
-            title={isIdle ? "No activity yet" : "Waiting for events"}
-            description={
-              isIdle
-                ? "Start with a prompt to kick off this thread."
-                : "Agent activity appears here as soon as tools run."
-            }
-          />
+          isIdle ? null : (
+            <ConversationEmptyState
+              icon={<LoaderCircle className="size-6 animate-spin text-muted-foreground/50" />}
+              title="Waiting for events"
+              description=""
+            />
+          )
         ) : (
           messages.map((message, i) => {
             const prev = i > 0 ? messages[i - 1] : null;

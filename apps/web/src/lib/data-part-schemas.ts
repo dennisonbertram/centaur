@@ -4,7 +4,7 @@ export const dataPartSchemas = {
   "agent-status": z.object({ text: z.string() }),
   "phase-progress": z.object({
     phase: z.string(),
-    turn_id: z.number(),
+    turn_id: z.number().nullable().optional(),
     event_seq: z.number().nullable().optional(),
   }),
   "file-changes": z.object({
@@ -15,6 +15,7 @@ export const dataPartSchemas = {
     command: z.string(),
     output: z.unknown().optional(),
     exitCode: z.number().nullable().optional(),
+    exit_code: z.number().nullable().optional(),
     status: z.string().nullable().optional(),
     event_seq: z.number().nullable().optional(),
   }),

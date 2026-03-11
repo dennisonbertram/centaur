@@ -357,17 +357,37 @@ function buildElements(parts: UIMessage["parts"]): Element[] {
       // shell/bash → terminal
       if (toolName === "shell" || toolName === "bash") {
         flushToolGroup();
+        const isStreaming =
+          partState === "input-available" ||
+          partState === "input-streaming" ||
+          partState === "streaming" ||
+          partState === "partial-call";
         elements.push({
           kind: "terminal",
           key: `terminal:${toolCallId}`,
           command: asString(toolInput.command),
           output: hasError ? errorText : outputText || undefined,
-          streaming: partState === "input-available" || partState === "input-streaming",
+          exitCode: typeof toolInput.exit_code === "number"
+            ? toolInput.exit_code
+            : undefined,
+          streaming: isStreaming,
         });
         continue;
       }
 
       // Regular tool → group
+      const callState: ToolCall["state"] =
+        hasError ? "error"
+        : partState === "output-available" || partState === "output-denied" || outputText ? "done"
+        : "loading";
+      const callUiState: ToolCall["uiState"] =
+        hasError ? "output-error"
+        : partState === "output-available" || outputText ? "output-available"
+        : partState === "output-denied" ? "output-denied"
+        : partState === "approval-requested" ? "approval-requested"
+        : partState === "approval-responded" ? "approval-responded"
+        : partState === "input-streaming" || partState === "streaming" || partState === "partial-call" ? "input-streaming"
+        : "input-available";
       const call: ToolCall = {
         id: toolCallId,
         name: toolName,
@@ -375,8 +395,8 @@ function buildElements(parts: UIMessage["parts"]): Element[] {
         output: hasError ? undefined : outputText || undefined,
         rawOutput: hasError ? undefined : partRec.output,
         errorText: errorText || undefined,
-        uiState: hasError ? "output-error" : outputText ? "output-available" : "input-available",
-        state: hasError ? "error" : outputText ? "done" : "loading",
+        uiState: callUiState,
+        state: callState,
         sources: extractedSources.length > 0 ? dedupeSources(extractedSources) : undefined,
       };
 
@@ -398,6 +418,16 @@ function buildElements(parts: UIMessage["parts"]): Element[] {
     // Custom data parts — use isDataUIPart for the generic check, then route by type
     if (isDataUIPart(part)) {
       const data = asRecord(partRec.data);
+
+      // Non-renderable data parts — skip without flushing tool groups so
+      // they never break consecutive tool call grouping.
+      if (
+        partType === "data-agent-status" ||
+        partType === "data-token-usage" ||
+        partType === "data-handoff"
+      ) {
+        continue;
+      }
 
       if (partType === "data-phase-progress") {
         const phase = asString(data.phase);
@@ -462,6 +492,9 @@ function buildElements(parts: UIMessage["parts"]): Element[] {
         });
         continue;
       }
+
+      // Unknown data-* parts — skip silently without disrupting tool groups
+      continue;
     }
   }
 
@@ -664,8 +697,19 @@ function PartElement({
       const d = element.data;
       const command = asString(d.command);
       const output = stringifyToolOutput(d.output);
-      const exitCode = typeof d.exitCode === "number" ? d.exitCode : undefined;
-      return <ShellExecutionCard command={command} output={output} exitCode={exitCode} streaming={d.status === "running"} />;
+      const exitCode =
+        typeof d.exitCode === "number" ? d.exitCode
+        : typeof d.exit_code === "number" ? d.exit_code as number
+        : undefined;
+      const status = asString(d.status);
+      return (
+        <ShellExecutionCard
+          command={command}
+          output={output}
+          exitCode={exitCode}
+          streaming={status === "running" || status === "streaming"}
+        />
+      );
     }
 
     case "file-changes":

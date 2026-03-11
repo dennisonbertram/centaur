@@ -614,72 +614,8 @@ function FullLayoutTab() {
                 </div>
               </div>
             ) : (
-              /* New Session — matches (threads)/page.tsx */
-              <div className="flex h-full min-h-0 flex-col">
-                <div className="flex-1 overflow-y-auto px-4 py-4">
-                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(300px,0.9fr)]">
-                    <section className="thread-surface flex min-h-[260px] flex-col justify-center rounded-[var(--radius-shell)] px-6 py-8">
-                      <div className="max-w-xl">
-                        <div className="mb-4 flex size-12 items-center justify-center rounded-2xl border border-border/80 bg-card/60">
-                          <MessageSquarePlus className="size-6 text-muted-foreground" />
-                        </div>
-                        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-                          Start a new thread with durable history.
-                        </h1>
-                        <p className="mt-3 max-w-lg text-sm leading-6 text-muted-foreground">
-                          New prompts start here, replies stay attached to the thread, and the latest session stays one tap away.
-                        </p>
-                        <div className="mt-5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                          <span className="rounded-full border border-border/70 bg-background/55 px-2.5 py-1">
-                            Thread-first
-                          </span>
-                          <span className="rounded-full border border-border/70 bg-background/55 px-2.5 py-1">
-                            Harness-agnostic
-                          </span>
-                          <span className="rounded-full border border-border/70 bg-background/55 px-2.5 py-1">
-                            Immediate persistence
-                          </span>
-                        </div>
-                      </div>
-                    </section>
-
-                    <section className="thread-surface-soft rounded-[var(--radius-shell)] p-3">
-                      <div className="flex items-center justify-between gap-3 px-2 pb-2 pt-1">
-                        <div>
-                          <h2 className="text-sm font-medium text-foreground">Continue recent work</h2>
-                          <p className="mt-0.5 text-xs text-muted-foreground">
-                            Jump back into the latest thread without hunting through the sidebar.
-                          </p>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => setSelectedKey(recentThreads[0]?.slack_thread_key ?? null)}
-                        >
-                          Open latest
-                        </Button>
-                      </div>
-                      <div className="overflow-hidden rounded-2xl border border-border/70 bg-background/35">
-                        <div className="divide-y divide-border/50">
-                          {recentThreads.slice(0, 4).map((thread) => (
-                            <ThreadSummaryCard
-                              key={thread.slack_thread_key}
-                              thread={thread}
-                              href="#"
-                              density="compact"
-                              linkProps={{
-                                onClick: (e: React.MouseEvent) => {
-                                  e.preventDefault();
-                                  setSelectedKey(thread.slack_thread_key);
-                                },
-                              }}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    </section>
-                  </div>
-                </div>
+              <div className="flex h-full flex-col">
+                <div className="flex-1" />
                 <MessageInput
                   mode="idle"
                   placeholder="Start a new thread…"

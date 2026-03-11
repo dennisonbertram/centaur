@@ -18,12 +18,14 @@ export type StreamChunk = Record<string, unknown> & { type: string };
 export interface ConversionState {
   handoffToolCallIds: Set<string>;
   handoffInputs: Map<string, { follow: boolean; goal: string }>;
+  lastSubagentPhase: string | null;
 }
 
 export function createConversionState(): ConversionState {
   return {
     handoffToolCallIds: new Set(),
     handoffInputs: new Map(),
+    lastSubagentPhase: null,
   };
 }
 
@@ -260,6 +262,15 @@ export function canonicalEventToStreamChunks(
     const status = event.status || "";
     if (!status) return chunks;
     const raw = event as unknown as Record<string, unknown>;
+    const phase = asString(raw.phase).trim();
+    if (phase && state && phase !== state.lastSubagentPhase) {
+      state.lastSubagentPhase = phase;
+      chunks.push({
+        type: "data-phase-progress",
+        id: `turn-${turnId}-phase-${eventIndex}`,
+        data: { phase, turn_id: turnId },
+      });
+    }
     const inputTokensRaw = raw.input_tokens;
     const outputTokensRaw = raw.output_tokens;
     const inputTokens =

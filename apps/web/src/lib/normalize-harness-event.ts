@@ -195,6 +195,15 @@ function subagentEvent(opts: {
   return payload;
 }
 
+function normalizeSubagentStatusString(raw: string): string {
+  const s = raw.trim().toLowerCase();
+  if (s === "started" || s === "start" || s === "starting") return "started";
+  if (s === "working" || s === "running" || s === "in_progress" || s === "progress") return "working";
+  if (s === "completed" || s === "done" || s === "complete" || s === "finished" || s === "success") return "completed";
+  if (s === "failed" || s === "error" || s === "failure") return "failed";
+  return raw;
+}
+
 function firstNonEmptyString(...values: unknown[]): string | undefined {
   for (const value of values) {
     const normalized = asString(value).trim();
@@ -308,10 +317,40 @@ function normalizeAmpLikeEvent(event: Record<string, unknown>): CanonicalEvent[]
     eventType === "reasoning" ||
     eventType === "tool" ||
     eventType === "command_execution" ||
-    eventType === "file_change" ||
-    eventType === "subagent"
+    eventType === "file_change"
   ) {
     return [event as unknown as CanonicalEvent];
+  }
+
+  if (eventType === "subagent") {
+    const status = asString(event.status).trim();
+    const subagentId = firstNonEmptyString(
+      event.subagent_id,
+      event.task_id,
+      event.tool_use_id,
+      event.id,
+    );
+    if (!status || !subagentId) return [event as unknown as CanonicalEvent];
+    const description = firstNonEmptyString(event.description, event.message);
+    const toolName = firstNonEmptyString(
+      event.tool_name,
+      event.toolName,
+      event.last_tool_name,
+      event.lastToolName,
+      event.active_tool_name,
+      event.activeToolName,
+    );
+    return [
+      subagentEvent({
+        status: normalizeSubagentStatusString(status),
+        subagent_id: subagentId,
+        name: firstNonEmptyString(event.name, event.task_name, description),
+        summary: firstNonEmptyString(event.summary, event.result),
+        error: firstNonEmptyString(event.error),
+        activity: description,
+        activities: mergeActivities(makeActivity(description, toolName)),
+      }),
+    ];
   }
 
   if (eventType === "result") {
@@ -332,20 +371,31 @@ function normalizeAmpLikeEvent(event: Record<string, unknown>): CanonicalEvent[]
       event.subagent_id,
       event.tool_use_id,
       event.parent_tool_use_id,
+      event.id,
     );
-    if (!subagentId) return [];
-    const description = firstNonEmptyString(event.description, event.message);
-    const summary = firstNonEmptyString(event.summary, event.result, event.message);
-    const name = firstNonEmptyString(event.name, event.task_name, description);
+    if (!subagentId) {
+      if (subtype === "init") {
+        const sessionId = firstNonEmptyString(event.session_id);
+        return sessionId
+          ? [{ type: "system", subtype: "init", session_id: sessionId }]
+          : [];
+      }
+      return [];
+    }
+    const description = firstNonEmptyString(event.description, event.message, event.text);
+    const summary = firstNonEmptyString(event.summary, event.result, event.message, event.text);
+    const name = firstNonEmptyString(event.name, event.task_name, event.title, description);
     const toolName = firstNonEmptyString(
       event.tool_name,
       event.toolName,
       event.last_tool_name,
       event.lastToolName,
+      event.active_tool_name,
+      event.activeToolName,
     );
     const activities = mergeActivities(makeActivity(description, toolName));
 
-    if (subtype === "task_started") {
+    if (subtype === "task_started" || subtype === "task_start" || subtype === "started") {
       return [
         subagentEvent({
           status: "started",
@@ -356,7 +406,12 @@ function normalizeAmpLikeEvent(event: Record<string, unknown>): CanonicalEvent[]
         }),
       ];
     }
-    if (subtype === "task_progress") {
+    if (
+      subtype === "task_progress" ||
+      subtype === "task_update" ||
+      subtype === "progress" ||
+      subtype === "working"
+    ) {
       return [
         subagentEvent({
           status: "working",
@@ -367,7 +422,13 @@ function normalizeAmpLikeEvent(event: Record<string, unknown>): CanonicalEvent[]
         }),
       ];
     }
-    if (subtype === "task_notification") {
+    if (
+      subtype === "task_notification" ||
+      subtype === "task_completed" ||
+      subtype === "task_done" ||
+      subtype === "completed" ||
+      subtype === "done"
+    ) {
       return [
         subagentEvent({
           status: "completed",
@@ -376,6 +437,21 @@ function normalizeAmpLikeEvent(event: Record<string, unknown>): CanonicalEvent[]
           summary: summary ?? description,
           activity: description,
           activities,
+        }),
+      ];
+    }
+    if (
+      subtype === "task_failed" ||
+      subtype === "task_error" ||
+      subtype === "failed" ||
+      subtype === "error"
+    ) {
+      return [
+        subagentEvent({
+          status: "failed",
+          subagent_id: subagentId,
+          name,
+          error: firstNonEmptyString(event.error, event.message) || "Task failed",
         }),
       ];
     }

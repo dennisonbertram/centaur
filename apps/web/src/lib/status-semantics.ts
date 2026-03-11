@@ -74,7 +74,14 @@ export function categorizeAgentStatusText(status: string | null): {
 
 export function normalizeSubagentStatus(status: string | undefined): string {
   const normalized = (status ?? "").trim().toLowerCase();
-  if (normalized === "progress") return "working";
+  if (normalized === "progress" || normalized === "running" || normalized === "in_progress") {
+    return "working";
+  }
+  if (normalized === "start" || normalized === "starting") return "started";
+  if (normalized === "done" || normalized === "complete" || normalized === "finished" || normalized === "success") {
+    return "completed";
+  }
+  if (normalized === "error" || normalized === "failure") return "failed";
   return normalized;
 }
 
