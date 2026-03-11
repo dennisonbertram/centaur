@@ -5,13 +5,12 @@ RUN corepack enable pnpm
 WORKDIR /app
 
 # Install dependencies (cached independently of source changes)
-COPY apps/slackbot/package.json apps/slackbot/pnpm-lock.yaml* ./
-COPY apps/slackbot/patches/ patches/
+COPY services/slackbot/package.json services/slackbot/pnpm-lock.yaml* ./
 RUN pnpm install --frozen-lockfile 2>/dev/null || pnpm install
 
 # Copy source and build
 FROM base AS builder
-COPY apps/slackbot/ .
+COPY services/slackbot/ .
 RUN pnpm build
 
 # Production
@@ -25,7 +24,7 @@ ENV NODE_ENV=production
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY scripts/bootstrap-secrets.sh /app/bootstrap-secrets.sh
-COPY apps/slackbot/entrypoint.sh /app/entrypoint.sh
+COPY services/slackbot/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh /app/bootstrap-secrets.sh
 
 EXPOSE 3001

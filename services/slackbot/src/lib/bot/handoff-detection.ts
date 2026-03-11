@@ -1,6 +1,6 @@
-import type { CanonicalEvent, ContentBlock } from "@centaur/harness-events";
+import type { CanonicalEvent } from "@centaur/harness-events";
 
-export type HandoffInfo = {
+type HandoffInfo = {
   toolCallId: string;
   goal: string;
   follow: boolean;

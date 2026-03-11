@@ -1,113 +1,37 @@
 import { log } from "@/lib/logger";
-import { apiPost, resilientFetch, ApiError, API_URL } from "./api-client";
+import { resilientFetch, isNetworkError, ApiError, API_URL } from "./api-client";
 import { getPool } from "@/lib/db";
 import { normalizeHarnessEvent, normalizeThreadKey, type CanonicalEvent } from "@centaur/harness-events";
+import { sleep } from "@/lib/utils";
 
-export type Engine = "amp" | "claude-code" | "codex" | "pi-mono";
-export type Harness = string;
-const ENGINES = new Set<Engine>(["amp", "claude-code", "codex", "pi-mono"]);
+export type Harness = string;  // Dynamic — personas discovered at runtime
 export type BudgetMode = "simple" | "auto" | "complex";
-export type FileAttachment = { url: string; name: string };
-export type ExecuteSource = "slack" | "thread_ui" | "api";
-export type ArchiverSourceType = "docsend" | "google_drive" | "local" | "unknown";
-export type ArchiverExtractedFile = {
-  status?: string;
-  error?: string;
-  file?: {
-    filename?: string;
-    source_type?: ArchiverSourceType | string;
-    title?: string;
-    mime_type?: string | null;
-  };
-  metadata?: Record<string, unknown>;
-  parsed_text?: string;
-  warnings?: string[];
-};
-export type ArchiverExtractResult = {
-  status?: string;
-  error?: string;
-  source?: string;
-  context?: Record<string, unknown>;
-  files?: ArchiverExtractedFile[];
-};
 
-function parseToolEnvelopeResult<T>(envelope: Record<string, unknown>, fallbackError: string): T {
-  const toolResult = envelope.result;
-  if (typeof toolResult === "string") {
-    try {
-      return JSON.parse(toolResult) as T;
-    } catch {
-      return { status: "error", error: toolResult } as T;
-    }
-  }
-  if (toolResult && typeof toolResult === "object") {
-    return toolResult as T;
-  }
-  return {
-    status: "error",
-    error: fallbackError,
-  } as T;
-}
-
-export type RunOptions = {
+type RunOptions = {
   harness: Harness;
-  engine: Engine | null;
-  model: string | null;
   budgetMode: BudgetMode | null;
   cleanedText: string;
   harnessExplicit: boolean;
-  engineExplicit: boolean;
-  budgetExplicit: boolean;
 };
 
-type RunOptionContext = {
-  activeHarness?: Harness | null;
-};
-
-export function extractRunOptions(text: string, context: RunOptionContext = {}): RunOptions {
+export function extractRunOptions(text: string): RunOptions {
   let cleaned = text;
   let harness: Harness = "amp";
-  let engine: Engine | null = null;
-  let model: string | null = null;
   let budgetMode: BudgetMode | null = null;
   let harnessExplicit = false;
-  let engineExplicit = false;
-  let budgetExplicit = false;
-  const activeHarness = context.activeHarness ?? null;
-
-  const isEngine = (value: string): value is Engine =>
-    ENGINES.has(value as Engine);
-
-  const applyHarness = (value: string): void => {
-    if (!isEngine(value)) {
-      // Persona flag — set harness, preserve engine if already set
-      harness = value;
-      harnessExplicit = true;
-      return;
-    }
-    if (!isEngine(harness)) {
-      // Already in persona mode — treat engine flag as engine override
-      engine = value as Engine;
-      engineExplicit = true;
-      return;
-    }
-    harness = value;
-    harnessExplicit = true;
-    engine = null;
-    engineExplicit = false;
-  };
 
   // harness=<value> key-value (accepts any value — API validates)
   const kvMatch = cleaned.match(/\bharness\s*=\s*([A-Za-z0-9_-]+)\b/i);
   if (kvMatch) {
-    applyHarness(kvMatch[1].toLowerCase());
+    harness = kvMatch[1].toLowerCase();
+    harnessExplicit = true;
     cleaned = (
       cleaned.slice(0, kvMatch.index) + cleaned.slice(kvMatch.index! + kvMatch[0].length)
     ).trim();
   }
 
   // Engine flags: --amp, --claude, --codex, --pi
-  const harnessFlags: Array<{ regex: RegExp; value: Harness }> = [
+  const engineFlags: Array<{ regex: RegExp; value: string }> = [
     { regex: /(^|\s)--amp(?=\s|$)/gi, value: "amp" },
     { regex: /(^|\s)--claude(?=\s|$)/gi, value: "claude-code" },
     { regex: /(^|\s)--claude-code(?=\s|$)/gi, value: "claude-code" },
@@ -115,85 +39,32 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
     { regex: /(^|\s)--pi(?=\s|$)/gi, value: "pi-mono" },
     { regex: /(^|\s)--pi-mono(?=\s|$)/gi, value: "pi-mono" },
   ];
-  for (const { regex, value } of harnessFlags) {
+  for (const { regex, value } of engineFlags) {
     const matched = regex.test(cleaned);
     regex.lastIndex = 0;
     if (matched) {
-      applyHarness(value);
-      cleaned = cleaned.replace(regex, " ");
-      regex.lastIndex = 0;
-    }
-  }
-
-  // --engine <harness> flag
-  const engineFlagMatch = cleaned.match(
-    /(^|\s)--engine\s+(amp|claude-code|codex|pi-mono)(?=\s|$)/i
-  );
-  if (engineFlagMatch) {
-    const parsedEngine = engineFlagMatch[2].toLowerCase() as Engine;
-    const personaContext =
-      !isEngine(harness)
-        ? harness
-        : activeHarness && !isEngine(activeHarness)
-          ? activeHarness
-          : null;
-    if (personaContext) {
-      if (isEngine(harness)) {
-        harness = personaContext;
-      }
-      engine = parsedEngine;
-      engineExplicit = true;
-    } else {
-      harness = parsedEngine;
+      harness = value;
       harnessExplicit = true;
-    }
-    cleaned = cleaned.replace(engineFlagMatch[0], " ");
-  }
-
-  // Model shortcuts: --opus, --sonnet, --haiku
-  const modelShortcuts: Array<{ regex: RegExp; value: string }> = [
-    { regex: /(^|\s)--opus(?=\s|$)/gi, value: "opus" },
-    { regex: /(^|\s)--sonnet(?=\s|$)/gi, value: "sonnet" },
-    { regex: /(^|\s)--haiku(?=\s|$)/gi, value: "haiku" },
-  ];
-  for (const { regex, value } of modelShortcuts) {
-    const matched = regex.test(cleaned);
-    regex.lastIndex = 0;
-    if (matched) {
-      model = value;
       cleaned = cleaned.replace(regex, " ");
       regex.lastIndex = 0;
     }
   }
 
-  // model=<value> key-value
-  const modelEqMatch = cleaned.match(/\bmodel\s*=\s*([A-Za-z0-9._-]+)\b/i);
-  if (modelEqMatch) {
-    model = modelEqMatch[1];
-    cleaned = (
-      cleaned.slice(0, modelEqMatch.index) +
-      cleaned.slice(modelEqMatch.index! + modelEqMatch[0].length)
-    ).trim();
-  }
+  // Strip --model/--engine/--opus/--sonnet/--haiku flags (no longer used, but
+  // don't let them leak into the prompt if someone types them out of habit).
+  cleaned = cleaned.replace(/(^|\s)--(engine|model)\s+[A-Za-z0-9._-]+(?=\s|$)/gi, " ");
+  cleaned = cleaned.replace(/(^|\s)--(opus|sonnet|haiku)(?=\s|$)/gi, " ");
+  cleaned = cleaned.replace(/\bmodel\s*=\s*[A-Za-z0-9._-]+\b/gi, "");
 
-  // --model <value> flag
-  const modelFlagMatch = cleaned.match(/(^|\s)--model\s+([A-Za-z0-9._-]+)(?=\s|$)/i);
-  if (modelFlagMatch) {
-    model = modelFlagMatch[2];
-    cleaned = cleaned.replace(modelFlagMatch[0], " ");
-  }
-
-  // Budget mode: mode=<value>
+  // Budget mode
   const modeEqMatch = cleaned.match(/\bmode\s*=\s*(simple|auto|complex)\b/i);
   if (modeEqMatch) {
     budgetMode = modeEqMatch[1].toLowerCase() as BudgetMode;
-    budgetExplicit = true;
     cleaned = (
       cleaned.slice(0, modeEqMatch.index) + cleaned.slice(modeEqMatch.index! + modeEqMatch[0].length)
     ).trim();
   }
 
-  // Budget flags: --simple, --fast, --auto, --complex, --deep
   const budgetFlags: Array<{ regex: RegExp; value: BudgetMode }> = [
     { regex: /(^|\s)--simple(?=\s|$)/gi, value: "simple" },
     { regex: /(^|\s)--fast(?=\s|$)/gi, value: "simple" },
@@ -207,7 +78,6 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
     regex.lastIndex = 0;
     if (matched) {
       budgetMode = value;
-      budgetExplicit = true;
       cleaned = cleaned.replace(regex, " ");
       regex.lastIndex = 0;
     }
@@ -231,34 +101,95 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
   cleaned = cleaned.replace(genericFlagRegex, " ");
 
   cleaned = cleaned.replace(/\s+/g, " ").trim();
-  return {
-    harness,
-    engine,
-    model,
-    budgetMode,
-    cleanedText: cleaned,
-    harnessExplicit,
-    engineExplicit,
-    budgetExplicit,
-  };
+  return { harness, budgetMode, cleanedText: cleaned, harnessExplicit };
+}
+
+function isBusyRunError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes("already in progress") || normalized.includes("run is already in progress");
 }
 
 const RECONNECT_MAX_ATTEMPTS = 6;
 const RECONNECT_BASE_MS = 2_000;
 const RECONNECT_MAX_MS = 15_000;
 
-function isStreamNetworkError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const msg = err.message.toLowerCase();
-  return (
-    msg.includes("fetch failed") ||
-    msg.includes("econnrefused") ||
-    msg.includes("econnreset") ||
-    msg.includes("epipe") ||
-    msg.includes("socket hang up") ||
-    msg.includes("network") ||
-    msg.includes("etimedout")
-  );
+async function* reconnectLoop(opts: {
+  threadKey: string;
+  harnessName: string;
+  skipCount: number;
+  delayBeforeFirst: boolean;
+}): AsyncGenerator<CanonicalEvent, string, undefined> {
+  const { threadKey, harnessName, skipCount, delayBeforeFirst } = opts;
+  const maxAttempts = RECONNECT_MAX_ATTEMPTS + (delayBeforeFirst ? 0 : 1);
+  let yieldedCount = 0;
+  let lastAssistantText = "";
+  let resultText = "";
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const shouldDelay = delayBeforeFirst || attempt > 0;
+    if (shouldDelay) {
+      const exponent = delayBeforeFirst ? attempt : attempt - 1;
+      const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, exponent), RECONNECT_MAX_MS);
+      log.info("stream_reconnect", {
+        thread: threadKey,
+        attempt: attempt + 1,
+        delay_ms: delay,
+        skipping: skipCount + yieldedCount,
+      });
+      await new Promise((r) => setTimeout(r, delay));
+    }
+
+    let res: Response;
+    try {
+      res = await resilientFetch(`${API_URL}/agent/reconnect`, {
+        method: "POST",
+        body: JSON.stringify({
+          thread_key: threadKey,
+          harness: harnessName,
+        }),
+        timeoutMs: 10 * 60_000,
+        maxAttempts: 1,
+        stream: true,
+      });
+    } catch (err) {
+      if (attempt + 1 < maxAttempts && isNetworkError(err)) continue;
+      throw err;
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      if (res.status >= 500 && attempt + 1 < maxAttempts) continue;
+      throw new ApiError(
+        `/agent/reconnect failed (${res.status}): ${text.slice(0, 300)}`,
+        res.status,
+        res.status >= 500,
+      );
+    }
+
+    try {
+      const inner = readSSEStream(res, harnessName);
+      let replayCount = 0;
+      while (true) {
+        const { done, value } = await inner.next();
+        if (done) {
+          const ret = value as { lastAssistantText: string; resultText: string; sawDone: boolean };
+          lastAssistantText = ret.lastAssistantText || lastAssistantText;
+          resultText = ret.resultText || resultText;
+          return resultText || lastAssistantText;
+        }
+        replayCount++;
+        if (replayCount <= skipCount + yieldedCount) continue;
+        if (value.type === "result" && "text" in value) resultText = value.text;
+        yieldedCount++;
+        yield value;
+      }
+    } catch (err) {
+      if (attempt + 1 < maxAttempts && isNetworkError(err)) continue;
+      throw err;
+    }
+  }
+
+  return resultText || lastAssistantText;
 }
 
 async function* readSSEStream(
@@ -328,11 +259,9 @@ export async function* executeStreaming(
   threadKey: string,
   message: string,
   harness?: Harness | null,
-  engine?: Engine | null,
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const normalizedKey = normalizeThreadKey(threadKey);
-  const apiHarness = harness || "amp";
-  const normalizationKey = engine || apiHarness;
+  const harnessName = harness || "amp";
 
   // Initial execute request
   const res = await resilientFetch(`${API_URL}/agent/execute`, {
@@ -340,8 +269,7 @@ export async function* executeStreaming(
     body: JSON.stringify({
       thread_key: normalizedKey,
       message,
-      harness: apiHarness,
-      ...(engine ? { engine } : {}),
+      harness: harnessName,
     }),
     timeoutMs: 10 * 60_000,
     maxAttempts: 1,
@@ -363,7 +291,7 @@ export async function* executeStreaming(
   let yieldedCount = 0;
 
   try {
-    const inner = readSSEStream(res, normalizationKey);
+    const inner = readSSEStream(res, harnessName);
     while (true) {
       const { done, value } = await inner.next();
       if (done) {
@@ -380,78 +308,23 @@ export async function* executeStreaming(
       yield value;
     }
   } catch (err) {
-    if (!isStreamNetworkError(err)) throw err;
+    if (!isNetworkError(err)) throw err;
+    // Mid-stream network error — fall through to reconnect
     log.warn("stream_disconnect", {
       thread: normalizedKey,
       reason: err instanceof Error ? err.message : String(err),
     });
   }
 
-  for (let attempt = 0; attempt < RECONNECT_MAX_ATTEMPTS; attempt++) {
-    const delay = Math.min(
-      RECONNECT_BASE_MS * Math.pow(2, attempt),
-      RECONNECT_MAX_MS,
-    );
-    log.info("stream_reconnect", {
-      thread: normalizedKey,
-      attempt: attempt + 1,
-      delay_ms: delay,
-      skipping: yieldedCount,
-    });
-    await new Promise((r) => setTimeout(r, delay));
-
-    let reconnRes: Response;
-    try {
-      reconnRes = await resilientFetch(`${API_URL}/agent/reconnect`, {
-        method: "POST",
-        body: JSON.stringify({
-          thread_key: normalizedKey,
-          harness: harness || "amp",
-          ...(engine ? { engine } : {}),
-        }),
-        timeoutMs: 10 * 60_000,
-        maxAttempts: 1,
-        stream: true,
-      });
-    } catch (err) {
-      if (attempt + 1 < RECONNECT_MAX_ATTEMPTS && isStreamNetworkError(err)) continue;
-      throw err;
-    }
-
-    if (!reconnRes.ok) {
-      const text = await reconnRes.text().catch(() => "");
-      if (reconnRes.status >= 500 && attempt + 1 < RECONNECT_MAX_ATTEMPTS) continue;
-      throw new ApiError(
-        `/agent/reconnect failed (${reconnRes.status}): ${text.slice(0, 300)}`,
-        reconnRes.status,
-        reconnRes.status >= 500,
-      );
-    }
-
-    try {
-      const inner = readSSEStream(reconnRes, normalizationKey);
-      let replayCount = 0;
-      while (true) {
-        const { done, value } = await inner.next();
-        if (done) {
-          const ret = value as { lastAssistantText: string; resultText: string; sawDone: boolean };
-          lastAssistantText = ret.lastAssistantText || lastAssistantText;
-          resultText = ret.resultText || resultText;
-          return resultText || lastAssistantText;
-        }
-        replayCount++;
-        if (replayCount <= yieldedCount) continue; // skip already-yielded events
-        if (value.type === "result" && "text" in value) resultText = value.text;
-        yieldedCount++;
-        yield value;
-      }
-    } catch (err) {
-      if (attempt + 1 < RECONNECT_MAX_ATTEMPTS && isStreamNetworkError(err)) continue;
-      throw err;
-    }
-  }
-
-  return resultText || lastAssistantText;
+  // Reconnect loop: the container is still running, just re-attach to stdout.
+  // The API replays full stdout history (logs=True) so we skip events we
+  // already yielded and only forward new ones (produced during the gap).
+  return yield* reconnectLoop({
+    threadKey: normalizedKey,
+    harnessName,
+    skipCount: yieldedCount,
+    delayBeforeFirst: true,
+  });
 }
 
 /**
@@ -468,136 +341,69 @@ export async function* executeStreaming(
 export async function* reconnectStreaming(
   threadKey: string,
   harness?: Harness | null,
-  engine?: Engine | null,
   skipCount: number = 0,
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const normalizedKey = normalizeThreadKey(threadKey);
-  const apiHarness = harness || "amp";
-  const normalizationKey = engine || apiHarness;
-  let yieldedCount = 0;
-  let lastAssistantText = "";
-  let resultText = "";
+  const harnessName = harness || "amp";
 
-  for (let attempt = 0; attempt <= RECONNECT_MAX_ATTEMPTS; attempt++) {
-    if (attempt > 0) {
-      const delay = Math.min(
-        RECONNECT_BASE_MS * Math.pow(2, attempt - 1),
-        RECONNECT_MAX_MS,
-      );
-      await new Promise((r) => setTimeout(r, delay));
-    }
-
-    let res: Response;
-    try {
-      res = await resilientFetch(`${API_URL}/agent/reconnect`, {
-        method: "POST",
-        body: JSON.stringify({
-          thread_key: normalizedKey,
-          harness: apiHarness,
-          ...(engine ? { engine } : {}),
-        }),
-        timeoutMs: 10 * 60_000,
-        maxAttempts: 1,
-        stream: true,
-      });
-    } catch (err) {
-      if (attempt < RECONNECT_MAX_ATTEMPTS && isStreamNetworkError(err)) continue;
-      throw err;
-    }
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      if (res.status >= 500 && attempt < RECONNECT_MAX_ATTEMPTS) continue;
-      throw new ApiError(
-        `/agent/reconnect failed (${res.status}): ${text.slice(0, 300)}`,
-        res.status,
-        res.status >= 500,
-      );
-    }
-
-    try {
-      const inner = readSSEStream(res, normalizationKey);
-      let replayCount = 0;
-      while (true) {
-        const { done, value } = await inner.next();
-        if (done) {
-          const ret = value as { lastAssistantText: string; resultText: string; sawDone: boolean };
-          lastAssistantText = ret.lastAssistantText || lastAssistantText;
-          resultText = ret.resultText || resultText;
-          return resultText || lastAssistantText;
-        }
-        replayCount++;
-        if (replayCount <= skipCount + yieldedCount) continue;
-        if (value.type === "result" && "text" in value) resultText = value.text;
-        yieldedCount++;
-        yield value;
-      }
-    } catch (err) {
-      if (attempt < RECONNECT_MAX_ATTEMPTS && isStreamNetworkError(err)) continue;
-      throw err;
-    }
-  }
-
-  return resultText || lastAssistantText;
+  return yield* reconnectLoop({
+    threadKey: normalizedKey,
+    harnessName,
+    skipCount,
+    delayBeforeFirst: false,
+  });
 }
 
-export async function execute(
-  threadKey: string,
-  message: string,
-  harness?: Harness | null,
-  _requestId?: string,
-  _files?: FileAttachment[],
-  _userId?: string,
-  _source: ExecuteSource = "slack",
-  _model?: string | null,
-  engine?: Engine | null,
-  _continueSession: boolean = true,
-): Promise<string> {
-  let lastText = "";
-  const gen = executeStreaming(threadKey, message, harness, engine);
-  while (true) {
-    const { done, value } = await gen.next();
-    if (done) {
-      return value;
-    }
-    const event = value;
-    if (event.type === "assistant" && event.message?.content) {
-      for (const block of event.message.content) {
-        if (block.type === "text" && block.text) {
-          lastText = block.text;
-        }
-      }
-    }
-  }
-}
-
-export async function interrupt(
-  threadKey: string,
-  _requestId?: string,
-): Promise<{ sessionId: string; status: string }> {
-  const normalizedKey = normalizeThreadKey(threadKey);
-  const result = await apiPost("/agent/stop", {
-    thread_key: normalizedKey,
-  }, { timeoutMs: 30_000 });
-  return {
-    sessionId: normalizedKey,
-    status: result.ok ? "stopped" : "not_found",
-  };
-}
-
-export async function fetchThreadRuntimeConfig(
-  threadKey: string
-): Promise<{ harness: Harness | null; engine: Engine | null }> {
+export async function fetchThreadHarness(threadKey: string): Promise<Harness | null> {
   const normalizedThreadKey = normalizeThreadKey(threadKey);
   const pool = getPool();
   const { rows } = await pool.query(
-    `SELECT harness, engine FROM sandbox_sessions WHERE thread_key = $1`,
+    `SELECT harness FROM sandbox_sessions WHERE thread_key = $1`,
     [normalizedThreadKey],
   );
-  return {
-    harness: (rows[0]?.harness as Harness) || null,
-    engine: (rows[0]?.engine as Engine) || null,
-  };
+  return rows[0]?.harness || null;
+}
+
+export async function* executeStreamingWithBusyRetries(
+  threadKey: string,
+  message: string,
+  harness: Harness,
+): AsyncGenerator<CanonicalEvent, string, undefined> {
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return yield* executeStreaming(threadKey, message, harness);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (isBusyRunError(detail) && attempt < maxAttempts) {
+        await sleep(Math.min(300 * Math.pow(2, attempt - 1), 2500));
+        continue;
+      }
+      throw error;
+    }
+  }
+  return "";
+}
+
+export async function* reconnectStreamingWithRetries(
+  threadKey: string,
+  harness: Harness,
+  skipCount: number = 0,
+): AsyncGenerator<CanonicalEvent, string, undefined> {
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return yield* reconnectStreaming(threadKey, harness, skipCount);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      if (isBusyRunError(detail) && attempt < maxAttempts) {
+        await sleep(Math.min(300 * Math.pow(2, attempt - 1), 2500));
+        continue;
+      }
+      throw error;
+    }
+  }
+  return "";
 }
 
 export async function postThreadContextMessage(
@@ -608,7 +414,7 @@ export async function postThreadContextMessage(
     userId?: string;
     messageId?: string;
     slackTs?: string;
-    attachments?: FileAttachment[];
+    attachments?: Array<{ url: string; name: string }>;
   },
 ): Promise<{ status: string }> {
   const normalizedThreadKey = normalizeThreadKey(threadKey);
@@ -643,131 +449,5 @@ export async function postThreadContextMessage(
   return { status: "accepted" };
 }
 
-export async function fetchThreadContextMessages(
-  threadKey: string,
-  options?: {
-    sources?: string[];
-    limit?: number;
-  },
-): Promise<string[]> {
-  const normalizedThreadKey = normalizeThreadKey(threadKey);
-  const pool = getPool();
-  const sources = options?.sources?.length ? options.sources : ["slack_archiver_ingest"];
-  const limit = Math.max(1, Math.min(options?.limit ?? 8, 20));
-  const { rows } = await pool.query(
-    `SELECT parts
-     FROM chat_messages
-     WHERE thread_key = $1
-       AND role = 'user'
-       AND metadata->>'source' = ANY($2::text[])
-     ORDER BY created_at DESC
-     LIMIT $3`,
-    [normalizedThreadKey, sources, limit],
-  );
-  const messages = rows
-    .map((row) => {
-      const parts = Array.isArray(row.parts) ? row.parts : [];
-      for (const part of parts) {
-        if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
-          return ((part as { text: string }).text || "").trim();
-        }
-      }
-      return "";
-    })
-    .filter((text) => text.length > 0);
-  return messages.reverse();
-}
+export { normalizeThreadKey };
 
-export async function extractArchiverSource(
-  sourceUrl: string,
-  options?: {
-    outputDir?: string;
-    company?: string;
-    account?: string;
-    password?: string;
-    email?: string;
-    maxDepth?: number;
-    context?: Record<string, unknown>;
-    timeoutMs?: number;
-  },
-): Promise<ArchiverExtractResult> {
-  const safeThread = sourceUrl
-    .replace(/[^a-zA-Z0-9]+/g, "-")
-    .slice(0, 40)
-    .replace(/^-+|-+$/g, "") || "source";
-  const outputDir =
-    options?.outputDir ??
-    `/tmp/archiver/slack/${Date.now()}-${safeThread}`;
-  const payload: Record<string, unknown> = {
-    source_url: sourceUrl,
-    output_dir: outputDir,
-    ...(options?.company ? { company: options.company } : {}),
-    ...(options?.account ? { account: options.account } : {}),
-    ...(options?.password ? { password: options.password } : {}),
-    ...(options?.email ? { email: options.email } : {}),
-    ...(typeof options?.maxDepth === "number" ? { max_depth: options.maxDepth } : {}),
-    ...(options?.context ? { context: options.context } : {}),
-  };
-  const envelope = await apiPost("/tools/archiver/extract_source", payload, {
-    timeoutMs: options?.timeoutMs ?? 180_000,
-    maxAttempts: 1,
-  });
-  return parseToolEnvelopeResult<ArchiverExtractResult>(
-    envelope,
-    "Unexpected archiver tool response",
-  );
-}
-
-export async function extractArchiverSlackFiles(
-  files: FileAttachment[],
-  options?: {
-    context?: Record<string, unknown>;
-    timeoutMs?: number;
-  },
-): Promise<ArchiverExtractResult> {
-  const payload: Record<string, unknown> = {
-    files: files.map((file) => ({ url: file.url, name: file.name })),
-    ...(options?.context ? { context: options.context } : {}),
-  };
-  const envelope = await apiPost("/tools/archiver/extract_slack_files", payload, {
-    timeoutMs: options?.timeoutMs ?? 180_000,
-    maxAttempts: 1,
-  });
-  return parseToolEnvelopeResult<ArchiverExtractResult>(
-    envelope,
-    "Unexpected archiver Slack file response",
-  );
-}
-
-export { normalizeThreadKey, splitThreadKey };
-
-export function watchProgress(
-  threadKey: string,
-  onStatus: (status: string) => void,
-): () => void {
-  const normalizedKey = normalizeThreadKey(threadKey);
-  let stopped = false;
-
-  const poll = async () => {
-    while (!stopped) {
-      try {
-        const res = await resilientFetch(
-          `${API_URL}/agent/status?key=${encodeURIComponent(normalizedKey)}`,
-          { timeoutMs: 5000, maxAttempts: 1 },
-        );
-        if (res.ok) {
-          const data = await res.json();
-          if (data.status === "running") {
-            onStatus("Agent working...");
-          }
-        }
-      } catch {
-        // ignore
-      }
-      if (!stopped) await new Promise((r) => setTimeout(r, 3000));
-    }
-  };
-
-  void poll();
-  return () => { stopped = true; };
-}
