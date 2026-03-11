@@ -144,7 +144,7 @@ export type Step =
 
 export type SubagentStep = Extract<Step, { type: "subagent" }>;
 
-import { asString, asNumber } from "@/lib/parse-utils";
+import { asString, asNumber } from "@centaur/harness-events";
 
 function getPathBasename(path: string): string {
   const parts = path.split("/");

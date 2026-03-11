@@ -1,4 +1,4 @@
-import type { CanonicalEvent } from "@/lib/normalize-harness-event";
+import type { CanonicalEvent } from "@centaur/harness-events";
 
 type ActiveTool = { name: string; input: Record<string, unknown>; startedAt: number };
 type CompletedTool = { name: string; duration: number; isError: boolean };
@@ -219,7 +219,7 @@ export class ProgressTracker {
         const sub = this.activeSubagents.get(id);
         if (sub) {
           sub.activity = event.activity || sub.activity;
-          sub.toolName = event.tool_name || sub.toolName;
+          sub.toolName = event.activities?.[0]?.toolName || sub.toolName;
           changed = true;
         }
       } else if (event.status === "completed" || event.status === "failed") {

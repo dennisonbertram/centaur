@@ -1,7 +1,7 @@
 import { log } from "@/lib/logger";
 import { apiPost, resilientFetch, ApiError, API_URL } from "./api-client";
 import { getPool } from "@/lib/db";
-import { normalizeHarnessEvent, type CanonicalEvent } from "@/lib/normalize-harness-event";
+import { normalizeHarnessEvent, type CanonicalEvent } from "@centaur/harness-events";
 
 export type Engine = "amp" | "claude-code" | "codex" | "pi-mono";
 export type Harness = Engine | "eng" | "legal" | "invest" | "events";

@@ -17,7 +17,7 @@ import {
   summarizeGroup,
   type ToolCall,
 } from "@/lib/describe";
-import { asBoolean, asList, asNumber, asRecord, asString } from "@/lib/parse-utils";
+import { asBoolean, asList, asNumber, asRecord, asString } from "@centaur/harness-events";
 import { dedupeSources, extractSourcesFromUnknown, type StepSource } from "@/lib/viewer/source-utils";
 import { stringifyToolOutput } from "@/lib/viewer/tool-output-detect";
 import type { Participant } from "@/lib/types";

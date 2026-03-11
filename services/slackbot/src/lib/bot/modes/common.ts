@@ -6,7 +6,7 @@ import {
   type FileAttachment,
   type Harness,
 } from "../harness";
-import type { CanonicalEvent } from "@/lib/normalize-harness-event";
+import type { CanonicalEvent } from "@centaur/harness-events";
 
 export function isBusyRunError(message: string): boolean {
   const normalized = message.toLowerCase();

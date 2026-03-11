@@ -1,6 +1,6 @@
 "use client";
 
-import { asRecord, asString } from "@/lib/parse-utils";
+import { asRecord, asString } from "@centaur/harness-events";
 
 export type StepSource = {
   url: string;

@@ -5,8 +5,7 @@
  * enabling the Next.js webapp to render agent output directly.
  */
 
-import { asList, asString, asRecord } from "@/lib/parse-utils";
-import { normalizeHarnessEvent, type CanonicalEvent } from "@/lib/normalize-harness-event";
+import { asList, asString, asRecord, normalizeHarnessEvent, type CanonicalEvent } from "@centaur/harness-events";
 
 // ---------------------------------------------------------------------------
 // Chunk type — a superset of UIMessageChunk from "ai" to include custom

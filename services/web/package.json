@@ -11,6 +11,7 @@
     "lint": "eslint src/"
   },
   "dependencies": {
+    "@centaur/harness-events": "workspace:*",
     "@ai-sdk/react": "^3.0.107",
     "@pierre/diffs": "^1.0.11",
     "@radix-ui/react-scroll-area": "^1.2.10",

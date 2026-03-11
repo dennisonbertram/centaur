@@ -24,7 +24,7 @@ import {
   canonicalEventToStreamChunks,
   createConversionState,
 } from "@/lib/harness-to-ui-chunks";
-import { normalizeHarnessEvent } from "@/lib/normalize-harness-event";
+import { normalizeHarnessEvent } from "@centaur/harness-events";
 import { getPool } from "@/lib/db";
 
 const generateMessageId = createIdGenerator({ prefix: "msg", size: 16 });

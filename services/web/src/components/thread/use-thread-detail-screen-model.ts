@@ -15,7 +15,7 @@ import { useElapsed } from "@/hooks/use-elapsed";
 import { useFaviconStatus } from "@/hooks/use-favicon-status";
 import { useStableStatus } from "@/hooks/use-stable-status";
 import { isActiveState, isRunningState } from "@/lib/viewer/thread-ordering";
-import { asList, asRecord, asString } from "@/lib/parse-utils";
+import { asList, asRecord, asString } from "@centaur/harness-events";
 import { useThreadList } from "@/hooks/use-thread-list";
 import { mergeSubagentStep, subagentSelectionKey } from "@/lib/viewer/subagent-steps";
 import {

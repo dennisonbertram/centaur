@@ -1,4 +1,4 @@
-import type { CanonicalEvent, ContentBlock } from "@/lib/normalize-harness-event";
+import type { CanonicalEvent, ContentBlock } from "@centaur/harness-events";
 
 export type HandoffInfo = {
   toolCallId: string;
