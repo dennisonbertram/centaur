@@ -486,8 +486,65 @@ async def stream_reconnect(session: SandboxSession) -> AsyncIterator[str]:
 
 async def stream_exec(session: SandboxSession, message: str) -> AsyncIterator[str]:
     """Run a command in the sandbox and yield raw stdout lines."""
+    result_text = ""
     async for line in _async_stream(_stream_turn, session, message):
         yield line
+        # Extract result text from turn.done events
+        try:
+            evt = json.loads(line)
+            if evt.get("type") == "turn.done":
+                result_text = (
+                    evt.get("result", {}).get("text", "")
+                    if isinstance(evt.get("result"), dict)
+                    else ""
+                )
+            elif evt.get("type") == "result" and isinstance(evt.get("text"), str):
+                result_text = evt["text"]
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Persist after stream completes (async context — safe to use asyncpg)
+    await _persist_turn_messages(session.thread_key, message, result_text, session.harness)
+
+
+async def _persist_turn_messages(
+    thread_key: str, user_text: str, assistant_text: str, harness: str
+) -> None:
+    """Persist user + assistant messages to chat_messages after a turn completes."""
+    try:
+        pool = _get_pool()
+        now_ms = int(time.time() * 1000)
+        user_id = f"turn-{thread_key}-{now_ms}"
+        asst_id = f"turn-{thread_key}-{now_ms + 1}"
+
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO chat_messages (id, thread_key, role, parts, metadata) "
+                "VALUES ($1, $2, 'user', $3::jsonb, '{}'::jsonb) "
+                "ON CONFLICT (id) DO NOTHING",
+                user_id,
+                thread_key,
+                json.dumps([{"type": "text", "text": user_text}]),
+            )
+            if assistant_text:
+                await conn.execute(
+                    "INSERT INTO chat_messages (id, thread_key, role, parts, metadata) "
+                    "VALUES ($1, $2, 'assistant', $3::jsonb, $4::jsonb) "
+                    "ON CONFLICT (id) DO NOTHING",
+                    asst_id,
+                    thread_key,
+                    json.dumps([{"type": "text", "text": assistant_text}]),
+                    json.dumps({"harness": harness}),
+                )
+                # Update thread_name on sandbox_sessions
+                await conn.execute(
+                    "UPDATE sandbox_sessions SET thread_name = $1, updated_at = NOW() "
+                    "WHERE thread_key = $2",
+                    assistant_text[:60],
+                    thread_key,
+                )
+    except Exception:
+        pass  # Best-effort — don't break the stream
 
 
 async def stop_session(thread_key: str) -> bool:

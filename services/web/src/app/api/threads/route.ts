@@ -1,16 +1,10 @@
 /** GET /api/threads — list threads from Postgres */
 
 import { getPool } from "@/lib/db";
-import {
-  deriveStoredThreadState,
-  normalizeThreadHarness,
-} from "@/lib/viewer/thread-runtime";
+import type { Harness, ThreadState } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
-
-let threadsCache: { data: unknown; ts: number } | null = null;
-const THREADS_CACHE_TTL_MS = 3_000;
 
 function extractText(parts: unknown): string | null {
   const arr = Array.isArray(parts) ? parts : [];
@@ -22,90 +16,42 @@ function extractText(parts: unknown): string | null {
 
 export async function GET() {
   try {
-    if (threadsCache && Date.now() - threadsCache.ts < THREADS_CACHE_TTL_MS) {
-      return Response.json(threadsCache.data, {
-        headers: { "Cache-Control": "public, s-maxage=3, stale-while-revalidate=1" },
-      });
-    }
-
     const pool = getPool();
     const { rows } = await pool.query(`
       SELECT
         cm.thread_key,
         MIN(cm.created_at) AS created_at,
-        MAX(cm.created_at) AS message_last_activity,
+        MAX(cm.created_at) AS last_activity,
         COUNT(*)::int AS message_count,
-        (SELECT metadata->>'harness' FROM chat_messages cm1
-         WHERE cm1.thread_key = cm.thread_key AND cm1.metadata->>'harness' IS NOT NULL
-         ORDER BY cm1.created_at DESC LIMIT 1) AS harness,
         (SELECT parts FROM chat_messages cm2
          WHERE cm2.thread_key = cm.thread_key AND cm2.role = 'user'
          ORDER BY cm2.created_at ASC LIMIT 1) AS first_user_parts,
         (SELECT parts FROM chat_messages cm3
          WHERE cm3.thread_key = cm.thread_key AND cm3.role = 'user'
          ORDER BY cm3.created_at DESC LIMIT 1) AS last_user_parts,
-        (SELECT metadata->>'thread_name' FROM chat_messages cm4
-         WHERE cm4.thread_key = cm.thread_key AND cm4.metadata->>'thread_name' IS NOT NULL
-         ORDER BY cm4.created_at DESC LIMIT 1) AS metadata_thread_name,
-        (SELECT metadata->>'harness' FROM chat_messages cm5
-         WHERE cm5.thread_key = cm.thread_key AND cm5.metadata->>'harness' IS NOT NULL
-         ORDER BY cm5.created_at DESC LIMIT 1) AS metadata_harness,
-        (SELECT role FROM chat_messages cm6
-         WHERE cm6.thread_key = cm.thread_key
-         ORDER BY cm6.created_at DESC LIMIT 1) AS latest_role,
-        (SELECT parts FROM chat_messages cm7
-         WHERE cm7.thread_key = cm.thread_key
-         ORDER BY cm7.created_at DESC LIMIT 1) AS latest_parts,
-        MAX(s.harness) AS session_harness,
-        MAX(s.engine) AS session_engine,
-        MAX(s.state) AS session_state,
-        MAX(s.thread_name) AS session_thread_name,
-        MAX(s.last_activity) AS session_last_activity
+        ss.thread_name,
+        COALESCE(ss.harness, 'amp') AS harness,
+        COALESCE(ss.state, 'stopped') AS state
       FROM chat_messages cm
-      LEFT JOIN agent_sessions s ON s.slack_thread_key = cm.thread_key
-      GROUP BY cm.thread_key
-      ORDER BY GREATEST(
-        MAX(cm.created_at),
-        COALESCE(MAX(s.last_activity), MAX(cm.created_at))
-      ) DESC
+      LEFT JOIN sandbox_sessions ss ON ss.thread_key = cm.thread_key
+      GROUP BY cm.thread_key, ss.thread_name, ss.harness, ss.state
+      ORDER BY MAX(cm.created_at) DESC
       LIMIT 200
     `);
 
     const threads = rows.map((row) => ({
       slack_thread_key: row.thread_key,
-      harness: normalizeThreadHarness(
-        row.metadata_harness,
-        row.session_harness,
-        row.session_engine,
-      ),
-      engine: (row.session_engine as string | null) || null,
-      state: deriveStoredThreadState(
-        row.session_state,
-        row.latest_role,
-        row.latest_parts,
-        row.session_last_activity
-          ? new Date(row.session_last_activity).getTime()
-          : null,
-        new Date(row.message_last_activity).getTime(),
-      ),
+      harness: row.harness as Harness,
+      state: row.state as ThreadState,
       created_at: new Date(row.created_at).getTime() / 1000,
-      last_activity:
-        Math.max(
-          new Date(row.message_last_activity).getTime(),
-          row.session_last_activity
-            ? new Date(row.session_last_activity).getTime()
-            : 0,
-        ) / 1000,
+      last_activity: new Date(row.last_activity).getTime() / 1000,
       turn_count: row.message_count,
       first_message: extractText(row.first_user_parts),
       last_user_message: extractText(row.last_user_parts),
-      thread_name: row.metadata_thread_name || row.session_thread_name,
+      thread_name: row.thread_name,
     }));
 
-    const result = { threads };
-    threadsCache = { data: result, ts: Date.now() };
-
-    return Response.json(result, {
+    return Response.json({ threads }, {
       headers: { "Cache-Control": "public, s-maxage=3, stale-while-revalidate=1" },
     });
   } catch (err) {

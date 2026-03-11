@@ -939,54 +939,17 @@ function createBot() {
         throw error;
       }
 
-      // Persist user + assistant messages to chat_messages for thread viewer.
-      // Use the Slack message timestamp for the user message so it sorts in
-      // the original conversation order. The assistant gets +1ms to sort after.
-      try {
-        const pool = getPool();
-        const dbClient = await pool.connect();
+      // Update thread_name in sandbox_sessions
+      if (finalMessage) {
         try {
-          const slackEpoch = slackTs ? parseFloat(slackTs) : 0;
-          const userEpochMs = slackEpoch > 1_000_000_000 ? Math.floor(slackEpoch * 1000) : Date.now();
-          const userMsgId = `slack-user-${threadKey}-${userEpochMs}`;
-          const assistantMsgId = `slack-asst-${threadKey}-${userEpochMs + 1}`;
-          const userTs = new Date(userEpochMs).toISOString();
-          const assistantTs = new Date(userEpochMs + 1).toISOString();
-          await dbClient.query("BEGIN");
-          await dbClient.query(
-            `INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at)
-             VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb, $5::timestamptz)
-             ON CONFLICT (id) DO NOTHING`,
-            [
-              userMsgId,
-              threadKey,
-              JSON.stringify([{ type: "text", text: instruction }]),
-              JSON.stringify({ harness, ...(engine ? { engine } : {}) }),
-              userTs,
-            ],
+          const pool = getPool();
+          await pool.query(
+            `UPDATE sandbox_sessions SET thread_name = $1, updated_at = NOW() WHERE thread_key = $2`,
+            [finalMessage.slice(0, 60), threadKey],
           );
-          if (finalMessage) {
-            await dbClient.query(
-              `INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at)
-               VALUES ($1, $2, 'assistant', $3::jsonb, $4::jsonb, $5::timestamptz)
-               ON CONFLICT (id) DO NOTHING`,
-              [
-                assistantMsgId,
-                threadKey,
-                JSON.stringify([{ type: "text", text: finalMessage }]),
-                JSON.stringify({ harness, thread_name: finalMessage.slice(0, 60) }),
-                assistantTs,
-              ],
-            );
-          }
-          await dbClient.query("COMMIT");
         } catch {
-          await dbClient.query("ROLLBACK");
-        } finally {
-          dbClient.release();
+          // Best-effort
         }
-      } catch {
-        // Best-effort — don't block Slack reply
       }
 
       // Single Slack message — edit the live reply in-place with the final result.

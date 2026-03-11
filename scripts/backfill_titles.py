@@ -29,15 +29,15 @@ async def main() -> None:
     conn = await asyncpg.connect(db_url)
 
     rows = await conn.fetch("""
-        SELECT s.slack_thread_key, s.thread_name, t.user_message, t.result
-        FROM agent_sessions s
+        SELECT ss.thread_key, ss.thread_name, cm.parts
+        FROM sandbox_sessions ss
         LEFT JOIN LATERAL (
-            SELECT user_message, result
-            FROM agent_turns WHERE slack_thread_key = s.slack_thread_key
-            ORDER BY turn_id ASC LIMIT 1
-        ) t ON true
-        WHERE t.user_message IS NOT NULL AND t.user_message != ''
-        ORDER BY s.created_at DESC
+            SELECT parts
+            FROM chat_messages WHERE thread_key = ss.thread_key AND role = 'user'
+            ORDER BY created_at ASC LIMIT 1
+        ) cm ON true
+        WHERE cm.parts IS NOT NULL
+        ORDER BY ss.started_at DESC
     """)
 
     print(f"Found {len(rows)} sessions")
@@ -45,15 +45,17 @@ async def main() -> None:
     failed = 0
 
     for row in rows:
-        key = row["slack_thread_key"]
-        user_msg = (row["user_message"] or "").strip()
-        result = (row["result"] or "").strip()
+        key = row["thread_key"]
+        parts = row["parts"] or []
+        user_msg = ""
+        if isinstance(parts, list) and parts:
+            user_msg = (
+                parts[0].get("text", "") if isinstance(parts[0], dict) else ""
+            ).strip()
         if not user_msg:
             continue
 
         prompt = user_msg[:500]
-        if result:
-            prompt += f"\n\nAssistant response (first 300 chars):\n{result[:300]}"
 
         try:
             resp = client.chat.completions.create(
@@ -73,14 +75,21 @@ async def main() -> None:
                     {"role": "user", "content": prompt},
                 ],
             )
-            title = (resp.choices[0].message.content or "").strip().strip('"').strip("'").rstrip(".")
+            title = (
+                (resp.choices[0].message.content or "")
+                .strip()
+                .strip('"')
+                .strip("'")
+                .rstrip(".")
+            )
             if not title:
                 continue
             title = title[:60]
 
             await conn.execute(
-                "UPDATE agent_sessions SET thread_name = $1 WHERE slack_thread_key = $2",
-                title, key,
+                "UPDATE sandbox_sessions SET thread_name = $1, updated_at = NOW() WHERE thread_key = $2",
+                title,
+                key,
             )
 
             old = (row["thread_name"] or "")[:40]

@@ -602,32 +602,13 @@ export async function fetchThreadRuntimeConfig(
   const normalizedThreadKey = normalizeThreadKey(threadKey);
   const pool = getPool();
   const { rows } = await pool.query(
-    `SELECT metadata->>'harness' as harness, metadata->>'engine' as engine
-     FROM chat_messages
-     WHERE thread_key = $1 AND metadata->>'harness' IS NOT NULL
-     ORDER BY role = 'assistant' DESC, created_at DESC LIMIT 1`,
+    `SELECT harness, engine FROM sandbox_sessions WHERE thread_key = $1`,
     [normalizedThreadKey],
   );
-  if (rows.length === 0) return { harness: null, engine: null };
-  const rawHarness = String(rows[0].harness ?? "").trim().toLowerCase();
-  const rawEngine = String(rows[0].engine ?? "").trim().toLowerCase();
-  const harness: Harness | null =
-    rawHarness === "eng" || rawHarness === "engineer"
-      ? "eng"
-      : rawHarness === "legal"
-        ? "legal"
-        : rawHarness === "invest"
-          ? "invest"
-          : rawHarness === "events"
-            ? "events"
-            : rawHarness === "amp" || rawHarness === "claude-code" || rawHarness === "codex" || rawHarness === "pi-mono"
-              ? (rawHarness as Engine)
-              : null;
-  const engine: Engine | null =
-    rawEngine === "amp" || rawEngine === "claude-code" || rawEngine === "codex" || rawEngine === "pi-mono"
-      ? (rawEngine as Engine)
-      : null;
-  return { harness, engine };
+  return {
+    harness: (rows[0]?.harness as Harness) || null,
+    engine: (rows[0]?.engine as Engine) || null,
+  };
 }
 
 export async function postThreadContextMessage(

@@ -78,12 +78,6 @@ async function upsertChatMessages(
   }
 }
 
-function extractUsageDataFromChunk(chunk: Record<string, unknown>): Record<string, unknown> | null {
-  if (chunk.type !== "data-token-usage") return null;
-  const data = chunk.data;
-  return data && typeof data === "object" ? (data as Record<string, unknown>) : null;
-}
-
 function lastUserMessage(
   messages: UIMessage[],
   fallbackText: string,
@@ -249,7 +243,6 @@ export async function POST(request: Request) {
   // Convert raw harness events → AI SDK UIMessageChunks
   let eventIndex = 0;
   const conversionState = createConversionState();
-  let latestTokenUsage: Record<string, unknown> | null = null;
 
   const uiChunkStream = rawEvents.pipeThrough(
     new TransformStream({
@@ -270,10 +263,6 @@ export async function POST(request: Request) {
         );
         eventIndex += Math.max(1, canonicalEvents.length);
         for (const chunk of chunks) {
-          const usageData = extractUsageDataFromChunk(chunk);
-          if (usageData) {
-            latestTokenUsage = usageData;
-          }
           controller.enqueue(chunk);
         }
       },
@@ -287,48 +276,6 @@ export async function POST(request: Request) {
       generateId: generateMessageId,
       execute: async ({ writer }) => {
         writer.merge(uiChunkStream);
-      },
-      onFinish: async ({ messages }) => {
-        try {
-          const pool = getPool();
-          const client = await pool.connect();
-          try {
-            await client.query("BEGIN");
-            // Preserve chronological ordering with 1ms offsets inside the transaction.
-            await upsertChatMessages(
-              client,
-              slackThreadKey,
-              messages.map((msg, index) => {
-                const baseMetadata =
-                  msg.metadata && typeof msg.metadata === "object"
-                    ? (msg.metadata as Record<string, unknown>)
-                    : {};
-                const shouldAttachUsage =
-                  msg.role === "assistant" &&
-                  latestTokenUsage &&
-                  index === messages.length - 1;
-                return {
-                  id: msg.id,
-                  role: msg.role,
-                  parts: Array.isArray(msg.parts) ? msg.parts : [],
-                  metadata: shouldAttachUsage
-                    ? { ...baseMetadata, token_usage: latestTokenUsage }
-                    : baseMetadata,
-                };
-              }),
-              harness,
-              engine || null,
-            );
-            await client.query("COMMIT");
-          } catch (e) {
-            await client.query("ROLLBACK");
-            throw e;
-          } finally {
-            client.release();
-          }
-        } catch {
-          // Best-effort persistence — don't block stream
-        }
       },
     }),
   });

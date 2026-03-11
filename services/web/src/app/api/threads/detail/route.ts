@@ -1,25 +1,10 @@
-/** /api/threads/detail?key=... — thread detail from Postgres + pipe status enrichment */
+/** /api/threads/detail?key=... — thread detail from Postgres */
 
 import { getPool } from "@/lib/db";
-import { resilientFetch, API_URL } from "@/lib/api-client";
 import type { Harness, Participant, ThreadDetail, ThreadState } from "@/lib/types";
-import {
-  deriveStoredThreadState,
-  normalizeThreadHarness,
-  normalizeThreadStateValue,
-} from "@/lib/viewer/thread-runtime";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
-
-type PipeStatus = {
-  thread_key: string;
-  status: string;
-  container_id?: string;
-  harness?: string;
-  engine?: string;
-  started_at?: number;
-};
 
 function extractText(parts: unknown): string | null {
   const arr = Array.isArray(parts) ? parts : [];
@@ -232,50 +217,23 @@ export async function GET(request: Request) {
   }
 
   try {
-    let detail: ThreadDetail;
-    let persistedSessionState: unknown;
-    let persistedLatestRole: unknown;
-    let persistedLatestParts: unknown;
-    let persistedSessionLastActivityMs: number | null = null;
-    let persistedMessageLastActivityMs: number | null = null;
     const pool = getPool();
     const { rows } = await pool.query(
         `SELECT
           MIN(cm.created_at) AS created_at,
-          MAX(cm.created_at) AS message_last_activity,
+          MAX(cm.created_at) AS last_activity,
           COUNT(*)::int AS message_count,
-          (SELECT metadata->>'harness' FROM chat_messages cm1
-           WHERE cm1.thread_key = $1 AND metadata->>'harness' IS NOT NULL
-           ORDER BY cm1.created_at DESC LIMIT 1
-          ) AS harness,
           (SELECT parts FROM chat_messages cm2
            WHERE cm2.thread_key = $1 AND cm2.role = 'user'
            ORDER BY cm2.created_at DESC LIMIT 1
           ) AS last_user_parts,
-          (SELECT role FROM chat_messages cm4
-           WHERE cm4.thread_key = $1
-           ORDER BY cm4.created_at DESC LIMIT 1
-          ) AS latest_role,
-          (SELECT parts FROM chat_messages cm5
-           WHERE cm5.thread_key = $1
-           ORDER BY cm5.created_at DESC LIMIT 1
-          ) AS latest_parts,
-          (SELECT metadata->>'thread_name' FROM chat_messages cm3
-           WHERE cm3.thread_key = $1 AND cm3.metadata->>'thread_name' IS NOT NULL
-           ORDER BY cm3.created_at DESC LIMIT 1
-          ) AS metadata_thread_name,
-          (SELECT metadata->>'harness' FROM chat_messages cm6
-           WHERE cm6.thread_key = $1 AND cm6.metadata->>'harness' IS NOT NULL
-           ORDER BY cm6.created_at DESC LIMIT 1
-          ) AS metadata_harness,
-          MAX(s.harness) AS session_harness,
-          MAX(s.engine) AS session_engine,
-          MAX(s.state) AS session_state,
-          MAX(s.thread_name) AS session_thread_name,
-          MAX(s.last_activity) AS session_last_activity
+          ss.thread_name,
+          COALESCE(ss.harness, 'amp') AS harness,
+          COALESCE(ss.state, 'stopped') AS state
         FROM chat_messages cm
-        LEFT JOIN agent_sessions s ON s.slack_thread_key = cm.thread_key
-        WHERE cm.thread_key = $1`,
+        LEFT JOIN sandbox_sessions ss ON ss.thread_key = cm.thread_key
+        WHERE cm.thread_key = $1
+        GROUP BY ss.thread_name, ss.harness, ss.state`,
         [key],
       );
 
@@ -287,43 +245,17 @@ export async function GET(request: Request) {
       );
     }
 
-    detail = {
+    const detail: ThreadDetail = {
       slack_thread_key: key,
-      harness: normalizeThreadHarness(
-        row.metadata_harness,
-        row.session_harness,
-        row.session_engine,
-      ),
-      engine: (row.session_engine as string | null) || null,
-      state: deriveStoredThreadState(
-        row.session_state,
-        row.latest_role,
-        row.latest_parts,
-        row.session_last_activity
-          ? new Date(row.session_last_activity).getTime()
-          : null,
-        new Date(row.message_last_activity).getTime(),
-      ),
+      harness: row.harness as Harness,
+      state: row.state as ThreadState,
       created_at: new Date(row.created_at).getTime() / 1000,
-      last_activity:
-        Math.max(
-          new Date(row.message_last_activity).getTime(),
-          row.session_last_activity
-            ? new Date(row.session_last_activity).getTime()
-            : 0,
-        ) / 1000,
+      last_activity: new Date(row.last_activity).getTime() / 1000,
       message_count: row.message_count,
       last_user_message: extractText(row.last_user_parts),
       token_usage: null,
-      thread_name: row.metadata_thread_name || row.session_thread_name,
+      thread_name: row.thread_name,
     };
-    persistedSessionState = row.session_state;
-    persistedLatestRole = row.latest_role;
-    persistedLatestParts = row.latest_parts;
-    persistedSessionLastActivityMs = row.session_last_activity
-      ? new Date(row.session_last_activity).getTime()
-      : null;
-    persistedMessageLastActivityMs = new Date(row.message_last_activity).getTime();
 
     const participantRows = await pool.query<{ parts: unknown; metadata: unknown }>(
       `SELECT parts, metadata
@@ -335,43 +267,6 @@ export async function GET(request: Request) {
     );
     detail.participants = extractParticipantsFromRows(participantRows.rows);
     detail.token_usage = extractTokenUsageFromRows(participantRows.rows);
-
-    // Enrich with live pipe status (best-effort)
-    try {
-      const pipeRes = await resilientFetch(
-        `${API_URL}/agent/status?key=${encodeURIComponent(key)}`,
-        { timeoutMs: 3000, signal: request.signal },
-      );
-      if (pipeRes.ok) {
-        const pipeStatus = (await pipeRes.json()) as PipeStatus;
-        const liveState = normalizeThreadStateValue(pipeStatus.status);
-        if (liveState && liveState !== "idle" && liveState !== "stopped") {
-          detail.state = liveState as ThreadState;
-        } else if (liveState === "idle" || liveState === "stopped") {
-          if (
-            persistedSessionState !== undefined ||
-            persistedLatestRole !== undefined ||
-            persistedLatestParts !== undefined
-          ) {
-            detail.state = deriveStoredThreadState(
-              persistedSessionState,
-              persistedLatestRole,
-              persistedLatestParts,
-              persistedSessionLastActivityMs,
-              persistedMessageLastActivityMs,
-            );
-          }
-        }
-        detail.harness = normalizeThreadHarness(
-          pipeStatus.harness,
-          pipeStatus.engine,
-          detail.harness,
-        );
-        detail.engine = pipeStatus.engine ?? detail.engine ?? null;
-      }
-    } catch {
-      // Pipe server unreachable — keep idle state
-    }
 
     return Response.json(detail, {
       headers: { "Cache-Control": "public, s-maxage=5, stale-while-revalidate=3" },
