@@ -30,6 +30,17 @@ if [ -n "$SECRET_MANAGER_URL" ]; then
   if [ -n "$WEB_API_KEY" ] && [ -z "$AI_V2_API_KEY" ]; then
     export AI_V2_API_KEY="$WEB_API_KEY"
   fi
+  # Fall back to SLACKBOT_API_KEY if WEB_API_KEY is unavailable
+  if [ -z "$AI_V2_API_KEY" ]; then
+    val=$(curl -sf --max-time 5 "${SECRET_MANAGER_URL}/secrets/SLACKBOT_API_KEY" | node -e "
+      let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{
+        try{process.stdout.write(JSON.parse(d).value||'')}catch{}
+      })" 2>/dev/null || true)
+    if [ -n "$val" ]; then
+      export AI_V2_API_KEY="$val"
+      echo "Using SLACKBOT_API_KEY as fallback for AI_V2_API_KEY"
+    fi
+  fi
 fi
 
 exec node server.js
