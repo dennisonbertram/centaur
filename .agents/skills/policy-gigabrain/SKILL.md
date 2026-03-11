@@ -65,7 +65,13 @@ This is the **Policy Explainer Index** ([link](https://docs.google.com/document/
 
 ### 1. Meeting Briefer Generation
 
-Generate a one-page briefing packet before Hill meetings.
+Generate a policy briefing memo before Hill meetings.
+
+**Trigger Phrases** (from Madison, Alex G., Justin, Stefan, Katie, or Caitlin):
+- "Write a policy briefing memo for [Name, Title]"
+- "Briefing memo for [Name]"
+- "Policy briefer for [Name]"
+- "Meeting brief for [Name]"
 
 **Input:** Member/staffer name, meeting context, date
 
@@ -95,32 +101,41 @@ Generate a one-page briefing packet before Hill meetings.
 
 **Briefer Template:**
 ```
-# [MEETING TYPE]: [Member/Staffer Name]
+# Policy Briefing Memo: [Name, Title]
 Date: [DATE] | Location: [LOCATION]
 
-## Profile
-- **Role:** [Title, Committee assignments]
-- **Party/State:** [Party - State]
-- **Key Issues:** [Crypto/tech positions]
-- **Prior Interactions:** [Paradigm touchpoints]
-
-## Context
-- **Meeting Purpose:** [Why we're meeting]
-- **Current Priorities:** [What they care about now]
-
-## Relevant Legislation
-- [Bill Number]: [Title] - [Status, our position]
-
-## Talking Points
-1. [Point 1]
-2. [Point 2]
-3. [Point 3]
-
-## Ask
-[What we want from this meeting]
+## Executive Summary
+[2-3 sentence overview: who we're meeting, why it matters, and our primary objective.]
 
 ## Background
-[Additional context, prior commitments, sensitivities]
+- **Role:** [Title, Committee assignments]
+- **Party/State:** [Party - State]
+- **Current Priorities:** [What they care about now]
+- **Relevant Legislation:** [Key bills they sponsor, co-sponsor, or have influence over]
+- **Prior Paradigm Interactions:** [Previous meetings, correspondence, touchpoints]
+
+## Biography
+- **Career Path:** [Key career milestones — Hill tenure, private sector, executive branch]
+- **Education:** [Alma mater, relevant degrees]
+- **Notable Roles:** [Past and present committee/subcommittee positions, leadership roles]
+- **Personal Notes:** [State/district context, known interests, relationship dynamics]
+
+## Crypto Knowledge
+- **Familiarity Level:** [High / Moderate / Low / Unknown]
+- **Public Statements:** [Relevant quotes or positions on crypto, DeFi, stablecoins, etc.]
+- **Voting Record:** [Relevant votes on crypto/fintech legislation]
+- **Staff Expertise:** [Key staffers covering crypto/tech and their sophistication level]
+
+## Goals
+- **Primary Ask:** [What we want from this meeting]
+- **Secondary Objectives:** [Relationship-building goals, intel to gather, positions to reinforce]
+- **Success Criteria:** [How we'll know the meeting went well]
+
+## Specific Topics To Address
+1. [Topic 1 — context, our position, and suggested framing]
+2. [Topic 2 — context, our position, and suggested framing]
+3. [Topic 3 — context, our position, and suggested framing]
+[Add as many as needed based on the meeting agenda and current legislative landscape]
 ```
 
 ### 2. Staffer Tracking
@@ -373,7 +388,7 @@ The system should answer questions like:
 
 ## Example Session
 
-**User:** Generate a briefer for my meeting with Senator Lummis tomorrow about stablecoin legislation.
+**User:** Policy briefer for Senator Lummis — meeting tomorrow about stablecoin legislation.
 
 **Agent:**
 1. Read Policy Explainer Index first for internal analysis
