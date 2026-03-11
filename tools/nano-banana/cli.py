@@ -1,9 +1,5 @@
-"""CLI for Nano Banana (Gemini image generation)."""
+"""CLI for Nano Banana (Gemini Image Generation)."""
 
-from __future__ import annotations
-
-import base64
-import json
 from pathlib import Path
 
 import typer
@@ -25,13 +21,6 @@ def get_client():
     return NanoBananaClient()
 
 
-def write_result_image(payload_json: str, output: Path) -> dict:
-    payload = json.loads(payload_json)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(base64.b64decode(payload["content_base64"]))
-    return payload
-
-
 @app.command()
 def generate(
     prompt: str = typer.Argument(..., help="Text description of the image to generate"),
@@ -40,7 +29,7 @@ def generate(
         DEFAULT_MODEL,
         "--model",
         "-m",
-        help="Model to use: 'flash' (Nano Banana 2) or 'pro' (Nano Banana Pro)",
+        help="Model to use: 'flash' (fast) or 'pro' (high quality/4K)",
     ),
     aspect_ratio: str = typer.Option(
         None,
@@ -52,51 +41,28 @@ def generate(
         None,
         "--size",
         "-s",
-        help="Optional image size, typically used with the pro model (for example: 1K, 2K, 4K)",
-    ),
-    person_generation: str = typer.Option(
-        None,
-        "--person-generation",
-        help="DONT_ALLOW, ALLOW_ADULT, or ALLOW_ALL",
-    ),
-    search: bool = typer.Option(
-        False,
-        "--search",
-        help="Enable Google Search grounding when supported by the selected model",
-    ),
-    thinking_budget: int = typer.Option(
-        None,
-        "--thinking-budget",
-        help="Optional thinking budget for supported models",
-    ),
-    thinking_level: str = typer.Option(
-        None,
-        "--thinking-level",
-        help="Optional thinking level: minimal, low, medium, or high",
+        help="Image size for pro model: 1K, 2K, 4K",
     ),
 ):
-    """Generate an image from a text prompt."""
+    """Generate an image from a text prompt.
+
+    Examples:
+        nano-banana generate "A serene mountain landscape at sunset"
+        nano-banana generate "A cute robot" --model pro --size 4K
+        nano-banana generate "A logo for a coffee shop" -o logo.png -a 1:1
+    """
     client = get_client()
 
     with console.status(f"[bold green]Generating image with {model} model..."):
         try:
-            payload = write_result_image(
-                client.generate(
-                    prompt=prompt,
-                    model=model,
-                    aspect_ratio=aspect_ratio,
-                    image_size=size,
-                    person_generation=person_generation,
-                    use_google_search=search,
-                    thinking_budget=thinking_budget,
-                    thinking_level=thinking_level,
-                    filename=output.name,
-                ),
-                output,
+            image = client.generate(
+                prompt=prompt,
+                model=model,
+                aspect_ratio=aspect_ratio,
+                image_size=size,
             )
+            image.save(output)
             console.print(f"[green]✓[/] Image saved to [cyan]{output}[/]")
-            if payload.get("text_response"):
-                console.print(f"[dim]{payload['text_response']}[/]")
         except Exception as e:
             console.print(f"[red]Error:[/] {e}")
             raise typer.Exit(1)
@@ -113,7 +79,7 @@ def edit(
         DEFAULT_MODEL,
         "--model",
         "-m",
-        help="Model to use: 'flash' (Nano Banana 2) or 'pro' (Nano Banana Pro)",
+        help="Model to use: 'flash' (fast) or 'pro' (high quality)",
     ),
     aspect_ratio: str = typer.Option(
         None,
@@ -121,34 +87,14 @@ def edit(
         "-a",
         help="Aspect ratio: 1:1, 3:4, 4:3, 9:16, 16:9",
     ),
-    size: str = typer.Option(
-        None,
-        "--size",
-        "-s",
-        help="Optional image size, typically used with the pro model (for example: 1K, 2K, 4K)",
-    ),
-    person_generation: str = typer.Option(
-        None,
-        "--person-generation",
-        help="DONT_ALLOW, ALLOW_ADULT, or ALLOW_ALL",
-    ),
-    search: bool = typer.Option(
-        False,
-        "--search",
-        help="Enable Google Search grounding when supported by the selected model",
-    ),
-    thinking_budget: int = typer.Option(
-        None,
-        "--thinking-budget",
-        help="Optional thinking budget for supported models",
-    ),
-    thinking_level: str = typer.Option(
-        None,
-        "--thinking-level",
-        help="Optional thinking level: minimal, low, medium, or high",
-    ),
 ):
-    """Edit an existing image based on a text prompt."""
+    """Edit an existing image based on a text prompt.
+
+    Examples:
+        nano-banana edit photo.png "Change the sky to a starry night"
+        nano-banana edit input.jpg "Remove the background" -o transparent.png
+        nano-banana edit portrait.png "Make it look like a watercolor painting" --model pro
+    """
     if not image.exists():
         console.print(f"[red]Error:[/] Image not found: {image}")
         raise typer.Exit(1)
@@ -160,24 +106,14 @@ def edit(
 
     with console.status(f"[bold green]Editing image with {model} model..."):
         try:
-            payload = write_result_image(
-                client.edit(
-                    prompt=prompt,
-                    image_path=str(image),
-                    model=model,
-                    aspect_ratio=aspect_ratio,
-                    image_size=size,
-                    person_generation=person_generation,
-                    use_google_search=search,
-                    thinking_budget=thinking_budget,
-                    thinking_level=thinking_level,
-                    filename=output.name,
-                ),
-                output,
+            result = client.edit(
+                image_path=image,
+                prompt=prompt,
+                model=model,
+                aspect_ratio=aspect_ratio,
             )
+            result.save(output)
             console.print(f"[green]✓[/] Edited image saved to [cyan]{output}[/]")
-            if payload.get("text_response"):
-                console.print(f"[dim]{payload['text_response']}[/]")
         except Exception as e:
             console.print(f"[red]Error:[/] {e}")
             raise typer.Exit(1)
@@ -188,12 +124,16 @@ def models():
     """List available image generation models."""
     table = Table(title="Available Models")
     table.add_column("Name", style="cyan")
-    table.add_column("Label", style="green")
-    table.add_column("Model ID", style="yellow")
+    table.add_column("Model ID", style="green")
     table.add_column("Description", style="dim")
 
-    for name, info in MODELS.items():
-        table.add_row(name, info["label"], info["id"], info["description"])
+    descriptions = {
+        "flash": "Fast generation (default). Best for quick iterations.",
+        "pro": "High quality, 4K support, advanced reasoning. Best for production assets.",
+    }
+
+    for name, model_id in MODELS.items():
+        table.add_row(name, model_id, descriptions.get(name, ""))
 
     console.print(table)
     console.print("\n[dim]Use --model flash or --model pro with generate/edit commands.[/]")
