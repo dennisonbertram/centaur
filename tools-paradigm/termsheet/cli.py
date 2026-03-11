@@ -8,7 +8,7 @@ import typer
 from dotenv import load_dotenv
 from rich.console import Console
 
-from shared.cli_tables import Table
+from centaur_sdk import Table
 
 from .client import TermsheetClient
 from .models import BoardRights, DealStatus, InstrumentType, TermIntent, TokenRights

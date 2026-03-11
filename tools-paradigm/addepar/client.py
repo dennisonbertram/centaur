@@ -260,7 +260,7 @@ class AddeparClient:
 
 
 def _client() -> AddeparClient:
-    from shared.tool_sdk import secret
+    from centaur_sdk import secret
 
     return AddeparClient(
         api_key=secret("ADDEPAR_API_KEY"),

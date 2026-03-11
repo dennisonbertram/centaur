@@ -6,7 +6,7 @@ load_dotenv()
 
 import typer
 from rich.console import Console
-from shared.cli_tables import Table
+from centaur_sdk import Table
 
 app = typer.Typer(name="paradigmdb", help="Paradigm internal database, Shift notes, BigQuery")
 console = Console()

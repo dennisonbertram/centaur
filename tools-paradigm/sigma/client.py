@@ -5,7 +5,7 @@ import time
 from typing import Any
 
 import httpx
-from shared.tool_sdk import secret
+from centaur_sdk import secret
 
 BASE_URL = "https://api.sigmacomputing.com/v2"
 

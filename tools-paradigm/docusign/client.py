@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 import jwt
-from shared.tool_sdk import secret
+from centaur_sdk import secret
 
 DEMO_AUTH_URL = "https://account-d.docusign.com"
 DEMO_API_URL = "https://demo.docusign.net/restapi"

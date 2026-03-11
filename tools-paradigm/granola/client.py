@@ -7,7 +7,7 @@ Provides workspace-wide access to meeting notes and transcripts.
 from typing import Any
 
 import httpx
-from shared.tool_sdk import secret
+from centaur_sdk import secret
 
 API_BASE = "https://public-api.granola.ai"
 

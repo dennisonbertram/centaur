@@ -182,7 +182,7 @@ if [[ "$SKIP_AGENT_BUILD" == "true" ]]; then
     warn "Skipping agent2 image build (--skip-agent-build)"
 else
     log "Building agent2:latest sandbox image (this takes a few minutes)..."
-    docker build -t agent2:latest sandbox/
+    docker build -t agent2:latest services/sandbox/
     ok "agent2:latest built"
 fi
 

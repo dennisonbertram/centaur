@@ -8,7 +8,7 @@ import uuid
 from base64 import urlsafe_b64encode
 
 import httpx
-from shared.tool_sdk import secret
+from centaur_sdk import secret
 
 
 def _b64url_encode(data: bytes) -> str:

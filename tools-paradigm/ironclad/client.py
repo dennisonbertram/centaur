@@ -4,7 +4,7 @@ import os
 from typing import Any
 
 import httpx
-from shared.tool_sdk import secret
+from centaur_sdk import secret
 
 DEFAULT_BASE_URL = "https://na1.ironcladapp.com"
 

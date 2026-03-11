@@ -10,8 +10,6 @@ from pathlib import Path
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-from shared.tool_sdk import secret
-
 
 # Cache for channel list to avoid repeated API calls
 
@@ -1080,7 +1078,7 @@ class SlackClient:
 
 
 def _client() -> SlackClient:
-    from shared.tool_sdk import secret
+    from centaur_sdk import secret
     return SlackClient(bot_token=secret("SLACK_BOT_TOKEN"))
 
 

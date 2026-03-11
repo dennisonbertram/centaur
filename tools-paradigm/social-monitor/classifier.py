@@ -4,7 +4,7 @@ import os
 
 from anthropic import Anthropic
 from rich.console import Console
-from shared.tool_sdk import secret
+from centaur_sdk import secret
 
 from .db import get_unprocessed_posts, save_signal
 

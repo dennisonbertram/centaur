@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Post a deploy changelog to #ai-v2 Slack channel.
+# Post a deploy changelog to Slack.
 # Uses OpenAI to summarize commits into a categorized changelog.
-# On failure, posts the error and triggers @AI2 to auto-heal.
+# On failure, posts the error and triggers the bot to auto-heal.
 #
 # Usage: scripts/deploy-notify.sh <before_sha> <after_sha> <components> <repo> [status] [error_log]
 #
-# Required env vars: OPENAI_API_KEY, SLACK_BOT_TOKEN
-# All can be sourced from .env if running locally.
+# Required env vars: OPENAI_API_KEY, SLACK_BOT_TOKEN, SLACK_DEPLOY_CHANNEL
 
 set -euo pipefail
 
@@ -17,7 +16,7 @@ REPO="${4:?}"
 JOB_STATUS="${5:-success}"
 ERROR_LOG="${6:-}"
 
-SLACK_CHANNEL="C0AJ07U8Z1N"  # #ai-v2
+SLACK_CHANNEL="${SLACK_DEPLOY_CHANNEL:?Set SLACK_DEPLOY_CHANNEL env var}"
 
 # Build commit list with links
 COMMIT_JSON=$(git log --no-merges --format='%H %s' "${BEFORE}..${AFTER}" 2>/dev/null | while read -r sha msg; do
@@ -78,7 +77,6 @@ COMPARE_URL="https://github.com/${REPO}/compare/${BEFORE}...${AFTER}"
 if [ "$JOB_STATUS" = "failure" ]; then
   ERROR_BLOCK=""
   if [ -n "$ERROR_LOG" ]; then
-    # Truncate to fit Slack's limits
     TRUNCATED_LOG=$(echo "$ERROR_LOG" | tail -30 | head -c 2500)
     ERROR_BLOCK=$(printf '\n\n*Error log:*\n```\n%s\n```' "$TRUNCATED_LOG")
   fi
@@ -112,16 +110,15 @@ RESPONSE=$(curl -sf -X POST https://slack.com/api/chat.postMessage \
   -H "Content-Type: application/json" \
   -d "$MSG")
 
-# On failure, reply in the thread mentioning @AI2 to trigger auto-heal
+# On failure, reply in the thread mentioning the bot to trigger auto-heal
 if [ "$JOB_STATUS" = "failure" ]; then
   THREAD_TS=$(echo "$RESPONSE" | jq -r '.ts // empty')
   if [ -n "$THREAD_TS" ]; then
-    # Get the bot's own user ID for the @mention
     BOT_USER_ID=$(curl -sf https://slack.com/api/auth.test \
       -H "Authorization: Bearer $SLACK_BOT_TOKEN" | jq -r '.user_id // empty')
 
     if [ -n "$BOT_USER_ID" ]; then
-      HEAL_MSG="<@${BOT_USER_ID}> The CD pipeline just failed. Look at the error log above, check the recent commits at ${COMPARE_URL}, and figure out what went wrong. Then fix the issue — you have access to the repo at ~/github/paradigmxyz/ai_v2. Push the fix to main so CD re-runs."
+      HEAL_MSG="<@${BOT_USER_ID}> The CD pipeline just failed. Look at the error log above, check the recent commits at ${COMPARE_URL}, and figure out what went wrong. Then fix the issue — you have access to the repo. Push the fix to main so CD re-runs."
 
       curl -sf -X POST https://slack.com/api/chat.postMessage \
         -H "Authorization: Bearer $SLACK_BOT_TOKEN" \

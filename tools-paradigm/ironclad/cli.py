@@ -10,7 +10,7 @@ load_dotenv()
 
 import typer
 from rich.console import Console
-from shared.cli_tables import Table
+from centaur_sdk import Table
 
 app = typer.Typer(name="ironclad", help="Ironclad CLM CLI for AI agents")
 console = Console()

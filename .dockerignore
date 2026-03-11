@@ -5,10 +5,10 @@
 .venv
 
 # Node
-apps/slackbot/node_modules
+services/slackbot/node_modules
 
-# Agent plugin cached repos (4GB+)
-tools/agent/repos
+# Sandbox cached repos (4GB+)
+services/sandbox/repos
 
 # Caches
 .ruff_cache
@@ -23,17 +23,22 @@ logs/
 .cursor
 .vscode
 .idea
+.amp
+.windsurf
 
 # Docker
 .dockerignore
-Dockerfile
+
+# Monitoring / infrastructure configs (not needed in app builds)
+services/grafana
+services/prometheus
+services/promtail
+services/nginx
 
 # Docs / non-runtime
-skills/
 *.md
-!README.md
+!centaur_sdk/README.md
 
 # Environment (secrets)
 .env
 .env.*
-!.env.example

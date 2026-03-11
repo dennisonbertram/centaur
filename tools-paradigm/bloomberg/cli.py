@@ -7,7 +7,7 @@ load_dotenv()
 import json
 
 import typer
-from shared.cli_tables import Table
+from centaur_sdk import Table
 from rich.console import Console
 
 app = typer.Typer(name="bloomberg", help="Bloomberg Data License REST API CLI")

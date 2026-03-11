@@ -9,7 +9,7 @@ load_dotenv()
 
 import typer
 from rich.console import Console
-from shared.cli_tables import Table
+from centaur_sdk import Table
 
 app = typer.Typer(name="sigma", help="Sigma Computing CLI for AI agents")
 console = Console()

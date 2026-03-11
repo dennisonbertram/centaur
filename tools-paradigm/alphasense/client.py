@@ -3,7 +3,7 @@
 from datetime import datetime
 
 import httpx
-from shared.tool_sdk import secret
+from centaur_sdk import secret
 
 
 class AlphaSenseClient:

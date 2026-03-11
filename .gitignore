@@ -26,7 +26,6 @@ htmlcov/
 # Environment
 .env
 .env.local
-.env.remote-backup
 
 # IDE
 .vscode/
@@ -38,8 +37,7 @@ htmlcov/
 pgdata/
 
 # Docker
-sandbox/repos/
-tools/agent/repos/*/
+services/sandbox/repos/
 
 # Agent / AI IDE config
 .agents/
@@ -59,11 +57,8 @@ Thumbs.db
 logs/
 *.log
 
+# Node
+node_modules/
+
 # TypeScript incremental build state
 *.tsbuildinfo
-
-# Legal eval generated run artifacts (keep framework/cases in repo)
-evals/legal/legal-eval-*-cases/
-evals/legal/legal-eval-*.json
-evals/legal/legal-eval-*.md
-evals/legal/ben_corpus/

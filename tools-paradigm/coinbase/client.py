@@ -216,7 +216,7 @@ class CoinbasePrimeClient:
 
 
 def _client() -> CoinbasePrimeClient:
-    from shared.tool_sdk import secret
+    from centaur_sdk import secret
 
     return CoinbasePrimeClient(
         api_key=secret("COINBASE_API_KEY"),

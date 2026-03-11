@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 import jwt
-from shared.tool_sdk import secret
+from centaur_sdk import secret
 
 BASE_URL = "https://openbanking.jpmorgan.com"
 OAUTH_TOKEN_URL = "https://idag2.jpmorganchase.com/adfs/oauth2/token/"
@@ -186,7 +186,7 @@ class JPMClient:
 
 
 def _client() -> JPMClient:
-    from shared.tool_sdk import secret
+    from centaur_sdk import secret
 
     return JPMClient(
         private_key=secret("JPM_API_PRIVATE_KEY"),

@@ -7,7 +7,7 @@ load_dotenv()
 import typer
 from rich.console import Console
 
-from shared.cli_tables import Table
+from centaur_sdk import Table
 from tools.confmonitor.client import ConfMonitorClient
 
 app = typer.Typer(

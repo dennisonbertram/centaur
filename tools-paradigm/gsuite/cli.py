@@ -4,7 +4,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from shared.cli_tables import Table
+from centaur_sdk import Table
 
 app = typer.Typer(name="gsuite", help="GSuite CLI for AI agents - Gmail, Calendar, Drive")
 console = Console()
