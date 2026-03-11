@@ -7,6 +7,7 @@ import json
 import os
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import docker
@@ -35,6 +36,11 @@ def _image() -> str:
 
 def _repos_host_dir() -> str:
     return os.getenv("REPOS_HOST_DIR", os.path.expanduser("~/github"))
+
+
+def _repo_host_dir() -> str:
+    """Host-side path to the centaur repo root (for bind-mounting prompts/personas)."""
+    return os.getenv("REPO_HOST_DIR", os.path.join(_repos_host_dir(), "paradigmxyz", "ai_v2"))
 
 
 _HARNESS_STUB_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AMP_API_KEY")
@@ -180,6 +186,26 @@ class DockerSandboxBackend(SandboxBackend):
         }
         vol = os.getenv("FIREWALL_CERTS_VOLUME", "firewall-certs")
         volumes[vol] = {"bind": "/firewall-certs", "mode": "ro"}
+
+        # Bind-mount base system prompt (so prompt edits don't require image rebuild)
+        repo_host = _repo_host_dir()
+        base_prompt_host = os.path.join(repo_host, "services", "sandbox", "SYSTEM_PROMPT.md")
+        volumes[base_prompt_host] = {"bind": "/home/agent/AGENTS_BASE.md", "mode": "ro"}
+
+        # Bind-mount persona directory if a persona is selected
+        if persona:
+            from api.app import get_tool_manager
+
+            persona_info = get_tool_manager().get_persona(persona)
+            if persona_info and persona_info.tool_dir.is_dir():
+                # Resolve host path: tool_dir is /app/tools/personas/<name> inside API container
+                # Map back to host via repo root
+                rel = persona_info.tool_dir.relative_to(Path("/app"))
+                persona_host = os.path.join(repo_host, str(rel))
+                volumes[persona_host] = {
+                    "bind": f"/home/agent/tools/personas/{persona}",
+                    "mode": "ro",
+                }
 
         container = client.containers.run(
             _image(),

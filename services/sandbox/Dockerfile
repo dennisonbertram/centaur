@@ -72,12 +72,8 @@ COPY --chmod=755 md2docx.py /usr/local/bin/md2docx
 COPY --chmod=755 entrypoint.sh /entrypoint.sh
 COPY --chown=agent:agent harness_session.py /home/agent/harness_session.py
 
-# ── System prompts (change most often — last for best caching) ──────────────
+# ── System prompt fallback (bind-mounted at runtime; baked-in as safety net) ─
 COPY --chown=agent:agent SYSTEM_PROMPT.md /home/agent/AGENTS.md
-COPY --chown=agent:agent SYSTEM_PROMPT_ENG.md /home/agent/AGENTS_ENG.md
-COPY --chown=agent:agent SYSTEM_PROMPT_LEGAL.md /home/agent/AGENTS_LEGAL.md
-COPY --chown=agent:agent SYSTEM_PROMPT_INVEST.md /home/agent/AGENTS_INVEST.md
-COPY --chown=agent:agent SYSTEM_PROMPT_EVENTS.md /home/agent/AGENTS_EVENTS.md
 
 WORKDIR /home/agent
 ENTRYPOINT ["/entrypoint.sh"]

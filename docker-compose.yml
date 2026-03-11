@@ -131,6 +131,7 @@ services:
       AI_V2_LOG_LEVEL: info
       TOOL_DIRS: /app/tools:/app/tools-paradigm
       REPOS_HOST_DIR: ${HOME}/github
+      REPO_HOST_DIR: ${PWD}
       FIREWALL_HOST: firewall
       AGENT_NETWORK: ai_v2_agent_net
       FIREWALL_CERTS_VOLUME: ai_v2_firewall-certs

@@ -49,19 +49,22 @@ if [ -d "$AI_V2_SKILLS" ] && [ ! -d "$WS_SKILLS" ]; then
     cp -r "$AI_V2_SKILLS"/. "$WS_SKILLS"/
 fi
 
-# ── Select system prompt based on persona ────────────────────────────────────
-# All harnesses read AGENTS.md from the workspace root (amp, codex). Claude-code
-# also receives the persona prompt via --system-prompt flag from the API.
-# Always place the correct prompt in workspace/AGENTS.md so every harness sees it.
-PERSONA_UPPER="$(echo "${AGENT_PERSONA:-}" | tr '[:lower:]' '[:upper:]')"
-BASE_PROMPT="$HOME_DIR/AGENTS.md"
-PERSONA_PROMPT="$HOME_DIR/AGENTS_${PERSONA_UPPER}.md"
+# ── Assemble system prompt from bind mounts ──────────────────────────────────
+# Base prompt: bind-mounted by docker.py as AGENTS_BASE.md, fallback to baked-in AGENTS.md
+# Persona overlay: bind-mounted persona dir at ~/tools/personas/<name>/PROMPT.md
 TARGET_PROMPT="$HOME_DIR/workspace/AGENTS.md"
-if [ -d "$HOME_DIR/workspace" ] && [ -f "$BASE_PROMPT" ]; then
-    if [ -n "$PERSONA_UPPER" ] && [ -f "$PERSONA_PROMPT" ]; then
-        { cat "$BASE_PROMPT"; printf '\n\n---\n\n'; cat "$PERSONA_PROMPT"; } > "$TARGET_PROMPT" 2>/dev/null || true
-    else
-        cp "$BASE_PROMPT" "$TARGET_PROMPT" 2>/dev/null || true
+if [ -f "$HOME_DIR/AGENTS_BASE.md" ]; then
+    cp "$HOME_DIR/AGENTS_BASE.md" "$TARGET_PROMPT"
+elif [ -f "$HOME_DIR/AGENTS.md" ]; then
+    cp "$HOME_DIR/AGENTS.md" "$TARGET_PROMPT"
+fi
+
+PERSONA="${AGENT_PERSONA:-}"
+if [ -n "$PERSONA" ] && [ -f "$TARGET_PROMPT" ]; then
+    OVERLAY="$HOME_DIR/tools/personas/$PERSONA/PROMPT.md"
+    if [ -f "$OVERLAY" ]; then
+        printf '\n\n---\n\n' >> "$TARGET_PROMPT"
+        cat "$OVERLAY" >> "$TARGET_PROMPT"
     fi
 fi
 
