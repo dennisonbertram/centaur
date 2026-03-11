@@ -84,7 +84,6 @@ Use `secret("KEY")` to access. Never use `os.environ` — tool secrets are scope
 | notion | Notion — pages, databases, blocks, comments | NOTION_API_KEY |
 | openfec | OpenFEC federal election data | DATAGOV_API_KEY |
 | opentable | OpenTable reservation search | (none) |
-| paradigmdb | Internal PostgreSQL, Shift notes, BigQuery | RESHIFT_DB_*, GCP auth |
 | archiver | Document archiver for investment materials (DocSend, Google Drive) | PARCHIVER_DATABASE_URL, PARCHIVER_REDUCTO_API_KEY, PARCHIVER_OPENROUTER_API_KEY, PARCHIVER_R2_* |
 | polymarket | Polymarket prediction markets | (none — public API) |
 | posthog | PostHog product analytics, HogQL | POSTHOG_API_KEY, POSTHOG_PROJECT_ID |

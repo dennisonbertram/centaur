@@ -1,0 +1,10 @@
+[project]
+name = "eng"
+description = "Engineering persona — code review, debugging, repo work"
+version = "0.1.0"
+
+[tool.ai-v2]
+type = "persona"
+engine = "amp"
+default_repo = "paradigmxyz/ai_v2"
+prompt = "PROMPT.md"
