@@ -108,23 +108,13 @@ Date: [DATE] | Location: [LOCATION]
 [2-3 sentence overview: who we're meeting, why it matters, and our primary objective.]
 
 ## Background
-- **Role:** [Title, Committee assignments]
-- **Party/State:** [Party - State]
-- **Current Priorities:** [What they care about now]
-- **Relevant Legislation:** [Key bills they sponsor, co-sponsor, or have influence over]
-- **Prior Paradigm Interactions:** [Previous meetings, correspondence, touchpoints]
+Write 1-2 paragraphs in full sentences covering: their current role and title, committee assignments, party and state, what they are currently prioritizing, key legislation they sponsor or co-sponsor, and any prior Paradigm interactions or touchpoints.
 
 ## Biography
-- **Career Path:** [Key career milestones — Hill tenure, private sector, executive branch]
-- **Education:** [Alma mater, relevant degrees]
-- **Notable Roles:** [Past and present committee/subcommittee positions, leadership roles]
-- **Personal Notes:** [State/district context, known interests, relationship dynamics]
+Write 1-2 paragraphs in full sentences covering: key career milestones (Hill tenure, private sector, executive branch experience), education and alma mater, notable past and present committee or subcommittee positions, leadership roles, and relevant personal context such as state/district dynamics, known interests, or relationship dynamics.
 
 ## Crypto Knowledge
-- **Familiarity Level:** [High / Moderate / Low / Unknown]
-- **Public Statements:** [Relevant quotes or positions on crypto, DeFi, stablecoins, etc.]
-- **Voting Record:** [Relevant votes on crypto/fintech legislation]
-- **Staff Expertise:** [Key staffers covering crypto/tech and their sophistication level]
+Write 1-2 paragraphs in full sentences covering: their overall familiarity level with crypto and digital assets, notable public statements or positions on crypto, DeFi, or stablecoins, relevant votes on crypto or fintech legislation, and the sophistication level of key staffers covering crypto and tech policy.
 
 ## Goals
 - **Primary Ask:** [What we want from this meeting]
