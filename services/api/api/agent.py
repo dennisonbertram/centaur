@@ -510,7 +510,7 @@ async def _download_attachments_into_sandbox(
                 continue
             try:
                 safe_name = re.sub(r"[^\w\-.]", "_", name)
-                async with httpx.AsyncClient(timeout=30) as http:
+                async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
                     resp = await http.get(
                         url, headers={"Authorization": f"Bearer {slack_token}"}
                     )
