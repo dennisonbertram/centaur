@@ -84,9 +84,7 @@ TRUSTED_INTERNAL_HOSTS: frozenset[str] = frozenset(
     if h.strip()
 )
 
-SENSITIVE_INBOUND_HEADERS: frozenset[str] = frozenset(
-    {"x-forwarded-user"}
-)
+SENSITIVE_INBOUND_HEADERS: frozenset[str] = frozenset()
 
 # HTTP method restrictions: hosts not in this set are limited to safe methods only.
 # LLM API hosts (SECRET_INJECTION_HOSTS) are always allowed all methods.
