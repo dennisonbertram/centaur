@@ -63,7 +63,7 @@ function test(name: string, fn: () => void) {
 function replayFixture(name: string): {
   tracker: ProgressTracker;
   allCanonical: CanonicalEvent[];
-  allChunks: StreamChunk[];
+  allChunks: unknown[];
   rawEvents: Record<string, unknown>[];
   turnDoneResult: string;
 } {
@@ -71,7 +71,7 @@ function replayFixture(name: string): {
   const rawEvents = parseSSEFile(filePath);
   const tracker = new ProgressTracker();
   const allCanonical: CanonicalEvent[] = [];
-  const allChunks: StreamChunk[] = [];
+  const allChunks: unknown[] = [];
   let turnDoneResult = "";
 
   for (const raw of rawEvents) {
@@ -131,7 +131,7 @@ for (const file of fixtureFiles) {
   );
   if (toolUseEvents.length > 0) {
     test(`${toolUseEvents.length} tool_use event(s) → task_update chunks`, () => {
-      const taskUpdates = allChunks.filter(c => c.type === "task_update" && c.id !== "init");
+      const taskUpdates = allChunks.filter(c => (c as any).type === "task_update" && (c as any).id !== "init");
       assert.ok(taskUpdates.length > 0, "no task_update chunks for tool_use events");
     });
   }
