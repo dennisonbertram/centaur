@@ -76,8 +76,11 @@ jobs:
           docker compose logs --tail 50 secrets || true
           exit 1
 
-      - name: Deploy all services
-        run: docker compose up -d --no-build --remove-orphans
+      - name: Deploy all services (except secrets)
+        run: |
+          docker compose up -d --no-build --remove-orphans \
+            postgres docker-socket-proxy firewall pgbouncer api slackbot web auth \
+            nginx grafana prometheus victorialogs alloy
 
       - name: Restart nginx
         run: docker compose restart nginx
