@@ -302,6 +302,21 @@ curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/
 
 Test the slackbot by crafting HMAC-signed Slack webhook payloads. This proves the full Slack → slackbot → API → sandbox → response path.
 
+### Automated integration test script
+
+Run the automated integration test suite (URL verification, signature rejection, app_mention with/without file attachments, thread messages, edge cases):
+
+```bash
+source .env
+{SKILL_DIR}/scripts/integration-slackbot.sh
+```
+
+Set `SLACKBOT_URL` if the slackbot is only reachable inside Docker:
+
+```bash
+docker exec centaur-api-1 bash -c 'SLACKBOT_URL=http://slackbot:3001 SLACK_SIGNING_SECRET=<secret> /path/to/integration-slackbot.sh'
+```
+
 ### 3a-i. URL Verification (signed)
 
 ```bash
