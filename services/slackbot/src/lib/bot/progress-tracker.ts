@@ -11,6 +11,8 @@ type HistoryEntry = { toolId: string; title: string; status: StepStatus };
 export class ProgressTracker {
   lastAssistantText = "";
   resultText = "";
+  /** Amp thread ID captured from system.init session_id (e.g. "T-019ce043-..."). */
+  agentThreadId = "";
   private activeTools = new Map<string, ActiveTool>();
   private _pendingChunks: StreamChunk[] = [];
   private initCompleted = false;
@@ -159,7 +161,12 @@ export class ProgressTracker {
       return true;
     }
 
-    // command_execution, file_change, usage, system — no visual update
+    if (event.type === "system" && event.subtype === "init" && event.session_id) {
+      this.agentThreadId = event.session_id;
+      return false;
+    }
+
+    // command_execution, file_change, usage — no visual update
     return false;
   }
 
