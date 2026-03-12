@@ -40,7 +40,8 @@ pgdata/
 services/sandbox/repos/
 
 # Agent / AI IDE config
-.agents/
+.agents/*
+!.agents/skills/
 .claude/
 .windsurf/
 skills-lock.json
