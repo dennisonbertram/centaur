@@ -16,8 +16,6 @@ WORKSPACE = "/home/agent/workspace"
 
 engine = os.environ.get("AGENT_ENGINE", "amp")
 model_override = os.environ.get("AGENT_MODEL", "")
-persona = os.environ.get("AGENT_PERSONA", "")
-
 write_lock = threading.Lock()
 proc: subprocess.Popen | None = None
 agent_thread_id: str | None = None

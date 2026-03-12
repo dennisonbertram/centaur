@@ -96,7 +96,116 @@ def _replenish_sync() -> int:
     return spawned
 
 
-def claim_container(thread_key: str, harness: str = "amp") -> SandboxSession | None:
+def _inject_persona(
+    sandbox_id: str,
+    persona: str | None,
+    repo: str | None,
+) -> None:
+    """Inject persona/repo config into a running warm container via exec.
+
+    Warm containers have already run the entrypoint with no persona/repo,
+    so we replicate the entrypoint's setup steps here: clone the repo,
+    copy skills, append the persona prompt overlay, and write env overrides.
+    """
+    backend = get_backend()
+    client = backend._get_client()
+    container = client.containers.get(sandbox_id)
+
+    # 1. Clone repo into workspace (mirrors entrypoint.sh lines 24-42)
+    if repo:
+        container.exec_run(
+            [
+                "sh",
+                "-c",
+                f'''
+REPO_PATH="/home/agent/github/{repo}"
+WORKSPACE="/home/agent/workspace"
+if git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
+    rm -rf "$WORKSPACE"
+    git clone --quiet --shared "$REPO_PATH" "$WORKSPACE" || git clone --quiet "$REPO_PATH" "$WORKSPACE"
+    BRANCH="agent-$(date +%s)-$RANDOM-$RANDOM"
+    git -C "$WORKSPACE" checkout -q -b "$BRANCH" || true
+fi
+''',
+            ],
+            user="agent",
+        )
+        # Copy project skills (mirrors entrypoint.sh lines 44-50)
+        container.exec_run(
+            [
+                "sh",
+                "-c",
+                '''
+AI_V2_SKILLS="/home/agent/github/paradigmxyz/ai_v2/.agents/skills"
+WS_SKILLS="/home/agent/workspace/.agents/skills"
+if [ -d "$AI_V2_SKILLS" ] && [ ! -d "$WS_SKILLS" ]; then
+    mkdir -p "$WS_SKILLS"
+    cp -r "$AI_V2_SKILLS"/. "$WS_SKILLS"/
+fi
+''',
+            ],
+            user="agent",
+        )
+        # Re-copy base system prompt into new workspace
+        container.exec_run(
+            [
+                "sh",
+                "-c",
+                '''
+if [ -f /home/agent/AGENTS_BASE.md ]; then
+    cp /home/agent/AGENTS_BASE.md /home/agent/workspace/AGENTS.md
+elif [ -f /home/agent/AGENTS.md ]; then
+    cp /home/agent/AGENTS.md /home/agent/workspace/AGENTS.md
+fi
+''',
+            ],
+            user="agent",
+        )
+
+    # 2. Append persona prompt overlay (read content from host side)
+    if persona:
+        from api.app import get_tool_manager
+
+        persona_info = get_tool_manager().get_persona(persona)
+        if persona_info:
+            prompt_path = persona_info.tool_dir / "PROMPT.md"
+            if prompt_path.is_file():
+                prompt_content = prompt_path.read_text()
+                container.exec_run(
+                    ["sh", "-c", 'printf "%s" "$_CONTENT" >> /home/agent/workspace/AGENTS.md'],
+                    environment={"_CONTENT": f"\n\n---\n\n{prompt_content}"},
+                    user="agent",
+                )
+
+    # 3. Write env overrides for downstream scripts
+    env_lines: list[str] = []
+    if persona:
+        env_lines.append(f"export AGENT_PERSONA={persona}")
+    if repo:
+        env_lines.append(f"export AGENT_REPO={repo}")
+    if env_lines:
+        env_content = "\n".join(env_lines) + "\n"
+        container.exec_run(
+            ["sh", "-c", 'printf "%s" "$_CONTENT" > /home/agent/.env_override'],
+            environment={"_CONTENT": env_content},
+            user="agent",
+        )
+
+    log.info(
+        "warm_container_persona_injected",
+        sandbox=sandbox_id[:12],
+        persona=persona,
+        repo=repo,
+    )
+
+
+def claim_container(
+    thread_key: str,
+    harness: str = "amp",
+    *,
+    persona: str | None = None,
+    repo: str | None = None,
+) -> SandboxSession | None:
     """Try to claim a warm sandbox from the pool. Returns SandboxSession or None.
 
     Only returns a sandbox if the requested harness matches the pool harness.
@@ -130,6 +239,9 @@ def claim_container(thread_key: str, harness: str = "amp") -> SandboxSession | N
     except Exception:
         log.warning("warm_claim_token_refresh_failed", sandbox=warm.sandbox_id[:12])
 
+    if persona or repo:
+        _inject_persona(warm.sandbox_id, persona, repo)
+
     session = SandboxSession(
         sandbox_id=warm.sandbox_id,
         thread_key=thread_key,
@@ -144,6 +256,8 @@ def claim_container(thread_key: str, harness: str = "amp") -> SandboxSession | N
         thread_key=thread_key,
         sandbox=warm.sandbox_id[:12],
         pool_age_s=round(time.time() - warm.created_at, 1),
+        persona=persona,
+        repo=repo,
     )
     return session
 

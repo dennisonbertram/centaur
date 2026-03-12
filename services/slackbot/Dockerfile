@@ -24,7 +24,7 @@ ENV NODE_ENV=production
 
 # Next.js standalone output includes everything needed
 COPY --from=builder /app/services/slackbot/.next/standalone ./
-COPY --from=builder /app/services/slackbot/.next/static ./.next/static
+COPY --from=builder /app/services/slackbot/.next/static ./services/slackbot/.next/static
 COPY scripts/bootstrap-secrets.sh /app/bootstrap-secrets.sh
 COPY services/slackbot/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh /app/bootstrap-secrets.sh
@@ -34,4 +34,4 @@ ENV PORT=3001
 ENV HOSTNAME="0.0.0.0"
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["node", "server.js"]
+CMD ["node", "services/slackbot/server.js"]

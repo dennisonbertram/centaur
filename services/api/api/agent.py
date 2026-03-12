@@ -59,7 +59,7 @@ async def _db_get_session(thread_key: str) -> SandboxSession | None:
     """Load a session from the DB. Returns None if not found."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT thread_key, sandbox_id, harness, engine, state, config_sent, started_at "
+        "SELECT thread_key, sandbox_id, harness, engine, state, started_at "
         "FROM sandbox_sessions WHERE thread_key = $1",
         thread_key,
     )
@@ -74,8 +74,7 @@ async def _db_get_session(thread_key: str) -> SandboxSession | None:
         backend_name="docker",
         db_state=row["state"],
     )
-    rt = _get_runtime(session.sandbox_id)
-    rt.config_sent = row["config_sent"]
+    _get_runtime(session.sandbox_id)
     return session
 
 
@@ -106,15 +105,6 @@ async def _db_update_state(thread_key: str, state: str) -> None:
     await pool.execute(
         "UPDATE sandbox_sessions SET state = $1, updated_at = NOW() WHERE thread_key = $2",
         state,
-        thread_key,
-    )
-
-
-async def _db_set_config_sent(thread_key: str) -> None:
-    """Mark config as sent for a session."""
-    pool = _get_pool()
-    await pool.execute(
-        "UPDATE sandbox_sessions SET config_sent = TRUE, updated_at = NOW() WHERE thread_key = $1",
         thread_key,
     )
 
@@ -422,11 +412,16 @@ async def get_or_spawn(
             backend = get_backend()
             await asyncio.to_thread(backend.stop_by_id, session.sandbox_id)
 
+    # Resolve harness profile (engine, persona, repo) once for both warm and cold paths
+    resolved_engine, persona, repo = _resolve_harness_profile(harness, engine_override=engine)
+
     # Try warm pool first
     if not engine:
         from api.warm_pool import claim_container
 
-        claimed = await asyncio.to_thread(claim_container, thread_key, harness)
+        claimed = await asyncio.to_thread(
+            claim_container, thread_key, harness, persona=persona, repo=repo
+        )
         if claimed:
             won = await _db_insert_session(claimed, harness=claimed.harness, engine=claimed.engine)
             if won:

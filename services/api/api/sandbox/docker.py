@@ -311,36 +311,6 @@ class DockerSandboxBackend(SandboxBackend):
             container.stop(timeout=5)
             container.remove()
 
-    def recover(self) -> list[SandboxSession]:
-        client = self._get_client()
-        sessions: list[SandboxSession] = []
-        try:
-            containers = client.containers.list(filters={"label": "ai2.pipe=true"})
-        except Exception as exc:
-            log.warning("docker_recover_failed", error=str(exc))
-            return sessions
-
-        for container in containers:
-            thread_key = container.labels.get("ai2.thread", "")
-            is_warm = container.labels.get("ai2.warm") == "true"
-            if is_warm and thread_key.startswith("warm-"):
-                continue
-            if not thread_key:
-                continue
-            if container.status != "running":
-                continue
-            sessions.append(
-                SandboxSession(
-                    sandbox_id=container.id,
-                    thread_key=thread_key,
-                    harness=container.labels.get("ai2.harness", "amp"),
-                    engine=container.labels.get("ai2.engine", "amp"),
-                    started_at=time.time(),
-                    backend_name=self.name,
-                )
-            )
-        return sessions
-
     def close_streams(self, session: SandboxSession) -> None:
         rt = _get_rt(session)
         if rt.stdin_sock is not None:
@@ -352,30 +322,12 @@ class DockerSandboxBackend(SandboxBackend):
                 rt.stdout_sock.close()
             rt.stdout_sock = None
 
-    def recent_logs(self, session: SandboxSession, tail: int = 40) -> str:
-        client = self._get_client()
-        try:
-            container = client.containers.get(session.sandbox_id)
-            return _container_recent_logs(container, tail=tail)
-        except Exception:
-            return ""
-
-    def rename(self, session: SandboxSession, new_name: str) -> None:
-        client = self._get_client()
-        with contextlib.suppress(Exception):
-            container = client.containers.get(session.sandbox_id)
-            container.rename(new_name)
-
     def rename_by_id(self, sandbox_id: str, new_name: str) -> None:
         """Rename a container by ID (no session needed)."""
         client = self._get_client()
         with contextlib.suppress(Exception):
             container = client.containers.get(sandbox_id)
             container.rename(new_name)
-
-    def refresh_token(self, session: SandboxSession, new_token: str) -> None:
-        """Write a fresh API token into a running sandbox container."""
-        self.refresh_token_by_id(session.sandbox_id, new_token)
 
     def refresh_token_by_id(self, sandbox_id: str, new_token: str) -> None:
         """Write a fresh API token into a running container by ID."""

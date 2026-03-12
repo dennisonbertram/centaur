@@ -23,8 +23,6 @@ class RuntimeState:
     active_turn_id: int = 0
     turn_lock: threading.Lock = field(default_factory=threading.Lock)
     active_queue: queue.SimpleQueue[str | None] | None = None
-    system_prompt: str = ""
-    config_sent: bool = False
     reader_thread: threading.Thread | None = None
     reader_gen: int = 0
     stdin_sock: Any = None
@@ -93,22 +91,8 @@ class SandboxBackend(abc.ABC):
     def status(self, session: SandboxSession) -> str:
         """Return sandbox status: 'running', 'stopped', 'gone', etc."""
 
-    @abc.abstractmethod
-    def recover(self) -> list[SandboxSession]:
-        """Discover running sandboxes from this backend (for crash recovery)."""
-
     def close_streams(self, session: SandboxSession) -> None:  # noqa: B027
         """Close any open streams. Default: no-op."""
-
-    def recent_logs(self, session: SandboxSession, tail: int = 40) -> str:
-        """Return recent log output. Default: empty."""
-        return ""
-
-    def rename(self, session: SandboxSession, new_name: str) -> None:  # noqa: B027
-        """Rename a sandbox (e.g. when claiming a warm container). Default: no-op."""
-
-    def refresh_token(self, session: SandboxSession, new_token: str) -> None:  # noqa: B027
-        """Inject a fresh API token into a running sandbox. Default: no-op."""
 
     def recover_warm(self, pool_harness: str) -> list[SandboxSession]:
         """Discover warm (pre-created, unclaimed) sandboxes. Default: empty."""
