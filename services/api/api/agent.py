@@ -202,6 +202,7 @@ def _stream_turn(
     message: str | None = None,
     *,
     logs: bool = False,
+    skip_done_count: int = 0,
 ):
     """Stream stdout lines from the sandbox (blocking generator).
 
@@ -270,6 +271,7 @@ def _stream_turn(
             )
 
     first_output = False
+    done_seen = 0
     while True:
         line = turn_queue.get()
         if line is None:
@@ -300,6 +302,9 @@ def _stream_turn(
             if evt.get("type") == "turn.done" and (
                 message is None or evt.get("turn_id") == turn_id
             ):
+                done_seen += 1
+                if done_seen <= skip_done_count:
+                    continue
                 rt.busy = False
                 rt.last_result = evt.get("result")
                 log.info(
@@ -526,9 +531,22 @@ async def _download_attachments_into_sandbox(
         )
 
 
-async def stream_reconnect(session: SandboxSession) -> AsyncIterator[str]:
-    """Async wrapper for reconnecting to a running sandbox's stdout."""
-    async for line in _async_stream(_stream_turn, session):
+async def stream_reconnect(
+    session: SandboxSession, *, skip_done_count: int = 0
+) -> AsyncIterator[str]:
+    """Async wrapper for reconnecting to a running sandbox's stdout.
+
+    *skip_done_count*: number of ``turn.done`` events to skip before treating
+    one as terminal.  The slackbot sets this to 1 when reconnecting after a
+    follow=true handoff so that the old turn's ``turn.done`` (replayed from
+    container stdout history) is passed through and the followed thread's
+    output is streamed.
+    """
+
+    def _reconnect():
+        return _stream_turn(session, skip_done_count=skip_done_count)
+
+    async for line in _async_stream(_reconnect):
         yield line
 
 
@@ -566,6 +584,7 @@ def _build_session_context(
             "- For Twitter/X handles, link to the profile WITHOUT an @ prefix in the display text: `[handle](https://x.com/handle)` (NOT `[@handle](...)`)",
             "- Prefer concise, well-structured markdown; long replies may be split across multiple Slack messages",
             "- Markdown tables are allowed and may render as native Slack tables when the structure is clean",
+            "- NEVER put links/URLs inside code blocks (``` ```) — they won't be clickable. Use markdown tables or plain text with `[text](url)` links instead",
         ])
         if user_id:
             lines.append(

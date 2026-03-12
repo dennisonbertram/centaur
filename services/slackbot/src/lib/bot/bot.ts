@@ -243,10 +243,14 @@ function createBot() {
     totalYieldedCount += phase1Result.yieldedCount;
 
     // Phase 2: follow handoff chain via reconnect (no turn.start).
+    // skip_done_count=1 tells the API to skip the old turn's turn.done during
+    // stdout replay so we keep streaming until the followed thread finishes.
     let lastHandoff = phase1Result.handoff;
+    let handoffDepth = 0;
     while (lastHandoff) {
+      handoffDepth++;
       const phase = drainStreamChunks(
-        reconnectStreamingWithRetries(threadKey, harness, totalYieldedCount),
+        reconnectStreamingWithRetries(threadKey, harness, totalYieldedCount, handoffDepth),
         tracker, new HandoffDetector(),
       );
       let phaseResult: typeof phase1Result;

@@ -118,8 +118,9 @@ async function* reconnectLoop(opts: {
   harnessName: string;
   skipCount: number;
   delayBeforeFirst: boolean;
+  skipDoneCount?: number;
 }): AsyncGenerator<CanonicalEvent, string, undefined> {
-  const { threadKey, harnessName, skipCount, delayBeforeFirst } = opts;
+  const { threadKey, harnessName, skipCount, delayBeforeFirst, skipDoneCount } = opts;
   const maxAttempts = RECONNECT_MAX_ATTEMPTS + (delayBeforeFirst ? 0 : 1);
   let yieldedCount = 0;
   let lastAssistantText = "";
@@ -146,6 +147,7 @@ async function* reconnectLoop(opts: {
         body: JSON.stringify({
           thread_key: threadKey,
           harness: harnessName,
+          ...(skipDoneCount ? { skip_done_count: skipDoneCount } : {}),
         }),
         timeoutMs: 10 * 60_000,
         maxAttempts: 1,
@@ -350,6 +352,7 @@ export async function* reconnectStreaming(
   threadKey: string,
   harness?: Harness | null,
   skipCount: number = 0,
+  skipDoneCount: number = 0,
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const normalizedKey = normalizeThreadKey(threadKey);
   const harnessName = harness || "amp";
@@ -359,6 +362,7 @@ export async function* reconnectStreaming(
     harnessName,
     skipCount,
     delayBeforeFirst: false,
+    skipDoneCount,
   });
 }
 
@@ -399,11 +403,12 @@ export async function* reconnectStreamingWithRetries(
   threadKey: string,
   harness: Harness,
   skipCount: number = 0,
+  skipDoneCount: number = 0,
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const maxAttempts = 4;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return yield* reconnectStreaming(threadKey, harness, skipCount);
+      return yield* reconnectStreaming(threadKey, harness, skipCount, skipDoneCount);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       if (isBusyRunError(detail) && attempt < maxAttempts) {
