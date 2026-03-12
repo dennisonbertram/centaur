@@ -1,6 +1,7 @@
 """VictoriaLogs HTTP API client for LogsQL queries, field names, and field values."""
 
 import json
+import os
 from typing import Any
 
 import httpx
@@ -22,7 +23,7 @@ class VictoriaLogsClient:
 
     @property
     def base_url(self) -> str:
-        url = (self._url or secret("VICTORIALOGS_URL", "http://victorialogs:9428")).rstrip("/")
+        url = (self._url or os.environ.get("VICTORIALOGS_URL", "http://victorialogs:9428")).rstrip("/")
         if url and not url.startswith(("http://", "https://")):
             url = f"http://{url}"
         return url

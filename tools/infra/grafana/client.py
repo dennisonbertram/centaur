@@ -34,7 +34,7 @@ class GrafanaClient:
 
     @property
     def base_url(self) -> str:
-        url = (self._url or secret("GRAFANA_URL", "")).rstrip("/")
+        url = (self._url or os.environ.get("GRAFANA_URL", "")).rstrip("/")
         if url and not url.startswith(("http://", "https://")):
             url = f"http://{url}"
         return url
