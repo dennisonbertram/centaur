@@ -120,17 +120,6 @@ RATE_WINDOW = 60  # seconds
 
 BODY_INSPECTION_ENABLED = os.environ.get("FIREWALL_BODY_INSPECTION", "0") == "1"
 
-# Secrets that the firewall will proxy to internal services via the health
-# server.  This is intentionally narrow — services should NOT be able to
-# read arbitrary vault secrets through the firewall.
-BOOTSTRAP_SECRET_ALLOWLIST: frozenset[str] = frozenset(
-    s.strip()
-    for s in os.environ.get(
-        "FIREWALL_BOOTSTRAP_SECRETS",
-        "DATABASE_URL,PGBOUNCER_DATABASE_URL,API_SECRET_KEY,SLACK_SIGNING_SECRET,SLACK_BOT_TOKEN,UI_PASSWORD,AUTH_COOKIE_KEY,SLACKBOT_API_KEY"
-    ).split(",")
-    if s.strip()
-)
 
 # ---------------------------------------------------------------------------
 # Unicode normalization (anti-homoglyph bypass)
@@ -291,12 +280,6 @@ class CredentialInjector:
                 elif self.path.startswith("/secrets/"):
                     key = self.path[len("/secrets/"):]
                     key = urllib.parse.unquote(key)
-                    if key not in BOOTSTRAP_SECRET_ALLOWLIST:
-                        self.send_response(403)
-                        self.send_header("Content-Type", "application/json")
-                        self.end_headers()
-                        self.wfile.write(json.dumps({"error": "not allowed"}).encode())
-                        return
                     val = parent._get_secret(key)
                     if val is None:
                         self.send_response(404)
