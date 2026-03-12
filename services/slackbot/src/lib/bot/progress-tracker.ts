@@ -5,7 +5,8 @@ type ActiveTool = { name: string; input: Record<string, unknown>; startedAt: num
 
 const MAX_VISIBLE_STEPS = 5;
 
-type HistoryEntry = { toolId: string; title: string; status: string };
+type StepStatus = "pending" | "in_progress" | "complete" | "error";
+type HistoryEntry = { toolId: string; title: string; status: StepStatus };
 
 export class ProgressTracker {
   lastAssistantText = "";
@@ -45,7 +46,7 @@ export class ProgressTracker {
   }
 
   /** Add a new step entry. If it causes a shift, re-emits the full window. */
-  private addStep(toolId: string, title: string, status: string): void {
+  private addStep(toolId: string, title: string, status: StepStatus): void {
     this.stepHistory.push({ toolId, title, status });
     if (this.stepHistory.length > MAX_VISIBLE_STEPS) {
       // Window shifted — re-emit all visible slots
@@ -57,7 +58,7 @@ export class ProgressTracker {
   }
 
   /** Update an existing step entry's title and status. */
-  private updateStep(toolId: string, title: string, status: string): void {
+  private updateStep(toolId: string, title: string, status: StepStatus): void {
     const idx = this.stepHistory.findLastIndex((e) => e.toolId === toolId);
     if (idx === -1) return;
     this.stepHistory[idx].title = title;
