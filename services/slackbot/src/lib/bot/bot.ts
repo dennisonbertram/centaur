@@ -153,7 +153,7 @@ function createBot() {
       "- Use standard markdown links `[Display Text](URL)` for hyperlinks",
       "- Do NOT use Slack-native `<URL|text>` link syntax",
       "- Preserve Slack user mentions (`<@UXXXXXXX>`) exactly as-is — only use these for actual Slack users",
-      "- For Twitter/X handles, link to the profile: `[@handle](https://x.com/handle)`",
+      "- For Twitter/X handles, link to the profile WITHOUT an @ prefix in the display text: `[handle](https://x.com/handle)` (NOT `[@handle](...)`)",
       "- Prefer concise, well-structured markdown; long replies may be split across multiple Slack messages",
       "- Markdown tables are allowed and may render as native Slack tables when the structure is clean",
       requesterUserId
