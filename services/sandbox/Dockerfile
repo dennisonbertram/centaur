@@ -60,7 +60,7 @@ RUN agent-browser install --with-deps
 
 # ── Agent skills (agent-browser + dogfood) ───────────────────────────────────
 RUN npx -y skills add vercel-labs/agent-browser
-COPY --chown=agent:agent .agents/skills/dogfood /home/agent/.agents/skills/dogfood
+COPY --chown=agent:agent .agents/skills/qa /home/agent/.agents/skills/dogfood
 
 # ── Agent workspace setup (rarely changes) ──────────────────────────────────
 RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace \
