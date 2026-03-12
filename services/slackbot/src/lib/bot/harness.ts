@@ -259,18 +259,23 @@ export async function* executeStreaming(
   threadKey: string,
   message: string,
   harness?: Harness | null,
+  attachments?: Array<{ url: string; name: string }>,
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const normalizedKey = normalizeThreadKey(threadKey);
   const harnessName = harness || "amp";
 
   // Initial execute request
+  const body: Record<string, unknown> = {
+    thread_key: normalizedKey,
+    message,
+    harness: harnessName,
+  };
+  if (attachments && attachments.length > 0) {
+    body.attachments = attachments;
+  }
   const res = await resilientFetch(`${API_URL}/agent/execute`, {
     method: "POST",
-    body: JSON.stringify({
-      thread_key: normalizedKey,
-      message,
-      harness: harnessName,
-    }),
+    body: JSON.stringify(body),
     timeoutMs: 10 * 60_000,
     maxAttempts: 1,
     stream: true,
@@ -368,11 +373,12 @@ export async function* executeStreamingWithBusyRetries(
   threadKey: string,
   message: string,
   harness: Harness,
+  attachments?: Array<{ url: string; name: string }>,
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const maxAttempts = 4;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return yield* executeStreaming(threadKey, message, harness);
+      return yield* executeStreaming(threadKey, message, harness, attachments);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       if (isBusyRunError(detail) && attempt < maxAttempts) {

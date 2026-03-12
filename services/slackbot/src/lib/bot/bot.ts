@@ -210,6 +210,7 @@ function createBot() {
     harness: Harness,
     tracker: ProgressTracker,
     executionStartedAt: number,
+    attachments?: Array<{ url: string; name: string }>,
   ): AsyncGenerator<StreamChunk> {
     let totalYieldedCount = 0;
 
@@ -222,7 +223,7 @@ function createBot() {
 
     // Phase 1: initial execute — sends turn.start to the container.
     const phase1 = drainStreamChunks(
-      executeStreamingWithBusyRetries(threadKey, message, harness),
+      executeStreamingWithBusyRetries(threadKey, message, harness, attachments),
       tracker, new HandoffDetector(),
     );
     let phase1Result: { streamReturn: string; yieldedCount: number; handoff: HandoffResult | null };
@@ -361,6 +362,17 @@ function createBot() {
         message = contextPrefix + threadHistory + instruction;
       }
 
+      // Append file attachment annotations so the agent knows files are present
+      const validAttachments = (attachments || []).filter(
+        (a): a is { url: string; name: string } => !!a.url && !!a.name,
+      );
+      if (validAttachments.length > 0) {
+        const annotations = validAttachments
+          .map((a) => `[Attached file: /home/agent/uploads/${a.name}]`)
+          .join("\n");
+        message = `${message}\n\n${annotations}`;
+      }
+
       if (budgetMode) {
         message = `[budget: ${budgetMode}]\n\n${message}`;
       }
@@ -371,7 +383,7 @@ function createBot() {
       // Stream progress via SDK — uses Slack's native chat.startStream/appendStream/stopStream
       // The final result + thread viewer link are yielded as the last chunk so
       // everything appears in a single Slack message (no duplicate follow-up).
-      const sentMessage = await thread.post(streamProgress(threadKey, message, harness, tracker, executionStartedAt));
+      const sentMessage = await thread.post(streamProgress(threadKey, message, harness, tracker, executionStartedAt, validAttachments));
 
       const finalMessage = (tracker.resultText || tracker.lastAssistantText).trim();
 

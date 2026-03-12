@@ -18,19 +18,27 @@ router = APIRouter(
 )
 
 
+class Attachment(BaseModel):
+    url: str
+    name: str
+
+
 class ExecuteRequest(BaseModel):
     thread_key: str
     message: str
     harness: str = "amp"
     engine: str | None = None
+    attachments: list[Attachment] | None = None
 
 
 @router.post("/execute", dependencies=[Depends(require_scope("agent:execute"))])
 async def execute(req: ExecuteRequest):
     session = await get_or_spawn(req.thread_key, req.harness, engine=req.engine)
 
+    attachments = [a.model_dump() for a in req.attachments] if req.attachments else None
+
     async def event_stream():
-        async for line in stream_exec(session, req.message):
+        async for line in stream_exec(session, req.message, attachments=attachments):
             yield f"data: {line}\n\n"
         yield "data: [DONE]\n\n"
 
