@@ -29,6 +29,8 @@ class ExecuteRequest(BaseModel):
     harness: str = "amp"
     engine: str | None = None
     attachments: list[Attachment] | None = None
+    platform: str | None = None
+    user_id: str | None = None
 
 
 @router.post("/execute", dependencies=[Depends(require_scope("agent:execute"))])
@@ -38,7 +40,13 @@ async def execute(req: ExecuteRequest):
     attachments = [a.model_dump() for a in req.attachments] if req.attachments else None
 
     async def event_stream():
-        async for line in stream_exec(session, req.message, attachments=attachments):
+        async for line in stream_exec(
+            session,
+            req.message,
+            attachments=attachments,
+            platform=req.platform,
+            user_id=req.user_id,
+        ):
             yield f"data: {line}\n\n"
         yield "data: [DONE]\n\n"
 

@@ -139,31 +139,7 @@ function createBot() {
     onLockConflict: "force",
   } as ConstructorParameters<typeof Chat>[0]);
 
-  function buildSessionContext(threadId: string, requesterUserId?: string): string {
-    const now = new Date().toISOString().replace("T", " ").slice(0, 19);
-    return [
-      "# Session Context",
-      "",
-      `- **Date/Time**: ${now} UTC`,
-      `- **Thread ID**: ${threadId}`,
-      `- **Platform**: Slack`,
-      "",
-      "## Slack Formatting Rules",
-      "",
-      "- Use standard markdown links `[Display Text](URL)` for hyperlinks",
-      "- Do NOT use Slack-native `<URL|text>` link syntax",
-      "- Preserve Slack user mentions (`<@UXXXXXXX>`) exactly as-is — only use these for actual Slack users",
-      "- For Twitter/X handles, link to the profile WITHOUT an @ prefix in the display text: `[handle](https://x.com/handle)` (NOT `[@handle](...)`)",
-      "- Prefer concise, well-structured markdown; long replies may be split across multiple Slack messages",
-      "- Markdown tables are allowed and may render as native Slack tables when the structure is clean",
-      requesterUserId
-        ? `- After completing a long task, tag the requester with their real Slack mention: <@${requesterUserId}>`
-        : "- After completing a long task, tag the requester with their real Slack mention if available",
-      "",
-      "---",
-      "",
-    ].join("\n");
-  }
+
 
   async function* drainStreamChunks(
     gen: AsyncGenerator<CanonicalEvent, string, undefined>,
@@ -239,6 +215,7 @@ function createBot() {
     tracker: ProgressTracker,
     executionStartedAt: number,
     attachments?: Array<{ url: string; name: string }>,
+    options?: { platform?: string; userId?: string },
   ): AsyncGenerator<StreamChunk> {
     let totalYieldedCount = 0;
 
@@ -251,7 +228,7 @@ function createBot() {
 
     // Phase 1: initial execute — sends turn.start to the container.
     const phase1 = drainStreamChunks(
-      executeStreamingWithBusyRetries(threadKey, message, harness, attachments),
+      executeStreamingWithBusyRetries(threadKey, message, harness, attachments, options),
       tracker, new HandoffDetector(),
     );
     let phase1Result: { streamReturn: string; yieldedCount: number; handoff: HandoffResult | null };
@@ -378,11 +355,7 @@ function createBot() {
         threadHistory = await fetchThreadHistory(thread, slackTs);
       }
 
-      let message = instruction;
-      if (isFirstMessage) {
-        const contextPrefix = buildSessionContext(threadKey, userId);
-        message = contextPrefix + threadHistory + instruction;
-      }
+      let message = isFirstMessage ? threadHistory + instruction : instruction;
 
       // Append file attachment annotations so the agent knows files are present
       const validAttachments = (attachments || []).filter(
@@ -407,7 +380,7 @@ function createBot() {
       // everything appears in a single Slack message (no duplicate follow-up).
       let sentMessage: Awaited<ReturnType<typeof thread.post>> | null = null;
       try {
-        sentMessage = await thread.post(streamProgress(threadKey, message, harness, tracker, executionStartedAt, validAttachments));
+        sentMessage = await thread.post(streamProgress(threadKey, message, harness, tracker, executionStartedAt, validAttachments, { platform: "slack", userId }));
       } catch (streamErr) {
         // Slack killed the streaming state before we called stop() (long-running turn).
         // Fall back to posting a plain message with whatever result we accumulated.

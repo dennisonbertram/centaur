@@ -532,15 +532,99 @@ async def stream_reconnect(session: SandboxSession) -> AsyncIterator[str]:
         yield line
 
 
+def _build_session_context(
+    thread_key: str,
+    *,
+    platform: str | None = None,
+    user_id: str | None = None,
+) -> str:
+    """Build session context to append to the system prompt.
+
+    Contains metadata (time, thread, platform) and platform-specific formatting
+    rules so the agent produces output suitable for the target platform.
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    lines = [
+        "# Session Context",
+        "",
+        f"- **Date/Time**: {now} UTC",
+        f"- **Thread ID**: {thread_key}",
+    ]
+    if platform:
+        lines.append(f"- **Platform**: {platform}")
+
+    if platform and platform.lower() == "slack":
+        lines.extend([
+            "",
+            "## Slack Formatting Rules",
+            "",
+            "- Use standard markdown links `[Display Text](URL)` for hyperlinks",
+            "- Do NOT use Slack-native `<URL|text>` link syntax",
+            "- Preserve Slack user mentions (`<@UXXXXXXX>`) exactly as-is — only use these for actual Slack users",
+            "- For Twitter/X handles, link to the profile WITHOUT an @ prefix in the display text: `[handle](https://x.com/handle)` (NOT `[@handle](...)`)",
+            "- Prefer concise, well-structured markdown; long replies may be split across multiple Slack messages",
+            "- Markdown tables are allowed and may render as native Slack tables when the structure is clean",
+        ])
+        if user_id:
+            lines.append(
+                f"- After completing a long task, tag the requester with their real Slack mention: <@{user_id}>"
+            )
+
+    lines.extend(["", "---", ""])
+    return "\n".join(lines)
+
+
+def _inject_session_context(session: SandboxSession, context: str) -> None:
+    """Append session context to the workspace AGENTS.md inside the sandbox."""
+    import io
+    import tarfile
+
+    backend = get_backend()
+    client = backend._get_client()
+    try:
+        container = client.containers.get(session.sandbox_id)
+    except Exception:
+        return
+
+    # Read existing AGENTS.md, append context, write back via tar
+    exit_code, output = container.exec_run(
+        ["cat", "/home/agent/workspace/AGENTS.md"], user="agent"
+    )
+    existing = output.decode("utf-8", errors="replace") if exit_code == 0 else ""
+    combined = existing.rstrip() + "\n\n---\n\n" + context
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        data = combined.encode("utf-8")
+        info = tarfile.TarInfo(name="AGENTS.md")
+        info.size = len(data)
+        info.mode = 0o644
+        tar.addfile(info, io.BytesIO(data))
+    buf.seek(0)
+    container.put_archive("/home/agent/workspace", buf)
+
+
 async def stream_exec(
     session: SandboxSession,
     message: str,
     *,
     attachments: list[dict[str, str]] | None = None,
+    platform: str | None = None,
+    user_id: str | None = None,
 ) -> AsyncIterator[str]:
     """Run a command in the sandbox and yield raw stdout lines."""
     if attachments:
         await _download_attachments_into_sandbox(session, attachments)
+
+    # Inject session context into the system prompt on first turn
+    rt = _get_runtime(session.sandbox_id)
+    if rt.turn_counter == 0 and (platform or user_id):
+        context = _build_session_context(
+            session.thread_key, platform=platform, user_id=user_id
+        )
+        await asyncio.to_thread(_inject_session_context, session, context)
 
     result_text = ""
     async for line in _async_stream(_stream_turn, session, message):

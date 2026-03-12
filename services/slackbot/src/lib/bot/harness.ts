@@ -260,6 +260,7 @@ export async function* executeStreaming(
   message: string,
   harness?: Harness | null,
   attachments?: Array<{ url: string; name: string }>,
+  options?: { platform?: string; userId?: string },
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const normalizedKey = normalizeThreadKey(threadKey);
   const harnessName = harness || "amp";
@@ -273,6 +274,8 @@ export async function* executeStreaming(
   if (attachments && attachments.length > 0) {
     body.attachments = attachments;
   }
+  if (options?.platform) body.platform = options.platform;
+  if (options?.userId) body.user_id = options.userId;
   const res = await resilientFetch(`${API_URL}/agent/execute`, {
     method: "POST",
     body: JSON.stringify(body),
@@ -374,11 +377,12 @@ export async function* executeStreamingWithBusyRetries(
   message: string,
   harness: Harness,
   attachments?: Array<{ url: string; name: string }>,
+  options?: { platform?: string; userId?: string },
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const maxAttempts = 4;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return yield* executeStreaming(threadKey, message, harness, attachments);
+      return yield* executeStreaming(threadKey, message, harness, attachments, options);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       if (isBusyRunError(detail) && attempt < maxAttempts) {
