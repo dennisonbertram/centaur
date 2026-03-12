@@ -64,13 +64,8 @@ export class ProgressTracker {
     }
 
     if (event.type === "reasoning") {
-      this._pendingChunks.push({
-        type: "task_update",
-        id: "reasoning",
-        title: "Thinking…",
-        status: "in_progress",
-      });
-      return true;
+      // No-op: tool calls already provide real progress indicators
+      return false;
     }
 
     if (event.type === "subagent") {
@@ -98,12 +93,6 @@ export class ProgressTracker {
 
     if (event.type === "result") {
       this.resultText = event.text;
-      this._pendingChunks.push({
-        type: "task_update",
-        id: "reasoning",
-        title: "Thinking…",
-        status: "complete",
-      });
       return true;
     }
 
