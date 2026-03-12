@@ -14,7 +14,7 @@ import {
 import { splitThreadKey, type CanonicalEvent } from "@centaur/harness-events";
 import { log } from "@/lib/logger";
 import { ApiError } from "./api-client";
-import { truncateSlackText } from "./slack-text";
+
 import { ProgressTracker } from "./progress-tracker";
 import { HandoffDetector, type HandoffResult } from "./handoff-detection";
 import { getPool } from "@/lib/db";
@@ -175,27 +175,55 @@ function createBot() {
     let handoff: HandoffResult | null = null;
     let streamReturn = "";
 
+    // Slack's streaming API times out if no appends are sent for too long.
+    // Race gen.next() against a keepalive timer to prevent stream expiry.
+    const KEEPALIVE_INTERVAL_MS = 60_000;
+    let keepaliveId = 0;
+
     while (true) {
-      const { done, value } = await gen.next();
-      if (done) {
-        if (!detectedHandoff) streamReturn = value || "";
+      let result: IteratorResult<CanonicalEvent, string>;
+      const nextP = gen.next();
+      // Race between next event and keepalive timeout
+      const winner = await Promise.race([
+        nextP.then((r) => ({ kind: "event" as const, result: r })),
+        new Promise<{ kind: "keepalive" }>((resolve) =>
+          setTimeout(() => resolve({ kind: "keepalive" }), KEEPALIVE_INTERVAL_MS),
+        ),
+      ]);
+
+      if (winner.kind === "keepalive") {
+        // Yield a keepalive task_update to keep the Slack stream alive
+        yield {
+          type: "task_update" as const,
+          id: `keepalive-${keepaliveId++}`,
+          title: "Working…",
+          status: "in_progress" as const,
+        };
+        // Now await the actual event
+        result = await nextP;
+      } else {
+        result = winner.result;
+      }
+
+      if (result.done) {
+        if (!detectedHandoff) streamReturn = result.value || "";
         break;
       }
       if (detectedHandoff) continue;
 
       yieldedCount++;
-      if (tracker.update(value)) {
+      if (tracker.update(result.value)) {
         const chunks = tracker.pendingChunks();
         for (const chunk of chunks) yield chunk;
       }
 
       if (handoffDetector) {
-        const result = handoffDetector.processEvent(value);
-        if (result && result.follow) {
-          tracker.addHandoff(result.goal, result.newThreadKey);
+        const hResult = handoffDetector.processEvent(result.value);
+        if (hResult && hResult.follow) {
+          tracker.addHandoff(hResult.goal, hResult.newThreadKey);
           const chunks = tracker.pendingChunks();
           for (const chunk of chunks) yield chunk;
-          handoff = result;
+          handoff = hResult;
           detectedHandoff = true;
         }
       }
@@ -319,9 +347,7 @@ function createBot() {
 
     if (!isFirstMessage && !activeHarness && !parsed.harnessExplicit) {
       await thread.post(
-        truncateSlackText(
-          "I could not recover the active harness for this thread. Please retry with an explicit harness flag (for example `--legal`)."
-        )
+        "I could not recover the active harness for this thread. Please retry with an explicit harness flag (for example `--legal`)."
       );
       return;
     }
@@ -333,18 +359,14 @@ function createBot() {
       parsed.harness !== activeHarness
     ) {
       await thread.post(
-        truncateSlackText(
-          "This thread is already running with a different harness. Start a new thread to switch."
-        )
+        "This thread is already running with a different harness. Start a new thread to switch."
       );
       return;
     }
 
     if (!parsed.cleanedText) {
       await thread.post(
-        truncateSlackText(
-          "Please provide a prompt after flags. Example: `--amp build me a dashboard`."
-        )
+        "Please provide a prompt after flags. Example: `--amp build me a dashboard`."
       );
       return;
     }
@@ -383,7 +405,26 @@ function createBot() {
       // Stream progress via SDK — uses Slack's native chat.startStream/appendStream/stopStream
       // The final result + thread viewer link are yielded as the last chunk so
       // everything appears in a single Slack message (no duplicate follow-up).
-      const sentMessage = await thread.post(streamProgress(threadKey, message, harness, tracker, executionStartedAt, validAttachments));
+      let sentMessage: Awaited<ReturnType<typeof thread.post>> | null = null;
+      try {
+        sentMessage = await thread.post(streamProgress(threadKey, message, harness, tracker, executionStartedAt, validAttachments));
+      } catch (streamErr) {
+        // Slack killed the streaming state before we called stop() (long-running turn).
+        // Fall back to posting a plain message with whatever result we accumulated.
+        const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+        if (errMsg.includes("message_not_in_streaming_state")) {
+          log.warn("slack_stream_expired", { thread: threadKey, error: errMsg });
+          const fallback = (tracker.resultText || tracker.lastAssistantText).trim();
+          if (fallback && !isLowValueResult(fallback)) {
+            await thread.post({ markdown: fallback });
+          } else if (THREAD_VIEWER_URL) {
+            const viewerUrl = `${THREAD_VIEWER_URL}/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
+            await thread.post({ markdown: `Agent completed. [View full output](${viewerUrl})` });
+          }
+          return;
+        }
+        throw streamErr;
+      }
 
       const finalMessage = (tracker.resultText || tracker.lastAssistantText).trim();
 
@@ -404,7 +445,7 @@ function createBot() {
             const viewerUrl = `${THREAD_VIEWER_URL}/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
             parts.push(`\n\n[Thread Viewer](${viewerUrl})`);
           }
-          await sentMessage.edit(parts.join(""));
+          await sentMessage.edit({ markdown: parts.join("") });
         } catch {
           // Best-effort — the streamed message already has the final text
         }
@@ -431,9 +472,7 @@ function createBot() {
         }
       }
     } catch (error) {
-      await thread.post(
-        truncateSlackText(formatErrorForSlack(error, "Agent request failed"))
-      );
+      await thread.post(formatErrorForSlack(error, "Agent request failed"));
     }
   }
 
