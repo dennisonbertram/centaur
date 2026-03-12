@@ -478,9 +478,13 @@ function createBot() {
         const refetched = await slack.fetchMessage(thread.id, mentionTs);
         if (refetched?.attachments && refetched.attachments.length > 0) {
           attachments = refetched.attachments.map((a) => ({ url: a.url, name: a.name, mimeType: a.mimeType }));
+          log.info("mention_files_refetched", { thread: thread.id, count: attachments.length });
         }
-      } catch {
-        // Best-effort — proceed without attachments
+      } catch (err) {
+        log.warn("mention_files_refetch_failed", {
+          thread: thread.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
 
