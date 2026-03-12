@@ -22,6 +22,11 @@ dependencies = [
     "centaur-sdk",
 ]
 
+[tool.uv]
+dev-dependencies = [
+    "pytest>=9.0.2",
+]
+
 [tool.uv.sources]
 centaur-sdk = { path = "../../centaur_sdk", editable = true }
 
