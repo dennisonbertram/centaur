@@ -290,9 +290,12 @@ function createBot() {
     if (finalMessage && !isLowValueResult(finalMessage)) {
       const durationSeconds = Math.max(0, (Date.now() - executionStartedAt) / 1000);
       const durationStr = durationSeconds < 10 ? `${durationSeconds.toFixed(1)}s` : `${Math.round(durationSeconds)}s`;
+      const harnessLabel = tracker.agentThreadId
+        ? `<https://ampcode.com/threads/${tracker.agentThreadId}|${harness}>`
+        : harness;
       const metaParts = [
         process.env.APP_NAME || "Centaur",
-        harness,
+        harnessLabel,
         durationStr,
       ].filter(Boolean);
       const parts: string[] = [`_${metaParts.join(" · ")}_\n\n`, finalMessage];
@@ -417,9 +420,12 @@ function createBot() {
         try {
           const durationSeconds = Math.max(0, (Date.now() - executionStartedAt) / 1000);
           const durationStr = durationSeconds < 10 ? `${durationSeconds.toFixed(1)}s` : `${Math.round(durationSeconds)}s`;
+          const harnessLabel = tracker.agentThreadId
+            ? `<https://ampcode.com/threads/${tracker.agentThreadId}|${harness}>`
+            : harness;
           const metaParts = [
             process.env.APP_NAME || "Centaur",
-            harness,
+            harnessLabel,
             durationStr,
           ].filter(Boolean);
           const parts: string[] = [`_${metaParts.join(" · ")}_\n\n`, finalMessage];
@@ -462,8 +468,22 @@ function createBot() {
     if (message.author.isMe) return;
     if (message.author.isBot) return;
     await thread.subscribe();
-    const attachments = message.attachments?.map((a) => ({ url: a.url, name: a.name, mimeType: a.mimeType }));
+    let attachments = message.attachments?.map((a) => ({ url: a.url, name: a.name, mimeType: a.mimeType }));
     const mentionTs = (message as { ts?: string }).ts || "";
+
+    // Slack app_mention events don't include files — re-fetch the message to get them
+    if ((!attachments || attachments.length === 0) && mentionTs) {
+      try {
+        const slack = bot.getAdapter("slack") as SlackAdapter;
+        const refetched = await slack.fetchMessage(thread.id, mentionTs);
+        if (refetched?.attachments && refetched.attachments.length > 0) {
+          attachments = refetched.attachments.map((a) => ({ url: a.url, name: a.name, mimeType: a.mimeType }));
+        }
+      } catch {
+        // Best-effort — proceed without attachments
+      }
+    }
+
     await handleMessage(thread, message.text, true, attachments, message.author.userId, mentionTs);
   });
 

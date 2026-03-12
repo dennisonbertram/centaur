@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from api.agent import get_or_spawn, get_status, stop_session, stream_exec, stream_reconnect
 from api.deps import require_scope, verify_api_key
@@ -43,9 +43,11 @@ router = APIRouter(
 
 
 class Attachment(BaseModel):
+    model_config = {"populate_by_name": True}
+
     url: str
     name: str
-    mime_type: str | None = None
+    mime_type: str | None = Field(None, alias="mimeType")
 
 
 class ExecuteRequest(BaseModel):
