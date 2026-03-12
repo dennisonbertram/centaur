@@ -135,7 +135,7 @@
 |paradigmdb: bq_query{query} | db_query{query} | bq_transactions{} | db_tables{} | db_describe{table_name} | db_funds{} | db_assets{} | db_asset_by_symbol{symbol} | db_daily_prices{asset_id} | db_transactions{} | db_organizations{search} | db_organization{org_id} | db_people{search} | db_person{person_id} | db_positions{fund} | db_events{search} | db_funding_rounds{search} | db_equity_financing{} | db_valuations{} | db_corrections{} | db_cash_balances{} | db_jpm_transactions{} | db_anchorage_balances{} | db_coinbase_balances{} | notes_search{query} | notes_read{note_id} | notes_list{} | notes_for_org{org_name} | notes_stats{} | notes_authors{}
 |polymarket: search{query}
 |posthog: pageviews{}
-|twitter: search_tweets{query} | get_user{username}
+|twitter: search_tweets{query} | get_user{username} | get_timeline{handle,limit} | get_followers{handle,limit} | get_following{handle,limit} | lookup_users{ids} | lookup_tweets{ids} | get_usage{}
 |sensortower: search_apps{query}
 |similarweb: get_visits{domain}
 |slack: get_channel_history{channel,limit} | search_messages{query} | get_thread_replies{channel,thread_ts} | list_channels{} | send_message{channel,text} | upload_file{channel_id,file_path,thread_ts,initial_comment,title} | get_message_files{channel_id,message_ts} | download_file{url,output_path}
