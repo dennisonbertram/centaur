@@ -477,7 +477,12 @@ async def _download_attachments_into_sandbox(
 
     import httpx
 
+    from api.tool_manager import _resolve_secrets
+
     slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        resolved = await _resolve_secrets(["SLACK_BOT_TOKEN"])
+        slack_token = resolved.get("SLACK_BOT_TOKEN", "")
     if not slack_token:
         log.warning("slack_file_download_skipped", reason="no SLACK_BOT_TOKEN")
         return
