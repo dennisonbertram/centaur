@@ -13,7 +13,7 @@ import {
 } from "./harness";
 import { splitThreadKey, type CanonicalEvent } from "@centaur/harness-events";
 import { log } from "@/lib/logger";
-import { ApiError } from "./api-client";
+import { ApiError, API_URL, resilientFetch } from "./api-client";
 
 import { ProgressTracker } from "./progress-tracker";
 import { HandoffDetector, type HandoffResult } from "./handoff-detection";
@@ -299,7 +299,7 @@ function createBot() {
       const durationSeconds = Math.max(0, (Date.now() - executionStartedAt) / 1000);
       const durationStr = durationSeconds < 10 ? `${durationSeconds.toFixed(1)}s` : `${Math.round(durationSeconds)}s`;
       const harnessLabel = tracker.agentThreadId
-        ? `<https://ampcode.com/threads/${tracker.agentThreadId}|${harness}>`
+        ? `[${harness}](https://ampcode.com/threads/${tracker.agentThreadId})`
         : harness;
       const metaParts = [
         process.env.APP_NAME || "Centaur",
@@ -429,7 +429,7 @@ function createBot() {
           const durationSeconds = Math.max(0, (Date.now() - executionStartedAt) / 1000);
           const durationStr = durationSeconds < 10 ? `${durationSeconds.toFixed(1)}s` : `${Math.round(durationSeconds)}s`;
           const harnessLabel = tracker.agentThreadId
-            ? `<https://ampcode.com/threads/${tracker.agentThreadId}|${harness}>`
+            ? `[${harness}](https://ampcode.com/threads/${tracker.agentThreadId})`
             : harness;
           const metaParts = [
             process.env.APP_NAME || "Centaur",
