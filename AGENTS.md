@@ -173,6 +173,25 @@ centaur/
 └── docker-compose.yml    # Full stack
 ```
 
+## Debugging
+
+**Always check logs first.** When debugging any issue with the deployed stack (agent misbehavior, tool failures, request errors), your first step should be querying VictoriaLogs on the deploy box — not guessing, reading source code, or theorizing. Logs tell you what actually happened.
+
+```bash
+# Look up logs for a specific Slack thread
+ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -s 'http://victorialogs:9428/select/logsql/query' \
+  --data-urlencode 'query=thread_key:<THREAD_KEY>' --data-urlencode 'limit=50'"
+
+# API errors in the last hour
+ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -s 'http://victorialogs:9428/select/logsql/query' \
+  --data-urlencode 'query=_stream:{service=\"api\"} AND level:error' --data-urlencode 'limit=20'"
+
+# Sandbox container logs (agent harness output)
+ssh ubuntu@206.223.235.69 "docker logs <container_id> 2>&1 | tail -100"
+```
+
+Only after reviewing logs should you dig into source code or try to reproduce locally.
+
 ## Code Conventions
 
 - Python 3.11+, `uv` for deps, `ruff` for lint/format (line-length=100)

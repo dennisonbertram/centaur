@@ -289,8 +289,14 @@ async def cleanup_pool() -> int:
     return await asyncio.to_thread(_cleanup_pool_sync)
 
 
-def _recover_warm_sync() -> int:
-    """Recover existing warm sandboxes from backend on API restart."""
+def _recover_warm_sync(assigned_sandbox_ids: set[str] | None = None) -> int:
+    """Recover existing warm sandboxes from backend on API restart.
+
+    Containers already assigned to a thread (present in sandbox_sessions)
+    are excluded — they belong to active conversations and must not be
+    re-added to the warm pool.
+    """
+    assigned = assigned_sandbox_ids or set()
     backend = get_backend()
     recovered = 0
     sessions = backend.recover_warm(POOL_HARNESS)
@@ -298,6 +304,12 @@ def _recover_warm_sync() -> int:
         for session in sessions:
             if len(_pool) >= POOL_SIZE:
                 break
+            if session.sandbox_id in assigned:
+                log.info(
+                    "warm_recover_skipped_assigned",
+                    sandbox=session.sandbox_id[:12],
+                )
+                continue
             _pool.append(
                 WarmContainer(
                     sandbox_id=session.sandbox_id,
@@ -309,12 +321,22 @@ def _recover_warm_sync() -> int:
     return recovered
 
 
+async def _get_assigned_sandbox_ids() -> set[str]:
+    """Return sandbox IDs that are already assigned to threads in the DB."""
+    from api.agent import _get_pool
+
+    pool = _get_pool()
+    rows = await pool.fetch("SELECT sandbox_id FROM sandbox_sessions WHERE state = 'running'")
+    return {row["sandbox_id"] for row in rows}
+
+
 async def start_replenish_loop() -> asyncio.Task:
     """Start a background task that keeps the pool at target size."""
     global _replenish_task
 
     async def _loop() -> None:
-        recovered = await asyncio.to_thread(_recover_warm_sync)
+        assigned = await _get_assigned_sandbox_ids()
+        recovered = await asyncio.to_thread(_recover_warm_sync, assigned)
         if recovered:
             log.info("warm_pool_recovered", recovered=recovered)
         count = await replenish()
