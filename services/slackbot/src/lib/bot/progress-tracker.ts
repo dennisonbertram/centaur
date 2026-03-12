@@ -8,8 +8,19 @@ export class ProgressTracker {
   resultText = "";
   private activeTools = new Map<string, ActiveTool>();
   private _pendingChunks: StreamChunk[] = [];
+  private initCompleted = false;
 
   update(event: CanonicalEvent): boolean {
+    // Complete the "Starting…" task on the first real event
+    if (!this.initCompleted) {
+      this.initCompleted = true;
+      this._pendingChunks.push({
+        type: "task_update",
+        id: "init",
+        title: "Started",
+        status: "complete",
+      });
+    }
     if (event.type === "assistant" && event.message?.content) {
       let changed = false;
       for (const block of event.message.content) {
@@ -40,10 +51,11 @@ export class ProgressTracker {
         if (active) {
           this.activeTools.delete(block.tool_use_id);
           changed = true;
+          const isDone = !block.is_error;
           this._pendingChunks.push({
             type: "task_update",
             id: block.tool_use_id,
-            title: friendlyToolName(active.name),
+            title: friendlyToolLabel(active.name, active.input, isDone),
             status: block.is_error ? "error" : "complete",
           });
         }
@@ -126,30 +138,31 @@ export class ProgressTracker {
   }
 }
 
-const TOOL_VERBS: Record<string, string> = {
-  Read: "Reading",
-  Bash: "Running command",
-  Grep: "Searching",
-  glob: "Finding files",
-  finder: "Searching codebase",
-  edit_file: "Editing",
-  create_file: "Creating file",
-  Task: "Running subtask",
-  web_search: "Searching the web",
-  read_web_page: "Reading webpage",
-  librarian: "Researching codebase",
-  oracle: "Consulting oracle",
-  mermaid: "Drawing diagram",
-  look_at: "Analyzing file",
-  skill: "Loading skill",
+const TOOL_VERBS: Record<string, [active: string, done: string]> = {
+  Read: ["Reading", "Read"],
+  Bash: ["Running", "Ran"],
+  Grep: ["Searching", "Searched"],
+  glob: ["Finding files", "Found files"],
+  finder: ["Searching codebase", "Searched codebase"],
+  edit_file: ["Editing", "Edited"],
+  create_file: ["Creating file", "Created file"],
+  Task: ["Running subtask", "Ran subtask"],
+  web_search: ["Searching the web", "Searched the web"],
+  read_web_page: ["Reading webpage", "Read webpage"],
+  librarian: ["Researching codebase", "Researched codebase"],
+  oracle: ["Consulting oracle", "Consulted oracle"],
+  mermaid: ["Drawing diagram", "Drew diagram"],
+  look_at: ["Analyzing file", "Analyzed file"],
+  skill: ["Loading skill", "Loaded skill"],
 };
 
-function friendlyToolName(name: string): string {
-  return TOOL_VERBS[name] ?? name;
-}
-
-function friendlyToolLabel(name: string, input: Record<string, unknown>): string {
-  const verb = TOOL_VERBS[name] ?? name;
+function friendlyToolLabel(
+  name: string,
+  input: Record<string, unknown>,
+  done?: boolean,
+): string {
+  const pair = TOOL_VERBS[name];
+  const verb = pair ? pair[done ? 1 : 0] : name;
   const ctx = friendlyToolContext(name, input);
   return ctx ? `${verb} — ${ctx}` : verb;
 }
@@ -164,7 +177,7 @@ function friendlyToolContext(name: string, input: Record<string, unknown>): stri
     case "look_at":
       return shortPath(str("path"));
     case "Bash":
-      return truncate(str("cmd"), 60);
+      return friendlyBashContext(str("cmd"));
     case "Grep":
       return truncate(str("pattern"), 50);
     case "glob":
@@ -182,6 +195,22 @@ function friendlyToolContext(name: string, input: Record<string, unknown>): stri
     default:
       return summarizeInput(input);
   }
+}
+
+function friendlyBashContext(cmd: string): string {
+  if (!cmd) return "";
+  const trimmed = cmd.trim();
+  // Parse `call search <query>`, `call sql <query>`, `call discover <tool>`
+  const callBuiltin = trimmed.match(/^call\s+(search|sql|discover)\s+(.*)/s);
+  if (callBuiltin) {
+    return `${callBuiltin[1]}: ${truncate(callBuiltin[2], 50)}`;
+  }
+  // Parse `call <tool> <method> [json]` → "tool.method"
+  const callMatch = trimmed.match(/^call\s+(\S+)\s+(\S+)/);
+  if (callMatch) {
+    return `${callMatch[1]}.${callMatch[2]}`;
+  }
+  return truncate(trimmed, 60);
 }
 
 function shortPath(p: string): string {
