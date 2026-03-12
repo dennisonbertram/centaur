@@ -1,3 +1,5 @@
+name: ai_v2
+
 services:
   postgres:
     image: pgvector/pgvector:pg16

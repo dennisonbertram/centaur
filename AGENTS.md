@@ -371,6 +371,14 @@ Services must write single-line JSON to stdout with these fields:
 
 ## Deployment
 
+The deploy box (self-hosted GitHub Actions runner) is accessible via SSH:
+
+```bash
+ssh ubuntu@206.223.235.69
+```
+
+The canonical checkout lives at `/home/ubuntu/github/paradigmxyz/centaur` on the box.
+
 All deploys happen automatically via GitHub Actions on merge to `main`.
 
 | Change | Deploy action |

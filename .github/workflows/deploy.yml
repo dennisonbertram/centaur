@@ -18,7 +18,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     defaults:
       run:
-        working-directory: /home/ubuntu/github/paradigmxyz/ai_v2
+        working-directory: /home/ubuntu/github/paradigmxyz/centaur
 
     steps:
       # --- Workspace setup ---
@@ -39,6 +39,8 @@ jobs:
 
       - name: Ensure external volumes exist
         run: |
+          docker volume create ai_v2_pgdata 2>/dev/null || true
+          docker volume create ai_v2_grafanadata 2>/dev/null || true
           docker volume create ai_v2_firewall-certs 2>/dev/null || true
           docker volume create ai_v2_prometheusdata 2>/dev/null || true
           docker volume create ai_v2_vldata 2>/dev/null || true
