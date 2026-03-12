@@ -57,7 +57,7 @@ This is the **Policy Explainer Index** ([link](https://docs.google.com/document/
 | **Shift / paradigmdb** | `call paradigmdb` | Portfolio companies, prior interactions, notes |
 | **Slack** | `call slack search_messages` | Policy team discussions, intel |
 | **GSuite** | `call gsuite` | Meeting notes, Hill interaction logs, Drive docs |
-| **Semantic search** | `call search` | Archived policy documents |
+| **Archived docs / notes** | `call gsuite`, `call slack search_messages`, `call websearch search` | Archived policy documents, notes, and discussion |
 
 ---
 

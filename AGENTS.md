@@ -273,9 +273,9 @@ The system prompt tells the agent:
 
 The `call` helper (`services/sandbox/call.sh`) handles routing:
 - `call <tool> <method> [json]` → `POST /tools/<tool>/<method>`
-- `call search <query>` → `POST /api/search`
-- `call sql <query>` → `POST /api/search/sql`
 - `call discover <tool>` → `GET /tools/<tool>`
+
+Legacy `call search` / `call sql` shorthands were removed. Sandbox agents should call the concrete tool directly, for example `call websearch search '{"query":"..."}'` or `call paradigmdb db_query '{"query":"SELECT ..."}'`.
 
 ### Persona System
 

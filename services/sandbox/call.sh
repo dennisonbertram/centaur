@@ -2,8 +2,6 @@
 # call — token-efficient API tool caller (returns TOON)
 # Usage:
 #   call <tool> <method> [json_body]   → POST /tools/<tool>/<method>
-#   call search <query> [limit]        → POST /api/search
-#   call sql <query>                   → POST /api/search/sql
 #   call tools                          → GET /tools (list all)
 #   call discover <tool>               → GET /tools/<tool>
 U="${CENTAUR_API_URL:-http://api:8000}"
@@ -71,10 +69,12 @@ request() {
 
 case "$tool" in
   search)
-    request "POST" "$U/api/search" "{\"query\":$(printf '%s' "$2" | jq -Rs .),\"limit\":${3:-20}}"
+    printf '%s\n' '{"error":"deprecated_command","command":"call search","replacement":"Use direct tool calls such as `call websearch search '\''{\"query\":\"...\"}'\''` or `call slack search_messages '\''{\"query\":\"...\"}'\''`."}'
+    exit 1
     ;;
   sql)
-    request "POST" "$U/api/search/sql" "{\"query\":$(printf '%s' "$2" | jq -Rs .)}"
+    printf '%s\n' '{"error":"deprecated_command","command":"call sql","replacement":"Use a tool-specific query method such as `call paradigmdb db_query '\''{\"query\":\"SELECT ...\"}'\''` or `call paradigmdb bq_query ...`."}'
+    exit 1
     ;;
   tools)
     request "GET" "$U/tools"

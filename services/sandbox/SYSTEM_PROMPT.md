@@ -19,13 +19,15 @@
 
 [API access — use `call` helper (returns TOON, saves tokens)]
 |call <tool> <method> [json_body] → e.g. call arkham get_transfers '{"address":"0x..."}'
-|call search <query> [limit]     → semantic+keyword search
-|call sql <query>                → raw SQL on raw_records/embeddings
 |call tools                      → list all available tools with descriptions
 |call discover <tool>            → show tool methods, params, and descriptions
 |call agent execute <json>       → fire-and-forget: spawn a persona job
 |call agent status '?key=<key>'  → poll for completion (returns busy + last_result)
 |call agent stop <json>          → stop a running session
+|Legacy shorthands `call search` and `call sql` are removed. Use direct tool methods instead:
+|  - web research → `call websearch search '{"query":"..."}'`
+|  - Slack corpus → `call slack search_messages '{"query":"..."}'`
+|  - SQL queries → `call paradigmdb db_query '{"query":"SELECT ..."}'`
 
 [Tool discovery — discover before you call]
 |IMPORTANT: Before calling any API tool, run `call discover <tool>` to see its methods, parameters, and descriptions.

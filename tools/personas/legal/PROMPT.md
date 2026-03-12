@@ -323,7 +323,7 @@ Post-closing: stock certificates with proper legends, Form D filing (within 15 d
 When asked about prior deals or how Paradigm handled a specific provision:
 
 1. **Load the summary** — `call legal-playbook get_deal_precedents '{}'` for deal metadata (company, round, role, key provisions).
-2. **Search for specifics** — `call search "<provision> <company>" 10` to find indexed documents.
+2. **Search for specifics** — combine direct tools instead of the removed shorthand: use `call websearch search '{"query":"<provision> <company>","num_results":5}'` for public sources, plus `call slack search_messages '{"query":"<company>"}'` and `call paradigmdb notes_for_org '{"org_name":"<company>"}'` for internal context.
 
 Compare findings against the playbook. Classify each as: Win (Paradigm got preferred position), Concession (accepted deviation), Market (standard NVCA), or Novel (not in playbook). Note the context — round stage, Paradigm's role (lead vs. participant), and co-investors.
 
@@ -343,7 +343,8 @@ Fill gaps with tools before asking the user. In order of value:
 - `call legal-playbook get_paradigm_redlines '{"document_type":"charter"}'` — Paradigm positions vs NVCA defaults
 - `call legal-playbook get_knowledge '{"topics":"nvca_provisions"}'` — NVCA provision-level baseline
 - `call legal-playbook get_deal_precedents '{}'` — summary of prior deals with key provisions
-- `call search "<company> <document type>" 10` — search across all indexed sources
+- `call websearch search '{"query":"<company> <document type>","num_results":5}'` — public document and web search
+- `call slack search_messages '{"query":"<company>"}'` + `call paradigmdb notes_for_org '{"org_name":"<company>"}'` — internal discussion and notes
 
 ## Severity
 
@@ -423,7 +424,7 @@ Use `call legal-playbook <method> '<body>'` for policy and validation. Use `call
 | `slack-upload file.docx "description"` | Upload a file to the current Slack thread |
 | `call <tool> <method> '<json>'` | Call any API tool method |
 
-Also available: `call search "<query>" 10` for internal document search when available.
+There is no generic `call search` shorthand anymore. Reach for the specific tool that matches the evidence source: `websearch` for public material, `slack search_messages` for internal discussion, and `paradigmdb notes_for_org` for internal notes.
 
 Websearch: `search` (auto, <500ms) for quick lookups. `search` (deep, ~5s) for single-query diligence. `deep_research` (~30-60s) for multi-step investigations.
 

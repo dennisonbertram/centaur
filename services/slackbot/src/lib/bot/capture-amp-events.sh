@@ -104,7 +104,7 @@ capture "call-discover" \
 
 # ── 14. Internal API tools via call (search) ───────────────────────────
 capture "call-search" \
-  "Run this Bash command: call search 'stablecoin regulation 2025' — then summarize the top result in one sentence."
+  "Run this Bash command: call websearch search '{\"query\":\"stablecoin regulation 2025\",\"num_results\":1}' — then summarize the top result in one sentence."
 
 # ── 15. Internal API tools via call (tool method) ──────────────────────
 capture "call-tool-method" \

@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.config import settings
 from api.db import close_pool, create_pool
 from api.logging_config import configure_structlog
-from api.routers import admin, health, internal
+from api.routers import admin, deprecated, health, internal
 from api.routers import agent as agent_router_mod
 from api.tool_manager import ToolManager, load_plugins_config
 from api.warm_pool import start_replenish_loop, stop_replenish_loop
@@ -107,6 +107,7 @@ app.include_router(health.router)
 app.include_router(agent_router_mod.router)
 app.include_router(admin.router)
 app.include_router(internal.router)
+app.include_router(deprecated.router)
 
 
 # Load tools
