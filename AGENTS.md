@@ -122,6 +122,76 @@ curl -s -X POST http://localhost:8000/agent/execute \
 5. LLM API calls route through firewall proxy which injects real credentials
 6. Results stream as JSON events → posted to Slack
 
+### Service Interface Contracts
+
+Centaur is a modular service architecture. Each service communicates through well-defined interfaces. As long as you implement these interfaces, you can swap or extend any layer independently.
+
+**Client → API** (`POST /agent/execute`):
+
+Clients (slackbot, web app, CLI) are dumb adapters. They translate platform events into a standard execute request and render the SSE response for their platform. The API is the stateful brain — it owns session lifecycle, harness resolution, message persistence, and context accumulation. The `message` field is always treated as a user message — clients never send role information; the API and sandbox wrap it as `role: user` internally.
+
+```
+POST /agent/execute
+{
+  "thread_key": "slack:C0AJ07U8Z1N:1773364194.179929",
+  "message": "analyze this",              // plain text (no attachments)
+  "harness": "amp",
+  "platform": "slack",
+  "user_id": "U123"
+}
+
+// With attachments — message is an array of Anthropic content blocks:
+POST /agent/execute
+{
+  "thread_key": "slack:C0AJ07U8Z1N:1773364194.179929",
+  "message": [                            // Anthropic content blocks
+    {"type": "text", "text": "what is this document?"},
+    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "..."}},
+    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}}
+  ],
+  "harness": "amp",
+  "platform": "slack",
+  "user_id": "U123"
+}
+
+← SSE stream of CanonicalEvents (NDJSON, one event per `data:` line)
+← data: [DONE]
+```
+
+**API → Sandbox** (Docker stdin/stdout, NDJSON):
+
+The API communicates with sandbox containers over Docker attach sockets. The wire format is **Anthropic message format** — this is the canonical protocol between the API and all sandboxes, regardless of which harness runs inside.
+
+```
+→ stdin:  {"type":"turn.start","turn_id":1,"text":"analyze this"}
+→ stdin:  {"type":"turn.start","turn_id":2,"content":[             // Anthropic content blocks
+             {"type":"text","text":"what is this?"},
+             {"type":"image","source":{"type":"base64","media_type":"image/png","data":"..."}}
+           ]}
+→ stdin:  {"type":"interrupt"}
+
+← stdout: {"type":"system","subtype":"init","session_id":"T-..."}
+← stdout: {"type":"assistant","message":{"role":"assistant","content":[...]}}
+← stdout: {"type":"result","subtype":"success","result":"..."}
+← stdout: {"type":"turn.done","turn_id":1,"result":"..."}
+```
+
+**Sandbox harness adapter** (`services/sandbox/harness_session.py`):
+
+The sandbox's `harness_session.py` translates the standard Anthropic format into whatever each harness CLI actually accepts:
+
+| Harness | Translation |
+|---------|-------------|
+| **claude-code** | Pass through directly (native Anthropic format) |
+| **amp** | Materialize image/document blocks to files on disk, replace with `@/path` text mentions (Amp stdin only accepts text blocks) |
+| **codex / pi-mono** | Extract text from content blocks, pass as CLI argument |
+
+This means clients and the API never need to know about harness-specific quirks. They speak Anthropic format; the sandbox adapter handles the rest.
+
+**Sandbox → API** (REST over Docker network):
+
+Agents call tools via `curl http://api:8000/tools/<tool>/<method>` over the `agent_net` Docker network. Auth is via `CENTAUR_API_KEY` injected at container creation.
+
 ### Network Isolation
 
 | Network | Scope | Services |

@@ -5,6 +5,7 @@ Communicates with the API over NDJSON on stdin/stdout. Starts the harness once
 (amp/claude-code) or per-turn (codex/pi-mono) and forwards ALL output transparently.
 """
 
+import base64
 import json
 import os
 import signal
@@ -13,6 +14,7 @@ import sys
 import threading
 
 WORKSPACE = "/home/agent/workspace"
+UPLOADS_DIR = "/home/agent/uploads"
 
 engine = os.environ.get("AGENT_ENGINE", "amp")
 model_override = os.environ.get("AGENT_MODEL", "")
@@ -202,6 +204,58 @@ def read_commands():
         yield msg
 
 
+_upload_counter = 0
+
+MIME_EXTENSIONS = {
+    "image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif",
+    "image/webp": ".webp", "image/svg+xml": ".svg",
+    "application/pdf": ".pdf",
+    "text/plain": ".txt", "text/csv": ".csv",
+    "application/json": ".json",
+}
+
+
+def _materialize_content_blocks(content_blocks: list[dict]) -> list[dict]:
+    """Convert non-text content blocks (image/document) to files on disk.
+
+    Amp's --stream-json-input only accepts {"type": "text"} blocks. For images
+    and documents, save the base64 data to ~/uploads/ and replace the block
+    with a text block containing an @-mention of the file path.
+    """
+    global _upload_counter
+    result = []
+    file_mentions = []
+    for block in content_blocks:
+        btype = block.get("type", "")
+        if btype == "text":
+            result.append(block)
+            continue
+        if btype in ("image", "document"):
+            source = block.get("source", {})
+            if source.get("type") != "base64" or not source.get("data"):
+                continue
+            mime = source.get("media_type", "application/octet-stream")
+            ext = MIME_EXTENSIONS.get(mime, "")
+            if not ext:
+                parts = mime.split("/")
+                ext = f".{parts[-1]}" if len(parts) == 2 else ".bin"
+            os.makedirs(UPLOADS_DIR, exist_ok=True)
+            _upload_counter += 1
+            filename = f"attachment_{_upload_counter}{ext}"
+            filepath = os.path.join(UPLOADS_DIR, filename)
+            with open(filepath, "wb") as f:
+                f.write(base64.b64decode(source["data"]))
+            file_mentions.append(filepath)
+    if file_mentions:
+        mentions = " ".join(f"@{p}" for p in file_mentions)
+        text_blocks = [b for b in result if b.get("type") == "text"]
+        if text_blocks:
+            text_blocks[-1]["text"] = text_blocks[-1]["text"] + "\n\n" + mentions
+        else:
+            result.append({"type": "text", "text": mentions})
+    return result
+
+
 def run_persistent() -> None:
     """amp / claude-code: start once, pipe turns via stdin."""
     global proc, current_turn_id
@@ -212,12 +266,9 @@ def run_persistent() -> None:
                 proc.send_signal(signal.SIGINT)
         elif mtype == "turn.start":
             current_turn_id = msg.get("turn_id")
-            # Support both plain text and Anthropic content blocks.
-            # When "content" is a list of content blocks, use directly;
-            # otherwise wrap "text" in a single text block.
             content = msg.get("content")
             if isinstance(content, list) and len(content) > 0:
-                content_blocks = content
+                content_blocks = _materialize_content_blocks(content)
             else:
                 text = msg.get("text", "")
                 content_blocks = [{"type": "text", "text": text}]
