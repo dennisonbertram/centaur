@@ -117,20 +117,17 @@ export function createCentaurClient(options: CentaurClientOptions): CentaurClien
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        const isBusy = text.toLowerCase().includes("already in progress");
+        let parsed: Record<string, unknown> | undefined;
+        try { parsed = JSON.parse(text); } catch { /* not JSON */ }
+        const code = parsed?.code as string | undefined;
+
+        const isBusy = code === "THREAD_BUSY" || text.toLowerCase().includes("already in progress");
         if (isBusy && attempt < BUSY_MAX_RETRIES) {
           const delay = Math.min(BUSY_INITIAL_DELAY_MS * 2 ** (attempt - 1), BUSY_MAX_DELAY_MS);
           await new Promise((r) => setTimeout(r, delay));
           continue;
         }
 
-        let parsed: Record<string, unknown> | undefined;
-        try {
-          parsed = JSON.parse(text);
-        } catch {
-          // not JSON
-        }
-        const code = parsed?.code as string | undefined;
         throw new ApiError(
           code
             ? `${code}: ${(parsed?.detail as string) ?? text.slice(0, 300)}`
