@@ -4,6 +4,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl \
     ripgrep fd-find jq yq tree gettext-base \
     && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
+    && ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL -o /usr/local/bin/dbmate "https://github.com/amacneil/dbmate/releases/latest/download/dbmate-linux-${ARCH}" \
+    && chmod +x /usr/local/bin/dbmate \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /uvx /usr/local/bin/
@@ -23,6 +26,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # 2. Install project with source
 COPY services/api/api/ api/
+COPY services/api/db/ db/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev
 
