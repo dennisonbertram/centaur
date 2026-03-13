@@ -93,12 +93,21 @@ def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
     """
     blocks: list[dict] = []
     for message in messages:
+        role = message.get("role", "user")
         user_id = message.get("user_id")
         parts = message.get("parts", [])
         attributed = False
         for part in parts:
             ptype = part.get("type")
-            if ptype == "attachment_ref":
+            if role == "assistant":
+                if ptype == "text":
+                    blocks.append({
+                        "type": "text",
+                        "text": f"[Your previous response]: {part['text']}",
+                    })
+                else:
+                    blocks.append(part)
+            elif ptype == "attachment_ref":
                 att_id = part["id"]
                 name = part.get("name", "attachment")
                 mime = part.get("mime_type", "")

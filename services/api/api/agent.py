@@ -367,6 +367,11 @@ def _stream_turn(
         line = turn_queue.get()
         if line is None:
             rt.busy = False
+            if message is not None and done_seen == 0:
+                yield json.dumps({
+                    "type": "error",
+                    "message": "Sandbox container exited unexpectedly before completing the turn.",
+                })
             log.info(
                 "turn_done",
                 thread_key=session.thread_key,

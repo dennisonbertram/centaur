@@ -262,6 +262,61 @@ class TestMessagesToContentBlocks:
         # Second text is plain (attribution already done)
         assert result[2] == {"type": "text", "text": "and this"}
 
+    def test_assistant_role_prefixed(self):
+        msgs = [
+            {
+                "role": "user",
+                "user_id": "U1",
+                "parts": [{"type": "text", "text": "what is 2+2?"}],
+            },
+            {
+                "role": "assistant",
+                "parts": [{"type": "text", "text": "The answer is 4."}],
+            },
+            {
+                "role": "user",
+                "user_id": "U1",
+                "parts": [{"type": "text", "text": "thanks"}],
+            },
+        ]
+        result = messages_to_content_blocks(msgs)
+        assert result == [
+            {"type": "text", "text": "<@U1>: what is 2+2?"},
+            {"type": "text", "text": "[Your previous response]: The answer is 4."},
+            {"type": "text", "text": "<@U1>: thanks"},
+        ]
+
+    def test_assistant_role_no_user_attribution(self):
+        """Assistant messages should never get user_id attribution even if present."""
+        msgs = [
+            {
+                "role": "assistant",
+                "user_id": "U1",
+                "parts": [{"type": "text", "text": "I said this"}],
+            },
+        ]
+        result = messages_to_content_blocks(msgs)
+        assert result == [
+            {"type": "text", "text": "[Your previous response]: I said this"},
+        ]
+
+    def test_assistant_non_text_parts_passthrough(self):
+        """Non-text parts in assistant messages pass through unchanged."""
+        msgs = [
+            {
+                "role": "assistant",
+                "parts": [
+                    {"type": "text", "text": "here's an image"},
+                    {"type": "image", "source": {"type": "base64", "data": "abc"}},
+                ],
+            },
+        ]
+        result = messages_to_content_blocks(msgs)
+        assert result == [
+            {"type": "text", "text": "[Your previous response]: here's an image"},
+            {"type": "image", "source": {"type": "base64", "data": "abc"}},
+        ]
+
     def test_no_user_id(self):
         msgs = [
             {
