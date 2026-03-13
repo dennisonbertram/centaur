@@ -360,3 +360,226 @@ async def mark_delivered_endpoint(req: MarkDeliveredRequest):
     """Mark a thread as delivered so it won't appear in orphan checks."""
     await mark_delivered(req.thread_key)
     return {"ok": True}
+
+
+@router.get("/threads", dependencies=[Depends(require_scope("agent:status"))])
+async def list_threads(request: Request, limit: int = 200):
+    """List threads with summary info."""
+    pool = request.app.state.db_pool
+    limit = min(limit, 500)
+    rows = await pool.fetch(
+        """
+        SELECT
+            cm.thread_key,
+            MIN(cm.created_at) AS created_at,
+            MAX(cm.created_at) AS last_activity,
+            COUNT(*)::int AS message_count,
+            (SELECT parts FROM chat_messages cm2
+             WHERE cm2.thread_key = cm.thread_key AND cm2.role = 'user'
+             ORDER BY cm2.created_at ASC LIMIT 1) AS first_user_parts,
+            (SELECT parts FROM chat_messages cm3
+             WHERE cm3.thread_key = cm.thread_key AND cm3.role = 'user'
+             ORDER BY cm3.created_at DESC LIMIT 1) AS last_user_parts,
+            ss.thread_name,
+            COALESCE(ss.harness, 'amp') AS harness,
+            COALESCE(ss.state, 'stopped') AS state
+        FROM chat_messages cm
+        LEFT JOIN sandbox_sessions ss ON ss.thread_key = cm.thread_key
+        GROUP BY cm.thread_key, ss.thread_name, ss.harness, ss.state
+        ORDER BY MAX(cm.created_at) DESC
+        LIMIT $1
+        """,
+        limit,
+    )
+
+    def _extract_text(parts):
+        if isinstance(parts, str):
+            try:
+                parts = _json.loads(parts)
+            except Exception:
+                return None
+        if not isinstance(parts, list):
+            return None
+        for p in parts:
+            if isinstance(p, dict) and isinstance(p.get("text"), str):
+                return p["text"]
+        return None
+
+    threads = []
+    for row in rows:
+        threads.append({
+            "slack_thread_key": row["thread_key"],
+            "harness": row["harness"],
+            "state": row["state"],
+            "created_at": row["created_at"].timestamp() if row["created_at"] else None,
+            "last_activity": row["last_activity"].timestamp() if row["last_activity"] else None,
+            "turn_count": row["message_count"],
+            "first_message": _extract_text(row["first_user_parts"]),
+            "last_user_message": _extract_text(row["last_user_parts"]),
+            "thread_name": row["thread_name"],
+        })
+
+    return {"threads": threads}
+
+
+@router.get("/threads/detail", dependencies=[Depends(require_scope("agent:status"))])
+async def thread_detail(request: Request, key: str):
+    """Get detailed info for a single thread."""
+    pool = request.app.state.db_pool
+
+    rows = await pool.fetch(
+        """
+        SELECT
+            MIN(cm.created_at) AS created_at,
+            MAX(cm.created_at) AS last_activity,
+            COUNT(*)::int AS message_count,
+            (SELECT parts FROM chat_messages cm2
+             WHERE cm2.thread_key = $1 AND cm2.role = 'user'
+             ORDER BY cm2.created_at DESC LIMIT 1
+            ) AS last_user_parts,
+            ss.thread_name,
+            COALESCE(ss.harness, 'amp') AS harness,
+            COALESCE(ss.state, 'stopped') AS state
+        FROM chat_messages cm
+        LEFT JOIN sandbox_sessions ss ON ss.thread_key = cm.thread_key
+        WHERE cm.thread_key = $1
+        GROUP BY ss.thread_name, ss.harness, ss.state
+        """,
+        key,
+    )
+
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Thread not found: {key}")
+
+    row = rows[0]
+
+    def _extract_text(parts):
+        if isinstance(parts, str):
+            try:
+                parts = _json.loads(parts)
+            except Exception:
+                return None
+        if not isinstance(parts, list):
+            return None
+        for p in parts:
+            if isinstance(p, dict) and isinstance(p.get("text"), str):
+                return p["text"]
+        return None
+
+    detail = {
+        "slack_thread_key": key,
+        "harness": row["harness"],
+        "state": row["state"],
+        "created_at": row["created_at"].timestamp() if row["created_at"] else None,
+        "last_activity": row["last_activity"].timestamp() if row["last_activity"] else None,
+        "message_count": row["message_count"],
+        "last_user_message": _extract_text(row["last_user_parts"]),
+        "thread_name": row["thread_name"],
+    }
+
+    # Collect participants and token usage from message rows
+    msg_rows = await pool.fetch(
+        "SELECT parts, metadata FROM chat_messages "
+        "WHERE thread_key = $1 ORDER BY created_at DESC LIMIT 200",
+        key,
+    )
+
+    participants = {}
+    total_tokens = 0
+    total_input = 0
+    total_output = 0
+    total_cost = 0.0
+    has_usage = False
+    models = set()
+
+    for mrow in msg_rows:
+        parts = mrow["parts"]
+        if isinstance(parts, str):
+            try:
+                parts = _json.loads(parts)
+            except Exception:
+                parts = []
+        meta = mrow["metadata"]
+        if isinstance(meta, str):
+            try:
+                meta = _json.loads(meta)
+            except Exception:
+                meta = None
+
+        # Participants
+        if meta and isinstance(meta, dict):
+            uid = meta.get("user_id")
+            if uid and isinstance(uid, str) and uid.strip():
+                uid = uid.strip()
+                if uid not in participants:
+                    participants[uid] = {
+                        "id": uid,
+                        "name": meta.get("user_name") or meta.get("name") or uid,
+                        "username": meta.get("username"),
+                        "avatar_url": meta.get("avatar_url"),
+                    }
+            # Token usage from metadata
+            tu = meta.get("token_usage")
+            if tu and isinstance(tu, dict):
+                t = tu.get("total_tokens", 0)
+                if isinstance(t, (int, float)) and t > 0:
+                    has_usage = True
+                    total_tokens += int(t)
+                    inp = tu.get("input_tokens")
+                    if isinstance(inp, (int, float)):
+                        total_input += int(inp)
+                    out = tu.get("output_tokens")
+                    if isinstance(out, (int, float)):
+                        total_output += int(out)
+                    c = tu.get("cost_usd")
+                    if isinstance(c, (int, float)):
+                        total_cost += c
+                    for m in (tu.get("models") or []):
+                        if isinstance(m, str):
+                            models.add(m)
+
+        if isinstance(parts, list):
+            for part in parts:
+                if not isinstance(part, dict):
+                    continue
+                if part.get("type") == "data-user-message" or part.get("type") == "data-context-message":
+                    data = part.get("data") or {}
+                    uid = data.get("user_id")
+                    if uid and isinstance(uid, str) and uid.strip():
+                        uid = uid.strip()
+                        if uid not in participants:
+                            participants[uid] = {
+                                "id": uid,
+                                "name": data.get("user_name") or data.get("name") or uid,
+                                "username": data.get("username"),
+                                "avatar_url": data.get("avatar_url"),
+                            }
+                if part.get("type") == "data-token-usage":
+                    tu = part.get("data") or {}
+                    t = tu.get("total_tokens", 0)
+                    if isinstance(t, (int, float)) and t > 0:
+                        has_usage = True
+                        total_tokens += int(t)
+                        inp = tu.get("input_tokens")
+                        if isinstance(inp, (int, float)):
+                            total_input += int(inp)
+                        out = tu.get("output_tokens")
+                        if isinstance(out, (int, float)):
+                            total_output += int(out)
+                        c = tu.get("cost_usd")
+                        if isinstance(c, (int, float)):
+                            total_cost += c
+                        for m in (tu.get("models") or []):
+                            if isinstance(m, str):
+                                models.add(m)
+
+    detail["participants"] = list(participants.values())
+    detail["token_usage"] = {
+        "total_tokens": total_tokens,
+        "input_tokens": total_input or None,
+        "output_tokens": total_output or None,
+        "cost_usd": total_cost if total_cost > 0 else None,
+        "models": sorted(models),
+    } if has_usage else None
+
+    return detail
