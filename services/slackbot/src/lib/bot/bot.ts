@@ -533,30 +533,6 @@ function createBot() {
   bot.onNewMention(async (thread, message) => {
     if (message.author.isMe) return;
     if (message.author.isBot) return;
-    const text = (message.text || "").trim().toLowerCase();
-    if (text.includes("play whosaidit")) {
-      await thread.subscribe();
-      try {
-        const { channel, threadTs } = splitThreadKey(thread.id);
-        await thread.post("Starting Who Said It! 🎮 Fetching quotes...");
-        const res = await resilientFetch(`${API_URL}/game/start`, {
-          method: "POST",
-          body: JSON.stringify({
-            channel_id: channel,
-            thread_ts: threadTs,
-          }),
-        });
-        if (!res.ok) {
-          const errText = await res.text();
-          await thread.post(`Failed to start game: ${errText.slice(0, 200)}`);
-        }
-      } catch (error) {
-        await thread.post(
-          formatErrorForSlack(error, "Who Said It? game"),
-        );
-      }
-      return;
-    }
     await thread.subscribe();
     let attachments = message.attachments ? [...message.attachments] : [];
     const mentionTs = (message as { ts?: string }).ts || "";
@@ -667,29 +643,6 @@ function createBot() {
           thread: threadKey,
           error: error instanceof Error ? error.message : String(error),
         });
-      }
-      return;
-    }
-    const text = (message.text || "").trim().toLowerCase();
-    if (text.includes("play whosaidit")) {
-      try {
-        const { channel, threadTs } = splitThreadKey(thread.id);
-        await thread.post("Starting Who Said It! 🎮 Fetching quotes...");
-        const res = await resilientFetch(`${API_URL}/game/start`, {
-          method: "POST",
-          body: JSON.stringify({
-            channel_id: channel,
-            thread_ts: threadTs,
-          }),
-        });
-        if (!res.ok) {
-          const errText = await res.text();
-          await thread.post(`Failed to start game: ${errText.slice(0, 200)}`);
-        }
-      } catch (error) {
-        await thread.post(
-          formatErrorForSlack(error, "Who Said It? game"),
-        );
       }
       return;
     }

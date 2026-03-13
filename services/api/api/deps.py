@@ -163,7 +163,7 @@ async def verify_api_key(
             name="service",
             key_prefix="svc",
             created_by="system",
-            scopes=["agent", "threads:read", "game"],
+            scopes=["agent", "threads:read"],
             source="service",
         )
         return token
