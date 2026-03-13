@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import base64
 import json as _json
+import re
 import time as _time
 import uuid
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from typing import Any
 from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from pydantic import BaseModel
 
 from api.agent import (
+    _db_get_session,
+    _runtime,
     claim_for_delivery,
     get_or_spawn,
     get_status,
@@ -38,10 +42,74 @@ router = APIRouter(
 )
 
 
+# ── Known harness flags ─────────────────────────────────────────────────────
+
+_HARNESS_FLAGS: dict[str, str] = {
+    "amp": "amp",
+    "claude": "claude-code",
+    "claude-code": "claude-code",
+    "codex": "codex",
+    "pi": "pi-mono",
+    "pi-mono": "pi-mono",
+}
+
+_KNOWN_FLAGS = {
+    *_HARNESS_FLAGS,
+    "opus", "sonnet", "haiku", "engine", "model",
+}
+
+
+def parse_harness_from_message(text: str) -> tuple[str | None, str, bool]:
+    """Parse harness directives from message text.
+
+    Returns (harness_or_None, cleaned_text, harness_was_explicit).
+    """
+    cleaned = text
+    harness: str | None = None
+    explicit = False
+
+    # 1. key=value syntax: harness=X
+    kv_match = re.search(r"\bharness\s*=\s*([A-Za-z0-9_-]+)\b", cleaned, re.IGNORECASE)
+    if kv_match:
+        harness = kv_match.group(1).lower()
+        explicit = True
+        cleaned = (cleaned[: kv_match.start()] + cleaned[kv_match.end() :]).strip()
+
+    # 2. Known harness flags: --amp, --claude, etc.
+    for flag, value in _HARNESS_FLAGS.items():
+        pattern = re.compile(r"(^|\s)--" + re.escape(flag) + r"(?=\s|$)", re.IGNORECASE)
+        if pattern.search(cleaned):
+            harness = value
+            explicit = True
+            cleaned = pattern.sub(" ", cleaned)
+
+    # 3. Strip legacy engine/model flags (no harness effect)
+    cleaned = re.sub(
+        r"(^|\s)--(engine|model)\s+[A-Za-z0-9._-]+(?=\s|$)", " ", cleaned, flags=re.IGNORECASE
+    )
+    cleaned = re.sub(r"(^|\s)--(opus|sonnet|haiku)(?=\s|$)", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bmodel\s*=\s*[A-Za-z0-9._-]+\b", "", cleaned, flags=re.IGNORECASE)
+
+    # 4. Generic --flag → persona/harness name (any unknown flag)
+    generic_re = re.compile(r"(^|\s)--([a-z][a-z0-9-]*)(?=\s|$)", re.IGNORECASE)
+    for m in generic_re.finditer(cleaned):
+        flag = m.group(2).lower()
+        if flag in _KNOWN_FLAGS:
+            continue
+        harness = flag
+        explicit = True
+    cleaned = generic_re.sub(" ", cleaned)
+
+    # Normalise whitespace
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+    return harness, cleaned, explicit
+
+
 class ExecuteRequest(BaseModel):
     thread_key: str
     message: str | list[Any] = ""
-    harness: str = "amp"
+    harness: str | None = None
     engine: str | None = None
     platform: str | None = None
     user_id: str | None = None
@@ -54,13 +122,82 @@ async def execute(request: Request):
     if not thread_key:
         raise HTTPException(status_code=422, detail="thread_key is required")
 
-    harness = body.get("harness", "amp")
+    explicit_harness: str | None = body.get("harness")
     engine = body.get("engine")
     platform = body.get("platform")
     user_id = body.get("user_id")
     message = body.get("message", "")
 
-    session = await get_or_spawn(thread_key, harness, engine=engine)
+    # ── Parse harness directives from message text ───────────────────────
+    parsed_harness: str | None = None
+    parsed_explicit = False
+    if isinstance(message, str) and message:
+        parsed_harness, message, parsed_explicit = parse_harness_from_message(message)
+    elif isinstance(message, list):
+        # For content-block messages, parse flags from the first text block
+        for i, block in enumerate(message):
+            if isinstance(block, dict) and block.get("type") == "text":
+                parsed_harness, cleaned_text, parsed_explicit = parse_harness_from_message(
+                    block["text"]
+                )
+                message = [
+                    {**block, "text": cleaned_text} if j == i else b
+                    for j, b in enumerate(message)
+                ]
+                break
+
+    # ── Resolve final harness ────────────────────────────────────────────
+    # Priority: explicit request field > parsed from message > existing session > default
+    existing_session = await _db_get_session(thread_key)
+    existing_harness = existing_session.harness if existing_session else None
+
+    if explicit_harness:
+        resolved_harness = explicit_harness
+    elif parsed_harness:
+        resolved_harness = parsed_harness
+    elif existing_harness:
+        resolved_harness = existing_harness
+    else:
+        resolved_harness = "amp"
+
+    # ── Validate harness against existing session ────────────────────────
+    requested = explicit_harness or (parsed_harness if parsed_explicit else None)
+    if existing_harness and requested and requested != existing_harness:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "code": "HARNESS_MISMATCH",
+                "expected_harness": existing_harness,
+                "requested_harness": requested,
+            },
+        )
+
+    # ── Check thread busy ────────────────────────────────────────────────
+    if existing_session:
+        rt = _runtime.get(existing_session.sandbox_id)
+        if rt and rt.busy:
+            return JSONResponse(
+                status_code=409,
+                content={"code": "THREAD_BUSY"},
+            )
+
+    # ── Validate message is non-empty after stripping flags ──────────────
+    msg_empty = False
+    if isinstance(message, str):
+        msg_empty = not message.strip()
+    elif isinstance(message, list):
+        msg_empty = not any(
+            isinstance(b, dict) and b.get("type") == "text" and b.get("text", "").strip()
+            for b in message
+        )
+
+    if msg_empty:
+        return JSONResponse(
+            status_code=400,
+            content={"code": "EMPTY_PROMPT"},
+        )
+
+    session = await get_or_spawn(thread_key, resolved_harness, engine=engine)
 
     return EventSourceResponse(
         stream_exec(session, message, platform=platform, user_id=user_id),

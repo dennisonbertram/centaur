@@ -1,3 +1,8 @@
-export { resilientFetch, isNetworkError } from "./resilient-fetch";
 export { ApiError } from "./types";
-export type { FetchOptions } from "./types";
+export { CentaurClient } from "./client";
+export type {
+  ExecuteOptions,
+  PostContextOptions,
+  InputContentBlock,
+  OrphanedEntry,
+} from "./client";

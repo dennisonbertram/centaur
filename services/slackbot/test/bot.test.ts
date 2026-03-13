@@ -3,8 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ProgressTracker } from "../src/lib/bot/progress-tracker";
-import { HandoffDetector } from "../src/lib/bot/handoff-detection";
-import { extractRunOptions } from "../src/lib/bot/harness";
 import { normalizeHarnessEvent, type CanonicalEvent } from "@centaur/harness-events";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,7 +53,6 @@ function parseSSEFile(filePath: string): Record<string, unknown>[] {
     const trimmed = line.trim();
     if (!trimmed.startsWith("data: ")) continue;
     const payload = trimmed.slice(6);
-    if (payload === "[DONE]") continue;
     try {
       events.push(JSON.parse(payload));
     } catch {
@@ -84,9 +81,7 @@ function replayFixture(name: string) {
     const canonical = normalizeHarnessEvent("amp", raw);
     for (const ce of canonical) {
       allCanonical.push(ce);
-      if (tracker.update(ce)) {
-        allChunks.push(...tracker.pendingChunks());
-      }
+      allChunks.push(...tracker.update(ce));
     }
   }
 
@@ -208,85 +203,39 @@ describe("attachment content blocks", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 2. extractRunOptions
-// ═══════════════════════════════════════════════════════════════════════════════
-
-describe("extractRunOptions", () => {
-  it("defaults to amp with no flags", () => {
-    const r = extractRunOptions("build me a dashboard");
-    expect(r.harness).toBe("amp");
-    expect(r.cleanedText).toBe("build me a dashboard");
-    expect(r.harnessExplicit).toBe(false);
-  });
-
-  it("parses --claude flag", () => {
-    const r = extractRunOptions("--claude analyze this");
-    expect(r.harness).toBe("claude-code");
-    expect(r.harnessExplicit).toBe(true);
-    expect(r.cleanedText).toBe("analyze this");
-  });
-
-  it("parses --amp flag", () => {
-    const r = extractRunOptions("--amp fix the bug");
-    expect(r.harness).toBe("amp");
-    expect(r.harnessExplicit).toBe(true);
-  });
-
-  it("parses harness=claude-code key-value", () => {
-    const r = extractRunOptions("harness=claude-code do something");
-    expect(r.harness).toBe("claude-code");
-    expect(r.harnessExplicit).toBe(true);
-    expect(r.cleanedText).toBe("do something");
-  });
-
-  it("strips legacy --opus/--sonnet/--haiku flags", () => {
-    const r = extractRunOptions("--opus tell me about ETH");
-    expect(r.cleanedText).toBe("tell me about ETH");
-    expect(r.harness).toBe("amp");
-  });
-
-  it("treats unknown --flag as persona name", () => {
-    const r = extractRunOptions("--legal review this contract");
-    expect(r.harness).toBe("legal");
-    expect(r.harnessExplicit).toBe(true);
-    expect(r.cleanedText).toBe("review this contract");
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 3. ProgressTracker
+// 2. ProgressTracker
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe("ProgressTracker", () => {
   it("captures text-only assistant message as finalMessage", () => {
     const t = new ProgressTracker();
-    t.update({
+    [...t.update({
       type: "assistant",
       message: { content: [{ type: "text", text: "Here is your answer." }] },
-    });
+    })];
     expect(finalMessage(t)).toBe("Here is your answer.");
   });
 
   it("last text event wins", () => {
     const t = new ProgressTracker();
-    t.update({ type: "assistant", message: { content: [{ type: "text", text: "First." }] } });
-    t.update({ type: "assistant", message: { content: [{ type: "text", text: "Second." }] } });
+    [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "First." }] } })];
+    [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Second." }] } })];
     expect(finalMessage(t)).toBe("Second.");
   });
 
   it("clears preamble when tool_use starts (separate events)", () => {
     const t = new ProgressTracker();
-    t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me look..." }] } });
-    t.update({
+    [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me look..." }] } })];
+    [...t.update({
       type: "assistant",
       message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { path: "/x" } }] },
-    });
+    })];
     expect(finalMessage(t)).toBe("");
   });
 
   it("clears preamble when tool_use starts (same event)", () => {
     const t = new ProgressTracker();
-    t.update({
+    [...t.update({
       type: "assistant",
       message: {
         content: [
@@ -294,51 +243,50 @@ describe("ProgressTracker", () => {
           { type: "tool_use", id: "t1", name: "finder", input: { query: "auth" } },
         ],
       },
-    });
+    })];
     expect(finalMessage(t)).toBe("");
   });
 
   it("captures final text after tool completes", () => {
     const t = new ProgressTracker();
-    t.update({
+    [...t.update({
       type: "assistant",
       message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { path: "/x" } }] },
-    });
-    t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "data", is_error: false }] });
-    t.update({
+    })];
+    [...t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "data", is_error: false }] })];
+    [...t.update({
       type: "assistant",
       message: { content: [{ type: "text", text: "Done fixing the bug." }] },
-    });
+    })];
     expect(finalMessage(t)).toBe("Done fixing the bug.");
   });
 
   it("result event takes priority over lastAssistantText", () => {
     const t = new ProgressTracker();
-    t.update({ type: "assistant", message: { content: [{ type: "text", text: "Intermediate." }] } });
-    t.update({ type: "result", text: "Final from turn.done" });
+    [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Intermediate." }] } })];
+    [...t.update({ type: "result", text: "Final from turn.done" })];
     expect(finalMessage(t)).toBe("Final from turn.done");
   });
 
   it("stream death after tool_use → empty finalMessage", () => {
     const t = new ProgressTracker();
-    t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me check..." }] } });
-    t.update({
+    [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me check..." }] } })];
+    [...t.update({
       type: "assistant",
       message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }] },
-    });
+    })];
     expect(finalMessage(t)).toBe("");
   });
 
   it("error event produces markdown_text chunk", () => {
     const t = new ProgressTracker();
-    t.update({ type: "error", error: "OOM killed" });
-    const chunks = t.pendingChunks();
+    const chunks = [...t.update({ type: "error", error: "OOM killed" })];
     expect(chunks.some((c) => c.type === "markdown_text" && "text" in c && (c as any).text.includes("OOM"))).toBe(true);
   });
 
   it("reasoning event does not affect lastAssistantText", () => {
     const t = new ProgressTracker();
-    t.update({ type: "reasoning", text: "Thinking hard..." });
+    [...t.update({ type: "reasoning", text: "Thinking hard..." })];
     expect(finalMessage(t)).toBe("");
   });
 
@@ -346,14 +294,12 @@ describe("ProgressTracker", () => {
     const t = new ProgressTracker();
     const starts: unknown[] = [];
     for (let i = 0; i < 5; i++) {
-      t.update({
+      const chunks = [...t.update({
         type: "assistant",
         message: { content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { cmd: `echo ${i}` } }] },
-      });
-      const chunks = t.pendingChunks();
+      })];
       starts.push(...chunks.filter((c) => c.type === "task_update" && (c as any).id !== "init"));
-      t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] });
-      t.pendingChunks();
+      [...t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] })];
     }
     const ids = (starts as any[]).map((c) => c.id);
     expect(ids).toEqual(["step-0", "step-1", "step-2", "step-3", "step-4"]);
@@ -362,20 +308,17 @@ describe("ProgressTracker", () => {
   it("6th tool shifts window up — slots show tools 2-6", () => {
     const t = new ProgressTracker();
     for (let i = 0; i < 5; i++) {
-      t.update({
+      [...t.update({
         type: "assistant",
         message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { path: `/file${i}` } }] },
-      });
-      t.pendingChunks();
-      t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] });
-      t.pendingChunks();
+      })];
+      [...t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] })];
     }
     // 6th tool triggers a shift
-    t.update({
+    const shiftChunks = [...t.update({
       type: "assistant",
       message: { content: [{ type: "tool_use", id: "t5", name: "Read", input: { path: "/file5" } }] },
-    });
-    const shiftChunks = t.pendingChunks();
+    })];
     const taskUpdates = shiftChunks.filter((c) => c.type === "task_update" && (c as any).id !== "init");
     // Full window re-emitted
     expect(taskUpdates).toHaveLength(5);
@@ -389,13 +332,11 @@ describe("ProgressTracker", () => {
     const t = new ProgressTracker();
     const allChunks: unknown[] = [];
     for (let i = 0; i < 10; i++) {
-      t.update({
+      allChunks.push(...t.update({
         type: "assistant",
         message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { path: `/f${i}` } }] },
-      });
-      allChunks.push(...t.pendingChunks());
-      t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] });
-      allChunks.push(...t.pendingChunks());
+      }));
+      allChunks.push(...t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] }));
     }
     const ids = new Set(
       (allChunks as any[])
@@ -407,97 +348,25 @@ describe("ProgressTracker", () => {
 
   it("subagent events produce task_update chunks", () => {
     const t = new ProgressTracker();
-    t.update({ type: "subagent", status: "started", subagent_id: "sa-1", name: "Research" });
-    const chunks = t.pendingChunks();
+    const chunks = [...t.update({ type: "subagent", status: "started", subagent_id: "sa-1", name: "Research" })];
     expect(chunks.some((c) => c.type === "task_update" && (c as any).status === "in_progress")).toBe(true);
     expect(t.lastAssistantText).toBe("");
   });
 
   it("addHandoff clears state and produces task_update", () => {
     const t = new ProgressTracker();
-    t.update({ type: "assistant", message: { content: [{ type: "text", text: "intermediate" }] } });
-    t.addHandoff("Continue research", "T-new-123");
+    [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "intermediate" }] } })];
+    const chunks = [...t.addHandoff("Continue research")];
     expect(t.lastAssistantText).toBe("");
     expect(t.resultText).toBe("");
-    const chunks = t.pendingChunks();
     expect(chunks.some((c) => c.type === "task_update" && (c as any).title.includes("Continue research"))).toBe(true);
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 4. HandoffDetector
-// ═══════════════════════════════════════════════════════════════════════════════
 
-describe("HandoffDetector", () => {
-  it("detects follow=true handoff from tool_use + tool_result pair", () => {
-    const d = new HandoffDetector();
-    expect(
-      d.processEvent({
-        type: "assistant",
-        message: {
-          content: [
-            {
-              type: "tool_use",
-              id: "h1",
-              name: "handoff",
-              input: { goal: "Continue work", follow: true },
-            },
-          ],
-        },
-      }),
-    ).toBeNull();
-
-    const result = d.processEvent({
-      type: "tool",
-      content: [
-        {
-          tool_use_id: "h1",
-          content: JSON.stringify({ newThreadID: "T-abc-123" }),
-          is_error: false,
-        },
-      ],
-    });
-    expect(result).not.toBeNull();
-    expect(result!.newThreadKey).toBe("T-abc-123");
-    expect(result!.follow).toBe(true);
-    expect(result!.goal).toBe("Continue work");
-  });
-
-  it("ignores handoff with follow=false", () => {
-    const d = new HandoffDetector();
-    d.processEvent({
-      type: "assistant",
-      message: {
-        content: [
-          { type: "tool_use", id: "h1", name: "handoff", input: { goal: "bg task", follow: false } },
-        ],
-      },
-    });
-    const result = d.processEvent({
-      type: "tool",
-      content: [
-        { tool_use_id: "h1", content: JSON.stringify({ newThreadID: "T-xyz" }), is_error: false },
-      ],
-    });
-    expect(result).toBeNull();
-  });
-
-  it("ignores non-handoff tool calls", () => {
-    const d = new HandoffDetector();
-    d.processEvent({
-      type: "assistant",
-      message: { content: [{ type: "tool_use", id: "r1", name: "Read", input: { path: "/x" } }] },
-    });
-    const result = d.processEvent({
-      type: "tool",
-      content: [{ tool_use_id: "r1", content: "file content", is_error: false }],
-    });
-    expect(result).toBeNull();
-  });
-});
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 5. SSE fixture replay
+// 3. SSE fixture replay
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const fixtureDir = path.join(__dirname, "../src/lib/bot/fixtures");
@@ -578,7 +447,7 @@ describe("SSE fixture replay", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 6. Simulated stream deaths
+// 4. Simulated stream deaths
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe("simulated stream deaths", () => {
@@ -610,8 +479,7 @@ describe("simulated stream deaths", () => {
       for (let i = 0; i <= firstToolUseIdx; i++) {
         const canonical = normalizeHarnessEvent("amp", rawEvents[i]);
         for (const ce of canonical) {
-          tracker.update(ce);
-          tracker.pendingChunks();
+          [...tracker.update(ce)];
         }
       }
       expect(finalMessage(tracker)).toBe("");
