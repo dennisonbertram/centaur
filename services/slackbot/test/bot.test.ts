@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ProgressTracker } from "../src/lib/bot/progress-tracker";
-import { extractRunOptions } from "../src/lib/bot/bot";
 import { normalizeHarnessEvent, type CanonicalEvent } from "@centaur/harness-events";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -207,53 +206,7 @@ describe("attachment content blocks", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 2. extractRunOptions
-// ═══════════════════════════════════════════════════════════════════════════════
-
-describe("extractRunOptions", () => {
-  it("defaults to amp with no flags", () => {
-    const r = extractRunOptions("build me a dashboard");
-    expect(r.harness).toBe("amp");
-    expect(r.cleanedText).toBe("build me a dashboard");
-    expect(r.harnessExplicit).toBe(false);
-  });
-
-  it("parses --claude flag", () => {
-    const r = extractRunOptions("--claude analyze this");
-    expect(r.harness).toBe("claude-code");
-    expect(r.harnessExplicit).toBe(true);
-    expect(r.cleanedText).toBe("analyze this");
-  });
-
-  it("parses --amp flag", () => {
-    const r = extractRunOptions("--amp fix the bug");
-    expect(r.harness).toBe("amp");
-    expect(r.harnessExplicit).toBe(true);
-  });
-
-  it("parses harness=claude-code key-value", () => {
-    const r = extractRunOptions("harness=claude-code do something");
-    expect(r.harness).toBe("claude-code");
-    expect(r.harnessExplicit).toBe(true);
-    expect(r.cleanedText).toBe("do something");
-  });
-
-  it("strips legacy --opus/--sonnet/--haiku flags", () => {
-    const r = extractRunOptions("--opus tell me about ETH");
-    expect(r.cleanedText).toBe("tell me about ETH");
-    expect(r.harness).toBe("amp");
-  });
-
-  it("treats unknown --flag as persona name", () => {
-    const r = extractRunOptions("--legal review this contract");
-    expect(r.harness).toBe("legal");
-    expect(r.harnessExplicit).toBe(true);
-    expect(r.cleanedText).toBe("review this contract");
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 3. ProgressTracker
+// 2. ProgressTracker
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe("ProgressTracker", () => {
@@ -426,7 +379,7 @@ describe("ProgressTracker", () => {
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 5. SSE fixture replay
+// 3. SSE fixture replay
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const fixtureDir = path.join(__dirname, "../src/lib/bot/fixtures");
@@ -507,7 +460,7 @@ describe("SSE fixture replay", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 6. Simulated stream deaths
+// 4. Simulated stream deaths
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe("simulated stream deaths", () => {
