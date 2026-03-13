@@ -591,15 +591,15 @@ function createBot() {
         // Best-effort
       }
 
-      // Update thread_name in sandbox_sessions + set Slack assistant thread title
+      // Update thread_name via API + set Slack assistant thread title
       if (finalMessage) {
         const titleText = finalMessage.slice(0, 60);
         try {
-          const pool = getPool();
-          await pool.query(
-            `UPDATE sandbox_sessions SET thread_name = $1, updated_at = NOW() WHERE thread_key = $2`,
-            [titleText, threadKey],
-          );
+          await resilientFetch(`${API_URL}/agent/title`, {
+            method: "POST",
+            body: JSON.stringify({ thread_key: threadKey, title: titleText }),
+            maxAttempts: 1,
+          });
         } catch {
           // Best-effort
         }

@@ -1,6 +1,5 @@
 import { log } from "@/lib/logger";
 import { resilientFetch, isNetworkError, ApiError, API_URL } from "./api-client";
-import { getPool } from "@/lib/db";
 import { normalizeThreadKey, type CanonicalEvent } from "@centaur/harness-events";
 import { sleep } from "@/lib/utils";
 
@@ -342,13 +341,18 @@ export async function* reconnectStreaming(
 }
 
 export async function fetchThreadHarness(threadKey: string): Promise<Harness | null> {
-  const normalizedThreadKey = normalizeThreadKey(threadKey);
-  const pool = getPool();
-  const { rows } = await pool.query(
-    `SELECT harness FROM sandbox_sessions WHERE thread_key = $1`,
-    [normalizedThreadKey],
-  );
-  return rows[0]?.harness || null;
+  const normalizedKey = normalizeThreadKey(threadKey);
+  try {
+    const res = await resilientFetch(
+      `${API_URL}/agent/status?key=${encodeURIComponent(normalizedKey)}`,
+      { timeoutMs: 5_000, maxAttempts: 1 },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as Record<string, unknown>;
+    return (data.harness as string) || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function* executeStreamingWithBusyRetries(
@@ -406,35 +410,19 @@ export async function postThreadContextMessage(
     attachments?: Array<{ url: string; name: string; mimeType?: string }>;
   },
 ): Promise<{ status: string }> {
-  const normalizedThreadKey = normalizeThreadKey(threadKey);
-  const pool = getPool();
-  const msgId = options?.messageId || `ctx-${normalizedThreadKey}-${Date.now()}`;
   const metadata: Record<string, unknown> = {};
   if (options?.source) metadata.source = options.source;
   if (options?.userId) metadata.user_id = options.userId;
   if (options?.attachments?.length) metadata.attachments = options.attachments;
+  if (options?.messageId) metadata.message_id = options.messageId;
+  if (options?.slackTs) metadata.slack_ts = options.slackTs;
 
-  // Derive created_at from the Slack message timestamp so messages sort in
-  // the order they were actually posted, not when the webhook was processed.
-  const ts = options?.slackTs || options?.messageId || "";
-  const epoch = parseFloat(ts);
-  const createdAt = epoch > 1_000_000_000 ? new Date(epoch * 1000).toISOString() : null;
-
-  if (createdAt) {
-    await pool.query(
-      `INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at)
-       VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb, $5::timestamptz)
-       ON CONFLICT (id) DO NOTHING`,
-      [msgId, normalizedThreadKey, JSON.stringify([{ type: "text", text }]), JSON.stringify(metadata), createdAt],
-    );
-  } else {
-    await pool.query(
-      `INSERT INTO chat_messages (id, thread_key, role, parts, metadata)
-       VALUES ($1, $2, 'user', $3::jsonb, $4::jsonb)
-       ON CONFLICT (id) DO NOTHING`,
-      [msgId, normalizedThreadKey, JSON.stringify([{ type: "text", text }]), JSON.stringify(metadata)],
-    );
-  }
+  await postMessages(normalizeThreadKey(threadKey), [{
+    role: "user",
+    parts: [{ type: "text", text }],
+    user_id: options?.userId,
+    metadata,
+  }]);
   return { status: "accepted" };
 }
 
