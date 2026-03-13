@@ -1,5 +1,6 @@
 """GSuite API client for Gmail, Calendar, and Drive."""
 
+import json
 import os
 import base64
 from email.mime.text import MIMEText
@@ -10,6 +11,8 @@ from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+
+from centaur_sdk.tool_sdk import secret
 
 
 SCOPES = [
@@ -36,17 +39,39 @@ def set_account(account: str | None) -> None:
     _current_account = account
 
 
+def _get_credentials_from_secrets() -> Credentials | None:
+    """Try to load credentials from GOOGLE_TOKEN_JSON secret (for sandbox/server use)."""
+    try:
+        token_json = secret("GOOGLE_TOKEN_JSON", None)
+    except (KeyError, Exception):
+        token_json = None
+    if not token_json:
+        return None
+
+    creds = Credentials.from_authorized_user_info(json.loads(token_json))
+    if creds and creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+    return creds if creds and creds.valid else None
+
+
 def get_credentials() -> Credentials:
     """Get or refresh Google OAuth credentials.
 
-    Looks for credentials in the following order:
-    1. Per-account token: ~/.config/gsuite/tokens/<account>.json (if account is set)
-    2. Default token: ~/.config/gsuite/token.json (fallback)
-    3. ~/.config/gsuite/credentials.json (OAuth client credentials for new auth)
+    Resolution order:
+    1. GOOGLE_TOKEN_JSON secret (sandbox/server mode — from 1Password)
+    2. Per-account token: ~/.config/gsuite/tokens/<account>.json (if account is set)
+    3. Default token: ~/.config/gsuite/token.json (fallback)
+    4. ~/.config/gsuite/credentials.json (OAuth client credentials for new auth)
 
     Returns:
         Valid Google credentials
     """
+    # 1. Try loading from secrets (works inside Docker sandboxes)
+    creds = _get_credentials_from_secrets()
+    if creds:
+        return creds
+
+    # 2. Fall back to filesystem token files (local dev)
     global _current_account
     config_dir = Path.home() / ".config" / "gsuite"
     tokens_dir = config_dir / "tokens"
@@ -81,8 +106,6 @@ def get_credentials() -> Credentials:
                     f"3. Download JSON and save to: {credentials_path}\n"
                     f"4. Run 'gsuite auth --account <email>' to authenticate"
                 )
-
-            import json
 
             with open(credentials_path) as f:
                 cred_data = json.load(f)

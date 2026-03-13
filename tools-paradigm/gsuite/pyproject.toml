@@ -25,4 +25,4 @@ build-backend = "hatchling.build"
 [tool.ai-v2]
 module = "client.py"
 hosts = ["*.googleapis.com"]
-secrets = []
+secrets = ["GOOGLE_CREDENTIALS_JSON", "GOOGLE_TOKEN_JSON"]
