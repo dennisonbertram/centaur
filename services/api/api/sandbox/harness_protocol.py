@@ -105,9 +105,9 @@ def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
                 blocks.append({
                     "type": "text",
                     "text": (
-                        f"User attached {name} ({mime}). "
-                        f"Download: call attachments download "
-                        f"'{{\"id\":\"{att_id}\"}}'"
+                        f"User attached file: {name} ({mime}). "
+                        f"Download with: curl -sS -H \"Authorization: Bearer $CENTAUR_API_KEY\" "
+                        f"\"$CENTAUR_API_URL/agent/attachments/{att_id}/download\" -o \"{name}\""
                     ),
                 })
             elif user_id and not attributed and ptype == "text":

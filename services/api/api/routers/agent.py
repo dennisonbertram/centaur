@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json as _json
 import time as _time
+import uuid
 from collections.abc import AsyncIterator
 
 import structlog
@@ -61,12 +63,6 @@ router = APIRouter(
 )
 
 
-class Attachment(BaseModel):
-    name: str
-    mime_type: str
-    data: str  # base64-encoded file bytes
-
-
 class ExecuteRequest(BaseModel):
     thread_key: str
     message: str | list[Any] = ""
@@ -74,7 +70,6 @@ class ExecuteRequest(BaseModel):
     engine: str | None = None
     platform: str | None = None
     user_id: str | None = None
-    attachments: list[Attachment] | None = None
 
 
 @router.post("/execute", dependencies=[Depends(require_scope("agent:execute"))])
@@ -89,15 +84,6 @@ async def execute(request: Request):
     platform = body.get("platform")
     user_id = body.get("user_id")
     message = body.get("message", "")
-    attachments = body.get("attachments")
-
-    if attachments:
-        log.info(
-            "attachments_received",
-            thread_key=thread_key,
-            count=len(attachments),
-            names=[a["name"] for a in attachments],
-        )
 
     session = await get_or_spawn(thread_key, harness, engine=engine)
 
@@ -112,6 +98,41 @@ async def execute(request: Request):
         ),
         media_type="text/event-stream",
     )
+
+
+async def _extract_attachments(
+    pool, thread_key: str, message_id: str, parts: list[dict],
+) -> list[dict]:
+    """Replace inline base64 image/document parts with attachment_ref parts.
+
+    Stores the binary data in the ``attachments`` table and returns a new parts
+    list where each base64 blob is replaced by a lightweight reference.
+    """
+    out: list[dict] = []
+    for part in parts:
+        ptype = part.get("type")
+        if ptype in ("image", "document"):
+            source = part.get("source", {})
+            if source.get("type") == "base64" and source.get("data"):
+                att_id = f"att-{uuid.uuid4().hex[:16]}"
+                mime_type = source.get("media_type", "application/octet-stream")
+                raw_bytes = base64.b64decode(source["data"])
+                name = part.get("name") or f"{ptype}.{mime_type.split('/')[-1]}"
+                await pool.execute(
+                    "INSERT INTO attachments (id, thread_key, message_id, name, mime_type, data) "
+                    "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
+                    att_id, thread_key, message_id, name, mime_type, raw_bytes,
+                )
+                out.append({
+                    "type": "attachment_ref",
+                    "id": att_id,
+                    "name": name,
+                    "mime_type": mime_type,
+                })
+                log.info("attachment_stored", id=att_id, name=name, mime_type=mime_type, size=len(raw_bytes))
+                continue
+        out.append(part)
+    return out
 
 
 @router.post("/messages", dependencies=[Depends(require_scope("agent:execute"))])
@@ -148,6 +169,14 @@ async def post_messages(request: Request):
         else:
             msg_id = f"{thread_key}-{int(_time.time() * 1000000)}"
 
+        # Insert the message first (attachments FK references it), then
+        # extract inline base64 blobs → attachments table → update parts.
+        has_blobs = any(
+            p.get("type") in ("image", "document")
+            and p.get("source", {}).get("type") == "base64"
+            for p in parts
+        )
+
         result = await pool.execute(
             "INSERT INTO chat_messages (id, thread_key, role, parts, user_id, metadata) "
             "VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb) "
@@ -161,6 +190,14 @@ async def post_messages(request: Request):
         )
         if "INSERT 0 1" in result:
             inserted += 1
+
+        if has_blobs:
+            new_parts = await _extract_attachments(pool, thread_key, msg_id, parts)
+            await pool.execute(
+                "UPDATE chat_messages SET parts = $1::jsonb WHERE id = $2",
+                _json.dumps(new_parts),
+                msg_id,
+            )
 
     log.info("message_buffered", thread_key=thread_key, message_count=len(raw_messages), inserted=inserted)
     return {"ok": True, "inserted": inserted}
@@ -199,12 +236,18 @@ async def get_messages(request: Request, thread_key: str, cursor: str | None = N
     last_id = None
     for row in rows:
         last_id = row["id"]
+        parts = row["parts"]
+        if isinstance(parts, str):
+            parts = _json.loads(parts)
+        meta = row["metadata"]
+        if isinstance(meta, str):
+            meta = _json.loads(meta)
         messages.append({
             "id": row["id"],
             "role": row["role"],
-            "parts": row["parts"],
+            "parts": parts,
             "user_id": row["user_id"],
-            "metadata": row["metadata"],
+            "metadata": meta,
             "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         })
 

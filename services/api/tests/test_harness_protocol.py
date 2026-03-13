@@ -233,7 +233,7 @@ class TestMessagesToContentBlocks:
         assert "report.pdf" in result[0]["text"]
         assert "application/pdf" in result[0]["text"]
         assert "att-1" in result[0]["text"]
-        assert "call attachments download" in result[0]["text"]
+        assert "/agent/attachments/att-1/download" in result[0]["text"]
 
     def test_mixed_text_and_attachment_ref(self):
         msgs = [
