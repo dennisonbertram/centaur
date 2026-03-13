@@ -632,7 +632,8 @@ function createBot() {
     ts: string,
     existing: Attachment[],
   ): Promise<Attachment[]> {
-    if (existing.length > 0 || !ts) return existing;
+    const hasUsableAttachments = existing.some((a) => a.fetchData && a.mimeType);
+    if (hasUsableAttachments || !ts) return existing;
     try {
       const slack = bot.getAdapter("slack") as SlackAdapter;
       const refetched = await slack.fetchMessage(threadId, ts);
