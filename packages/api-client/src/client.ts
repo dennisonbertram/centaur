@@ -1,5 +1,5 @@
 import type { CanonicalEvent } from "@centaur/harness-events";
-import { EventSourceParserStream } from "eventsource-parser/stream";
+import { EventSourceParserStream, type EventSourceMessage } from "eventsource-parser/stream";
 import axios, { type AxiosInstance } from "axios";
 
 export type InputContentBlock =
@@ -94,9 +94,9 @@ export class CentaurClient {
       this.log?.info("sse_streaming", { thread_key: threadKey });
       if (!res.body) return;
       const stream = (res.body as ReadableStream<Uint8Array>)
-        .pipeThrough(new TextDecoderStream())
+        .pipeThrough(new TextDecoderStream() as unknown as TransformStream<Uint8Array, string>)
         .pipeThrough(new EventSourceParserStream());
-      for await (const event of stream) {
+      for await (const event of stream as unknown as AsyncIterable<EventSourceMessage>) {
         if (event.data === "[DONE]") return;
         try { yield JSON.parse(event.data) as CanonicalEvent; } catch {}
       }
