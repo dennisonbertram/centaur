@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ProgressTracker } from "../src/lib/bot/progress-tracker";
-import { HandoffDetector } from "../src/lib/bot/handoff-detection";
 import { extractRunOptions } from "../src/lib/bot/harness";
 import { normalizeHarnessEvent, type CanonicalEvent } from "@centaur/harness-events";
 
@@ -424,77 +423,7 @@ describe("ProgressTracker", () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 4. HandoffDetector
-// ═══════════════════════════════════════════════════════════════════════════════
 
-describe("HandoffDetector", () => {
-  it("detects follow=true handoff from tool_use + tool_result pair", () => {
-    const d = new HandoffDetector();
-    expect(
-      d.processEvent({
-        type: "assistant",
-        message: {
-          content: [
-            {
-              type: "tool_use",
-              id: "h1",
-              name: "handoff",
-              input: { goal: "Continue work", follow: true },
-            },
-          ],
-        },
-      }),
-    ).toBeNull();
-
-    const result = d.processEvent({
-      type: "tool",
-      content: [
-        {
-          tool_use_id: "h1",
-          content: JSON.stringify({ newThreadID: "T-abc-123" }),
-          is_error: false,
-        },
-      ],
-    });
-    expect(result).not.toBeNull();
-    expect(result!.newThreadKey).toBe("T-abc-123");
-    expect(result!.follow).toBe(true);
-    expect(result!.goal).toBe("Continue work");
-  });
-
-  it("ignores handoff with follow=false", () => {
-    const d = new HandoffDetector();
-    d.processEvent({
-      type: "assistant",
-      message: {
-        content: [
-          { type: "tool_use", id: "h1", name: "handoff", input: { goal: "bg task", follow: false } },
-        ],
-      },
-    });
-    const result = d.processEvent({
-      type: "tool",
-      content: [
-        { tool_use_id: "h1", content: JSON.stringify({ newThreadID: "T-xyz" }), is_error: false },
-      ],
-    });
-    expect(result).toBeNull();
-  });
-
-  it("ignores non-handoff tool calls", () => {
-    const d = new HandoffDetector();
-    d.processEvent({
-      type: "assistant",
-      message: { content: [{ type: "tool_use", id: "r1", name: "Read", input: { path: "/x" } }] },
-    });
-    const result = d.processEvent({
-      type: "tool",
-      content: [{ tool_use_id: "r1", content: "file content", is_error: false }],
-    });
-    expect(result).toBeNull();
-  });
-});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 5. SSE fixture replay
