@@ -3,8 +3,9 @@ import { Chat } from "chat";
 import { createSlackAdapter, type SlackAdapter } from "@chat-adapter/slack";
 import { createPostgresState } from "@chat-adapter/state-pg";
 import { normalizeThreadKey, splitThreadKey } from "@centaur/harness-events";
-import { createCentaurClient, ApiError } from "@centaur/api-client";
-import type { InputContentBlock, CentaurClient } from "@centaur/api-client";
+import { CentaurClient } from "@centaur/api-client";
+import type { InputContentBlock } from "@centaur/api-client";
+import { AxiosError } from "axios";
 import type { CanonicalEvent } from "@centaur/harness-events";
 import type { StreamChunk } from "chat";
 import { Pool } from "pg";
@@ -30,7 +31,7 @@ function getPool(): Pool {
 let _client: CentaurClient | null = null;
 function getClient(): CentaurClient {
   if (!_client) {
-    _client = createCentaurClient({
+    _client = new CentaurClient({
       apiUrl: process.env.CENTAUR_API_URL || "http://api:8000",
       apiKey: process.env.SLACKBOT_API_KEY || "",
       logger: log,
@@ -93,13 +94,10 @@ function formatFinal(text: string, harness: string, tracker: ProgressTracker, st
 }
 
 function formatErrorForSlack(error: unknown, context: string): string {
-  if (error instanceof ApiError) {
-    if (error.retryable && error.status === null) {
-      return `${context}: API is unreachable. The service may be restarting — try again in ~30s.`;
-    }
-    if (error.status && error.status >= 500) {
-      return `${context}: API returned ${error.status}. Try again shortly.`;
-    }
+  if (error instanceof AxiosError) {
+    const status = error.response?.status;
+    if (!status) return `${context}: API is unreachable. The service may be restarting — try again in ~30s.`;
+    if (status >= 500) return `${context}: API returned ${status}. Try again shortly.`;
     return `${context}: ${error.message}`;
   }
   if (error instanceof Error) return `${context}: ${error.message}`;
