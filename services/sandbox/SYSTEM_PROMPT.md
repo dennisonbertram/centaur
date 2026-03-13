@@ -63,6 +63,14 @@
 |staking overrides → paradigmdb/db_query on "StakingOverride"
 |rules: live APIs=current | BQ views=historical | staking=discover all custodian staking tools
 
+[Granola URL routing]
+|When you see a notes.granola.ai URL, do NOT use read_web_page — the content is behind auth.
+|The Granola API cannot resolve share URLs to note IDs. Instead:
+|  1. Extract any context clues from the conversation (meeting title, date, attendees)
+|  2. Use `call granola search_notes '{"query":"<title keyword>"}'` to find the note
+|  3. If no title clue, use `call granola list_notes` to browse recent notes and match by date/attendees
+|  4. Once you find the right note, use `call granola get_note '{"note_id":"not_...","include_transcript":true}'`
+
 [Slack files]
 |Files attached to the current user message should be at /home/agent/uploads/.
 |When you see [Attached image: ...], use the look_at tool to view the image.

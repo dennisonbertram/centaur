@@ -4,18 +4,12 @@ Uses the official public API: https://docs.granola.ai
 Provides workspace-wide access to meeting notes and transcripts.
 """
 
-import re
 from typing import Any
 
 import httpx
 from centaur_sdk import secret
 
 API_BASE = "https://public-api.granola.ai"
-
-_GRANOLA_URL_RE = re.compile(
-    r"https?://notes\.granola\.ai/(?:t|d)/([0-9a-f-]+)",
-    re.IGNORECASE,
-)
 
 
 class GranolaClient:
@@ -116,48 +110,6 @@ class GranolaClient:
         query_lower = query.lower()
         all_notes = self.list_all_notes(limit=200)
         return [n for n in all_notes if query_lower in (n.get("title") or "").lower()][:limit]
-
-    def get_note_by_url(
-        self, url: str, include_transcript: bool = True
-    ) -> dict[str, Any]:
-        """Fetch a note by its Granola share URL.
-
-        Accepts URLs like:
-          - https://notes.granola.ai/t/8e354c81-...-008umkv4
-          - https://notes.granola.ai/d/8e354c81-...
-
-        The Enterprise API does not support URL-to-note resolution directly.
-        This method lists recent workspace notes and finds the matching one.
-        If the note was recently shared to a workspace folder, it will be found.
-        """
-        m = _GRANOLA_URL_RE.search(url)
-        if not m:
-            raise ValueError(
-                f"Not a valid Granola URL: {url}\n"
-                "Expected: https://notes.granola.ai/t/<id> or /d/<id>"
-            )
-
-        # List recent notes and return them with full details
-        notes = self.list_all_notes(limit=30)
-        if not notes:
-            return {"error": "No notes found in workspace", "url": url}
-
-        # Try each note — get full details for the first few
-        results = []
-        for note in notes[:10]:
-            full = self.get_note(note["id"], include_transcript=include_transcript)
-            results.append(full)
-
-        return {
-            "message": (
-                "Cannot resolve Granola URL to a specific note via the API. "
-                "Returning the 10 most recent workspace notes — match by title, "
-                "date, or attendees from context."
-            ),
-            "url": url,
-            "notes": results,
-        }
-
 
 def _client() -> GranolaClient:
     return GranolaClient()
