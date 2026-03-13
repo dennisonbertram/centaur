@@ -190,6 +190,7 @@ services:
     restart: unless-stopped
 
   web:
+    profiles: ["web"]
     build:
       context: .
       dockerfile: services/web/Dockerfile
