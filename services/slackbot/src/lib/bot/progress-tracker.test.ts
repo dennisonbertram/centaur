@@ -55,57 +55,54 @@ class ProgressTracker {
   lastAssistantText = "";
   resultText = "";
   private activeTools = new Map<string, ActiveTool>();
-  private _pendingChunks: StreamChunk[] = [];
   private initCompleted = false;
   private stepHistory: HistoryEntry[] = [];
 
-  private emitVisibleWindow(): void {
+  private *emitVisibleWindow(): Generator<StreamChunk> {
     const start = Math.max(0, this.stepHistory.length - MAX_VISIBLE_STEPS);
     for (let i = start; i < this.stepHistory.length; i++) {
       const entry = this.stepHistory[i];
-      this._pendingChunks.push({ type: "task_update", id: `step-${i - start}`, title: entry.title, status: entry.status });
+      yield { type: "task_update", id: `step-${i - start}`, title: entry.title, status: entry.status };
     }
   }
 
-  private emitSlot(historyIndex: number): void {
+  private *emitSlot(historyIndex: number): Generator<StreamChunk> {
     const windowStart = Math.max(0, this.stepHistory.length - MAX_VISIBLE_STEPS);
     const slotIndex = historyIndex - windowStart;
     if (slotIndex < 0 || slotIndex >= MAX_VISIBLE_STEPS) return;
     const entry = this.stepHistory[historyIndex];
-    this._pendingChunks.push({ type: "task_update", id: `step-${slotIndex}`, title: entry.title, status: entry.status });
+    yield { type: "task_update", id: `step-${slotIndex}`, title: entry.title, status: entry.status };
   }
 
-  private addStep(toolId: string, title: string, status: string): void {
+  private *addStep(toolId: string, title: string, status: string): Generator<StreamChunk> {
     this.stepHistory.push({ toolId, title, status });
     if (this.stepHistory.length > MAX_VISIBLE_STEPS) {
-      this.emitVisibleWindow();
+      yield* this.emitVisibleWindow();
     } else {
-      this.emitSlot(this.stepHistory.length - 1);
+      yield* this.emitSlot(this.stepHistory.length - 1);
     }
   }
 
-  private updateStep(toolId: string, title: string, status: string): void {
+  private *updateStep(toolId: string, title: string, status: string): Generator<StreamChunk> {
     const idx = this.stepHistory.findLastIndex((e) => e.toolId === toolId);
     if (idx === -1) return;
     this.stepHistory[idx].title = title;
     this.stepHistory[idx].status = status;
-    this.emitSlot(idx);
+    yield* this.emitSlot(idx);
   }
 
-  update(event: CanonicalEvent): boolean {
+  *update(event: CanonicalEvent): Generator<StreamChunk> {
     if (!this.initCompleted) {
       this.initCompleted = true;
-      this._pendingChunks.push({ type: "task_update", id: "init", title: "Started", status: "complete" });
+      yield { type: "task_update", id: "init", title: "Started", status: "complete" };
     }
     if (event.type === "assistant" && event.message?.content) {
-      let changed = false;
       let textInThisEvent = "";
       for (const block of event.message.content) {
         if (block.type === "tool_use") {
           this.lastAssistantText = "";
           this.activeTools.set(block.id, { name: block.name, input: block.input, startedAt: Date.now() });
-          changed = true;
-          this.addStep(block.id, block.name, "in_progress");
+          yield* this.addStep(block.id, block.name, "in_progress");
         } else if (block.type === "text" && block.text) {
           textInThisEvent = block.text;
         }
@@ -113,57 +110,47 @@ class ProgressTracker {
       if (textInThisEvent && this.activeTools.size === 0) {
         this.lastAssistantText = textInThisEvent;
       }
-      return changed;
+      return;
     }
 
     if (event.type === "tool" && event.content) {
-      let changed = false;
       for (const block of event.content) {
         if (this.activeTools.has(block.tool_use_id)) {
           this.activeTools.delete(block.tool_use_id);
-          changed = true;
-          this.updateStep(block.tool_use_id, "done", block.is_error ? "error" : "complete");
+          yield* this.updateStep(block.tool_use_id, "done", block.is_error ? "error" : "complete");
         }
       }
-      return changed;
+      return;
     }
 
     if (event.type === "subagent") {
       if (event.status === "started") {
-        this.addStep(event.subagent_id, event.name || "Subagent", "in_progress");
-        return true;
+        yield* this.addStep(event.subagent_id, event.name || "Subagent", "in_progress");
+        return;
       }
       if (event.status === "completed" || event.status === "failed") {
-        this.updateStep(event.subagent_id, event.name || "Subagent", event.status === "completed" ? "complete" : "error");
-        return true;
+        yield* this.updateStep(event.subagent_id, event.name || "Subagent", event.status === "completed" ? "complete" : "error");
+        return;
       }
-      return false;
+      return;
     }
 
     if (event.type === "result") {
       this.resultText = event.text;
-      return true;
+      return;
     }
 
     if (event.type === "error") {
-      this._pendingChunks.push({ type: "markdown_text", text: `Error: ${event.error}` });
-      return true;
+      yield { type: "markdown_text", text: `Error: ${event.error}` };
+      return;
     }
-
-    return false;
   }
 
-  addHandoff(goal: string, _newThreadKey: string): void {
+  *addHandoff(goal: string): Generator<StreamChunk> {
     this.activeTools.clear();
     this.lastAssistantText = "";
     this.resultText = "";
-    this.addStep(`handoff-${Date.now()}`, `Handed off → ${goal}`, "complete");
-  }
-
-  pendingChunks(): StreamChunk[] {
-    const c = this._pendingChunks;
-    this._pendingChunks = [];
-    return c;
+    yield* this.addStep(`handoff-${Date.now()}`, `Handed off → ${goal}`, "complete");
   }
 }
 
@@ -201,15 +188,15 @@ console.log("\n── Simple text response ──");
 
 test("text-only assistant message captured as final", () => {
   const t = new ProgressTracker();
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Here is your answer." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Here is your answer." }] } })];
   assert.equal(t.lastAssistantText, "Here is your answer.");
   assert.equal(finalMessage(t), "Here is your answer.");
 });
 
 test("multiple text events — last one wins", () => {
   const t = new ProgressTracker();
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "First part." }] } });
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Second part." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "First part." }] } })];
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Second part." }] } })];
   assert.equal(t.lastAssistantText, "Second part.");
 });
 
@@ -223,11 +210,11 @@ console.log("\n── Preamble before tool call (separate events — the bug) �
 test("preamble text cleared when tool_use starts (separate events)", () => {
   const t = new ProgressTracker();
   // Amp emits text first
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me look at the chat history..." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me look at the chat history..." }] } })];
   assert.equal(t.lastAssistantText, "Let me look at the chat history...");
 
   // Then emits tool_use in a separate event
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "read_thread", input: { threadID: "T-abc" } }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "read_thread", input: { threadID: "T-abc" } }] } })];
   assert.equal(t.lastAssistantText, "", "tool_use should clear preamble text");
 
   // Stream dies here (EOF without tool result or turn.done)
@@ -237,7 +224,7 @@ test("preamble text cleared when tool_use starts (separate events)", () => {
 test("preamble text cleared when tool_use starts (same event)", () => {
   const t = new ProgressTracker();
   // Amp emits text + tool_use in one event (co-located)
-  t.update({
+  [...t.update({
     type: "assistant",
     message: {
       content: [
@@ -245,7 +232,7 @@ test("preamble text cleared when tool_use starts (same event)", () => {
         { type: "tool_use", id: "t1", name: "finder", input: { query: "auth" } },
       ],
     },
-  });
+  })];
   assert.equal(t.lastAssistantText, "", "preamble in same event as tool_use should be discarded");
   assert.equal(finalMessage(t), "");
 });
@@ -260,17 +247,17 @@ test("final text after tool completes is captured correctly", () => {
   const t = new ProgressTracker();
 
   // 1. Preamble
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me check..." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me check..." }] } })];
 
   // 2. Tool use
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { path: "/foo" } }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { path: "/foo" } }] } })];
   assert.equal(t.lastAssistantText, "", "cleared by tool_use");
 
   // 3. Tool result
-  t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "file contents", is_error: false }] });
+  [...t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "file contents", is_error: false }] })];
 
   // 4. Final answer
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "The file contains X." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "The file contains X." }] } })];
   assert.equal(t.lastAssistantText, "The file contains X.");
   assert.equal(finalMessage(t), "The file contains X.");
 });
@@ -279,17 +266,17 @@ test("multiple tool calls in sequence — final text after all tools", () => {
   const t = new ProgressTracker();
 
   // Tool 1
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "I'll read two files." }] } });
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { path: "/a" } }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "I'll read two files." }] } })];
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { path: "/a" } }] } })];
   assert.equal(t.lastAssistantText, "");
-  t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "aaa", is_error: false }] });
+  [...t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "aaa", is_error: false }] })];
 
   // Tool 2
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t2", name: "Read", input: { path: "/b" } }] } });
-  t.update({ type: "tool", content: [{ tool_use_id: "t2", content: "bbb", is_error: false }] });
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t2", name: "Read", input: { path: "/b" } }] } })];
+  [...t.update({ type: "tool", content: [{ tool_use_id: "t2", content: "bbb", is_error: false }] })];
 
   // Final answer
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Both files look good." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Both files look good." }] } })];
   assert.equal(finalMessage(t), "Both files look good.");
 });
 
@@ -303,7 +290,7 @@ test("parallel tool calls — text blocked until all complete", () => {
   const t = new ProgressTracker();
 
   // Two tool_use in one event
-  t.update({
+  [...t.update({
     type: "assistant",
     message: {
       content: [
@@ -311,20 +298,20 @@ test("parallel tool calls — text blocked until all complete", () => {
         { type: "tool_use", id: "t2", name: "Read", input: { path: "/b" } },
       ],
     },
-  });
+  })];
 
   // First tool completes — still one active
-  t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "a", is_error: false }] });
+  [...t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "a", is_error: false }] })];
 
   // Amp emits intermediate text while t2 is still running
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Got the first file, waiting..." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Got the first file, waiting..." }] } })];
   assert.equal(t.lastAssistantText, "", "text while tools active should be blocked");
 
   // Second tool completes
-  t.update({ type: "tool", content: [{ tool_use_id: "t2", content: "b", is_error: false }] });
+  [...t.update({ type: "tool", content: [{ tool_use_id: "t2", content: "b", is_error: false }] })];
 
   // Now text should be accepted
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Here are both results." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Here are both results." }] } })];
   assert.equal(finalMessage(t), "Here are both results.");
 });
 
@@ -336,10 +323,10 @@ console.log("\n── Handoff ──");
 
 test("handoff clears lastAssistantText and resultText", () => {
   const t = new ProgressTracker();
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "I've handed off to a new thread." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "I've handed off to a new thread." }] } })];
   assert.equal(t.lastAssistantText, "I've handed off to a new thread.");
 
-  t.addHandoff("Continue the investigation", "new-thread-key");
+  [...t.addHandoff("Continue the investigation")];
   assert.equal(t.lastAssistantText, "");
   assert.equal(t.resultText, "");
   assert.equal(finalMessage(t), "");
@@ -347,11 +334,11 @@ test("handoff clears lastAssistantText and resultText", () => {
 
 test("handoff then new text from follow thread is captured", () => {
   const t = new ProgressTracker();
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Handing off..." }] } });
-  t.addHandoff("Do the thing", "new-key");
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Handing off..." }] } })];
+  [...t.addHandoff("Do the thing")];
 
   // Reconnected stream yields new text
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Finished the investigation." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Finished the investigation." }] } })];
   assert.equal(finalMessage(t), "Finished the investigation.");
 });
 
@@ -363,13 +350,13 @@ console.log("\n── Task (sub-agent) tool ──");
 
 test("preamble before Task tool_use is cleared", () => {
   const t = new ProgressTracker();
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me delegate this to a sub-agent." }] } });
-  t.update({
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me delegate this to a sub-agent." }] } })];
+  [...t.update({
     type: "assistant",
     message: {
       content: [{ type: "tool_use", id: "task-1", name: "Task", input: { prompt: "Fix the bug", description: "Fix type error" } }],
     },
-  });
+  })];
   assert.equal(t.lastAssistantText, "", "preamble cleared");
 
   // Stream dies mid-task
@@ -378,9 +365,9 @@ test("preamble before Task tool_use is cleared", () => {
 
 test("text after Task completes is final answer", () => {
   const t = new ProgressTracker();
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "task-1", name: "Task", input: { prompt: "Fix it" } }] } });
-  t.update({ type: "tool", content: [{ tool_use_id: "task-1", content: "Fixed 3 files", is_error: false }] });
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "The bug has been fixed." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "task-1", name: "Task", input: { prompt: "Fix it" } }] } })];
+  [...t.update({ type: "tool", content: [{ tool_use_id: "task-1", content: "Fixed 3 files", is_error: false }] })];
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "The bug has been fixed." }] } })];
   assert.equal(finalMessage(t), "The bug has been fixed.");
 });
 
@@ -392,14 +379,12 @@ console.log("\n── Subagent events ──");
 
 test("subagent events produce task_update chunks but don't affect lastAssistantText", () => {
   const t = new ProgressTracker();
-  t.update({ type: "subagent", status: "started", subagent_id: "sa-1", name: "Research task" });
-  const chunks = t.pendingChunks();
+  const chunks = [...t.update({ type: "subagent", status: "started", subagent_id: "sa-1", name: "Research task" })];
   // init + subagent start (slot-based id)
   assert.ok(chunks.some((c) => c.type === "task_update" && c.id === "step-0" && c.status === "in_progress"));
   assert.equal(t.lastAssistantText, "", "subagent start doesn't set text");
 
-  t.update({ type: "subagent", status: "completed", subagent_id: "sa-1", name: "Research task", summary: "Found 5 results" });
-  const chunks2 = t.pendingChunks();
+  const chunks2 = [...t.update({ type: "subagent", status: "completed", subagent_id: "sa-1", name: "Research task", summary: "Found 5 results" })];
   assert.ok(chunks2.some((c) => c.type === "task_update" && c.id === "step-0" && c.status === "complete"));
   assert.equal(t.lastAssistantText, "", "subagent complete doesn't set text");
 });
@@ -412,16 +397,16 @@ console.log("\n── Result event ──");
 
 test("result event takes priority over lastAssistantText", () => {
   const t = new ProgressTracker();
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Intermediate text." }] } });
-  t.update({ type: "result", text: "Final result from turn.done" });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Intermediate text." }] } })];
+  [...t.update({ type: "result", text: "Final result from turn.done" })];
   assert.equal(t.resultText, "Final result from turn.done");
   assert.equal(finalMessage(t), "Final result from turn.done");
 });
 
 test("result event is preferred even when lastAssistantText is set later", () => {
   const t = new ProgressTracker();
-  t.update({ type: "result", text: "The real answer" });
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Some trailing text" }] } });
+  [...t.update({ type: "result", text: "The real answer" })];
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Some trailing text" }] } })];
   // resultText takes priority in finalMessage()
   assert.equal(finalMessage(t), "The real answer");
 });
@@ -434,8 +419,7 @@ console.log("\n── Error events ──");
 
 test("error event produces markdown_text chunk", () => {
   const t = new ProgressTracker();
-  t.update({ type: "error", error: "Sandbox OOM killed" });
-  const chunks = t.pendingChunks();
+  const chunks = [...t.update({ type: "error", error: "Sandbox OOM killed" })];
   assert.ok(chunks.some((c) => c.type === "markdown_text" && (c as any).text.includes("Sandbox OOM")));
 });
 
@@ -447,7 +431,7 @@ console.log("\n── Reasoning events ──");
 
 test("reasoning event does not affect lastAssistantText", () => {
   const t = new ProgressTracker();
-  t.update({ type: "reasoning", text: "I need to think about this carefully..." });
+  [...t.update({ type: "reasoning", text: "I need to think about this carefully..." })];
   assert.equal(t.lastAssistantText, "");
   assert.equal(finalMessage(t), "");
 });
@@ -462,24 +446,24 @@ test("full turn: reasoning → preamble → Read → edit_file → final text", 
   const t = new ProgressTracker();
 
   // Extended thinking
-  t.update({ type: "reasoning", text: "The user wants me to fix the bug in auth.ts" });
+  [...t.update({ type: "reasoning", text: "The user wants me to fix the bug in auth.ts" })];
 
   // Preamble text
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "I'll fix the authentication bug." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "I'll fix the authentication bug." }] } })];
   assert.equal(t.lastAssistantText, "I'll fix the authentication bug.");
 
   // Read file
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "r1", name: "Read", input: { path: "/src/auth.ts" } }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "r1", name: "Read", input: { path: "/src/auth.ts" } }] } })];
   assert.equal(t.lastAssistantText, "", "cleared by tool_use");
 
-  t.update({ type: "tool", content: [{ tool_use_id: "r1", content: "export function login() {...}", is_error: false }] });
+  [...t.update({ type: "tool", content: [{ tool_use_id: "r1", content: "export function login() {...}", is_error: false }] })];
 
   // Edit file
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "e1", name: "edit_file", input: { path: "/src/auth.ts", old_str: "old", new_str: "new" } }] } });
-  t.update({ type: "tool", content: [{ tool_use_id: "e1", content: "ok", is_error: false }] });
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "e1", name: "edit_file", input: { path: "/src/auth.ts", old_str: "old", new_str: "new" } }] } })];
+  [...t.update({ type: "tool", content: [{ tool_use_id: "e1", content: "ok", is_error: false }] })];
 
   // Final answer
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Fixed the auth bug by updating the token validation." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Fixed the auth bug by updating the token validation." }] } })];
   assert.equal(finalMessage(t), "Fixed the auth bug by updating the token validation.");
 });
 
@@ -491,16 +475,16 @@ console.log("\n── Stream death scenarios ──");
 
 test("stream dies after preamble + tool_use (no tool result) → empty", () => {
   const t = new ProgressTracker();
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me look at the Slack thread..." }] } });
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "read_thread", input: {} }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Let me look at the Slack thread..." }] } })];
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "read_thread", input: {} }] } })];
   // EOF
   assert.equal(finalMessage(t), "");
 });
 
 test("stream dies after tool completes but before assistant text → empty", () => {
   const t = new ProgressTracker();
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { path: "/x" } }] } });
-  t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "data", is_error: false }] });
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: { path: "/x" } }] } })];
+  [...t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "data", is_error: false }] })];
   // EOF — no final text
   assert.equal(finalMessage(t), "");
 });
@@ -509,13 +493,13 @@ test("stream dies mid second tool — preamble from first answer cycle is gone",
   const t = new ProgressTracker();
 
   // First cycle completes fine
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }] } });
-  t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "ok", is_error: false }] });
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "Got the data, now editing..." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Read", input: {} }] } })];
+  [...t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "ok", is_error: false }] })];
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "Got the data, now editing..." }] } })];
   assert.equal(t.lastAssistantText, "Got the data, now editing...");
 
   // Second tool starts — clears the intermediate text
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t2", name: "edit_file", input: {} }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t2", name: "edit_file", input: {} }] } })];
   assert.equal(t.lastAssistantText, "");
 
   // EOF — stream dies mid-edit
@@ -530,9 +514,9 @@ console.log("\n── Tool errors ──");
 
 test("tool error followed by final text works correctly", () => {
   const t = new ProgressTracker();
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { cmd: "make" } }] } });
-  t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "exit code 1", is_error: true }] });
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "The build failed. Here's the error..." }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "Bash", input: { cmd: "make" } }] } })];
+  [...t.update({ type: "tool", content: [{ tool_use_id: "t1", content: "exit code 1", is_error: true }] })];
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "The build failed. Here's the error..." }] } })];
   assert.equal(finalMessage(t), "The build failed. Here's the error...");
 });
 
@@ -544,8 +528,8 @@ console.log("\n── Handoff tool call ──");
 
 test("handoff tool_use clears preamble like any other tool", () => {
   const t = new ProgressTracker();
-  t.update({ type: "assistant", message: { content: [{ type: "text", text: "I'll hand this off to a new thread." }] } });
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "h1", name: "handoff", input: { goal: "Continue research", follow: true } }] } });
+  [...t.update({ type: "assistant", message: { content: [{ type: "text", text: "I'll hand this off to a new thread." }] } })];
+  [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "h1", name: "handoff", input: { goal: "Continue research", follow: true } }] } })];
   assert.equal(t.lastAssistantText, "", "handoff tool_use clears text");
   assert.equal(finalMessage(t), "");
 });
@@ -561,12 +545,10 @@ test("first 5 tools each get a unique slot", () => {
   const starts: StreamChunk[] = [];
 
   for (let i = 0; i < 5; i++) {
-    t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { cmd: `echo ${i}` } }] } });
-    const chunks = t.pendingChunks();
+    const chunks = [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { cmd: `echo ${i}` } }] } })];
     const toolChunks = chunks.filter((c) => c.type === "task_update" && (c as any).id !== "init");
     starts.push(...toolChunks);
-    t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] });
-    t.pendingChunks(); // drain completions
+    [...t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] })];
   }
 
   const ids = starts.map((c) => (c as any).id);
@@ -578,15 +560,12 @@ test("6th tool shifts window: slots show tools 2-6 instead of 1-5", () => {
 
   // Complete 5 tools
   for (let i = 0; i < 5; i++) {
-    t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { path: `/file${i}` } }] } });
-    t.pendingChunks();
-    t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] });
-    t.pendingChunks();
+    [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { path: `/file${i}` } }] } })];
+    [...t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] })];
   }
 
   // Start 6th tool — should trigger a shift
-  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t5", name: "Read", input: { path: "/file5" } }] } });
-  const shiftChunks = t.pendingChunks();
+  const shiftChunks = [...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t5", name: "Read", input: { path: "/file5" } }] } })];
 
   // Should re-emit all 5 slots with shifted content:
   // step-0=t1✓, step-1=t2✓, step-2=t3✓, step-3=t4✓, step-4=t5⏳
@@ -607,10 +586,8 @@ test("all slot IDs stay within step-0 to step-4 regardless of tool count", () =>
   const allChunks: StreamChunk[] = [];
 
   for (let i = 0; i < 10; i++) {
-    t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { path: `/f${i}` } }] } });
-    allChunks.push(...t.pendingChunks());
-    t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] });
-    allChunks.push(...t.pendingChunks());
+    allChunks.push(...t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { path: `/f${i}` } }] } }));
+    allChunks.push(...t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] }));
   }
 
   const taskUpdates = allChunks.filter((c) => c.type === "task_update" && (c as any).id !== "init");
