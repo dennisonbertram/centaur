@@ -373,12 +373,14 @@ function createBot() {
           blocks.push({
             type: "image",
             source: { type: "base64", media_type: att.mimeType, data: b64 },
-          });
+            ...(att.name ? { name: att.name } : {}),
+          } as ContentBlock);
         } else {
           blocks.push({
             type: "document",
             source: { type: "base64", media_type: att.mimeType, data: b64 },
-          });
+            ...(att.name ? { name: att.name } : {}),
+          } as ContentBlock);
         }
       } catch (err) {
         log.warn("attachment_fetch_failed", {
