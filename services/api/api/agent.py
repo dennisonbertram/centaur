@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import queue
 import threading
 import time
@@ -201,7 +200,7 @@ def _spawn_sync(
 
 def _stream_turn(
     session: SandboxSession,
-    message: str | None = None,
+    message: str | list | None = None,
     *,
     logs: bool = False,
     skip_done_count: int = 0,
@@ -252,10 +251,14 @@ def _stream_turn(
     )
 
     if message is not None:
+        # Build the turn.start payload. When message is a list of Anthropic
+        # content blocks, send as "content"; otherwise send plain "text".
+        if isinstance(message, list):
+            turn_payload = {"type": "turn.start", "turn_id": turn_id, "content": message}
+        else:
+            turn_payload = {"type": "turn.start", "turn_id": turn_id, "text": message}
         try:
-            backend.write_stdin(
-                session, {"type": "turn.start", "turn_id": turn_id, "text": message}
-            )
+            backend.write_stdin(session, turn_payload)
         except (BrokenPipeError, OSError) as exc:
             log.warning("stdin_broken_pipe", sandbox=session.sandbox_id[:12], error=str(exc))
             st = backend.status(session)
@@ -268,9 +271,7 @@ def _stream_turn(
             with rt.turn_lock:
                 rt.active_queue = turn_queue
             _ensure_reader(session, force=True)
-            backend.write_stdin(
-                session, {"type": "turn.start", "turn_id": turn_id, "text": message}
-            )
+            backend.write_stdin(session, turn_payload)
 
     first_output = False
     done_seen = 0
@@ -468,76 +469,6 @@ async def get_or_spawn(
     return session
 
 
-async def _download_attachments_into_sandbox(
-    session: SandboxSession,
-    attachments: list[dict[str, str]],
-) -> None:
-    """Download Slack file attachments and copy them into the sandbox container."""
-    import io
-    import re
-    import tarfile
-
-    import httpx
-
-    from api.tool_manager import _resolve_secrets
-
-    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
-    if not slack_token:
-        resolved = await _resolve_secrets(["SLACK_BOT_TOKEN"])
-        slack_token = resolved.get("SLACK_BOT_TOKEN", "")
-    if not slack_token:
-        log.warning("slack_file_download_skipped", reason="no SLACK_BOT_TOKEN")
-        return
-
-    backend = get_backend()
-    client = backend._get_client()
-    try:
-        container = client.containers.get(session.sandbox_id)
-    except Exception:
-        log.warning("slack_file_download_skipped", reason="container not found")
-        return
-
-    # Create uploads dir
-    container.exec_run(["mkdir", "-p", "/home/agent/uploads"], user="agent")
-
-    tar_buffer = io.BytesIO()
-    downloaded = 0
-    with tarfile.open(fileobj=tar_buffer, mode="w") as tar:
-        for att in attachments:
-            url = att.get("url", "")
-            name = att.get("name", "unknown")
-            if not url:
-                continue
-            try:
-                safe_name = re.sub(r"[^\w\-.]", "_", name)
-                async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
-                    resp = await http.get(
-                        url, headers={"Authorization": f"Bearer {slack_token}"}
-                    )
-                    resp.raise_for_status()
-                data = resp.content
-                info = tarfile.TarInfo(name=safe_name)
-                info.size = len(data)
-                info.mode = 0o644
-                tar.addfile(info, io.BytesIO(data))
-                downloaded += 1
-            except Exception as exc:
-                log.warning(
-                    "slack_file_download_failed",
-                    file=name,
-                    error=str(exc),
-                )
-
-    if downloaded > 0:
-        tar_buffer.seek(0)
-        container.put_archive("/home/agent/uploads", tar_buffer)
-        log.info(
-            "slack_files_uploaded",
-            sandbox=session.sandbox_id[:12],
-            count=downloaded,
-        )
-
-
 async def stream_reconnect(
     session: SandboxSession, *, skip_done_count: int = 0
 ) -> AsyncIterator[str]:
@@ -634,9 +565,8 @@ def _inject_session_context(session: SandboxSession, context: str) -> None:
 
 async def stream_exec(
     session: SandboxSession,
-    message: str,
+    message: str | list,
     *,
-    attachments: list[dict[str, str]] | None = None,
     platform: str | None = None,
     user_id: str | None = None,
 ) -> AsyncIterator[str]:
@@ -644,9 +574,6 @@ async def stream_exec(
     await _db_update_state(session.thread_key, "running")
     started_at = time.monotonic()
     try:
-        if attachments:
-            await _download_attachments_into_sandbox(session, attachments)
-
         # Inject session context into the system prompt on first turn
         rt = _get_runtime(session.sandbox_id)
         if rt.turn_counter == 0 and (platform or user_id):
@@ -676,7 +603,13 @@ async def stream_exec(
                 pass
 
         # Persist after stream completes (async context — safe to use asyncpg)
-        await _persist_turn_messages(session.thread_key, message, result_text, session.harness)
+        # Extract plain text for persistence when message is content blocks
+        persist_text = message
+        if isinstance(message, list):
+            persist_text = " ".join(
+                b.get("text", "") for b in message if b.get("type") == "text"
+            ).strip() or "(multimodal message)"
+        await _persist_turn_messages(session.thread_key, persist_text, result_text, session.harness)
         await _db_update_state(session.thread_key, "error" if stream_failed else "idle")
         record_agent_execution(
             harness=session.harness,

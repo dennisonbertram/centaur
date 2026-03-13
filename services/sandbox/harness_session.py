@@ -212,7 +212,15 @@ def run_persistent() -> None:
                 proc.send_signal(signal.SIGINT)
         elif mtype == "turn.start":
             current_turn_id = msg.get("turn_id")
-            text = msg.get("text", "")
+            # Support both plain text and Anthropic content blocks.
+            # When "content" is a list of content blocks, use directly;
+            # otherwise wrap "text" in a single text block.
+            content = msg.get("content")
+            if isinstance(content, list) and len(content) > 0:
+                content_blocks = content
+            else:
+                text = msg.get("text", "")
+                content_blocks = [{"type": "text", "text": text}]
             if proc is None or proc.poll() is not None:
                 proc = start_harness(build_persistent_cmd())
                 _spawn_forwarders(proc)
@@ -222,7 +230,7 @@ def run_persistent() -> None:
                     "type": "user",
                     "message": {
                         "role": "user",
-                        "content": [{"type": "text", "text": text}],
+                        "content": content_blocks,
                     },
                 }) + "\n"
             )
@@ -240,7 +248,13 @@ def run_oneshot() -> None:
         elif mtype == "turn.start":
             current_turn_id = msg.get("turn_id")
             last_result_text = None
-            text = msg.get("text", "")
+            content = msg.get("content")
+            if isinstance(content, list) and len(content) > 0:
+                text = " ".join(
+                    b.get("text", "") for b in content if b.get("type") == "text"
+                ).strip() or ""
+            else:
+                text = msg.get("text", "")
             proc = start_harness(build_oneshot_cmd(text, agent_thread_id))
             out_t, err_t = _spawn_forwarders(proc)
             proc.wait()

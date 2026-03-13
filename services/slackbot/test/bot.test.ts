@@ -15,22 +15,37 @@ function finalMessage(t: ProgressTracker): string {
   return (t.resultText || t.lastAssistantText).trim();
 }
 
-// Mirror of the annotation logic in bot.ts handleMessage — kept in sync.
-function buildAnnotations(
-  attachments: Array<{ url?: string; name?: string; mimeType?: string }>,
-): string {
-  const valid = attachments.filter(
-    (a): a is { url: string; name: string; mimeType?: string } => !!a.url && !!a.name,
-  );
-  if (valid.length === 0) return "";
-  return valid
-    .map((a) => {
-      const p = `/home/agent/uploads/${a.name}`;
-      return a.mimeType?.startsWith("image/")
-        ? `[Attached image: ${p}]`
-        : `[Attached file: ${p}]`;
-    })
-    .join("\n");
+// Mirror of the content block resolution logic in bot.ts — kept in sync.
+type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+  | { type: "document"; source: { type: "base64"; media_type: string; data: string } };
+
+async function resolveAttachmentBlocks(
+  attachments: Array<{ url?: string; name?: string; mimeType?: string; fetchData?: () => Promise<Buffer> }>,
+): Promise<ContentBlock[]> {
+  const blocks: ContentBlock[] = [];
+  for (const att of attachments) {
+    if (!att.fetchData || !att.mimeType) continue;
+    try {
+      const data = await att.fetchData();
+      const b64 = data.toString("base64");
+      if (att.mimeType.startsWith("image/")) {
+        blocks.push({
+          type: "image",
+          source: { type: "base64", media_type: att.mimeType, data: b64 },
+        });
+      } else {
+        blocks.push({
+          type: "document",
+          source: { type: "base64", media_type: att.mimeType, data: b64 },
+        });
+      }
+    } catch {
+      // skip failed fetches
+    }
+  }
+  return blocks;
 }
 
 function parseSSEFile(filePath: string): Record<string, unknown>[] {
@@ -82,75 +97,113 @@ function replayFixture(name: string) {
 // 1. Attachment annotations
 // ═══════════════════════════════════════════════════════════════════════════════
 
-describe("attachment annotations", () => {
-  it("image mimeType → [Attached image: ...]", () => {
-    expect(
-      buildAnnotations([
-        { url: "https://files.slack.com/a", name: "screenshot.png", mimeType: "image/png" },
-      ]),
-    ).toBe("[Attached image: /home/agent/uploads/screenshot.png]");
+describe("attachment content blocks", () => {
+  it("image mimeType → image content block", async () => {
+    const blocks = await resolveAttachmentBlocks([
+      {
+        name: "screenshot.png",
+        mimeType: "image/png",
+        fetchData: async () => Buffer.from("fake-png-data"),
+      },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("image");
+    expect((blocks[0] as any).source.media_type).toBe("image/png");
+    expect((blocks[0] as any).source.data).toBe(Buffer.from("fake-png-data").toString("base64"));
   });
 
-  it("non-image mimeType → [Attached file: ...]", () => {
-    expect(
-      buildAnnotations([
-        { url: "https://files.slack.com/a", name: "report.pdf", mimeType: "application/pdf" },
-      ]),
-    ).toBe("[Attached file: /home/agent/uploads/report.pdf]");
+  it("non-image mimeType → document content block", async () => {
+    const blocks = await resolveAttachmentBlocks([
+      {
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        fetchData: async () => Buffer.from("fake-pdf-data"),
+      },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("document");
+    expect((blocks[0] as any).source.media_type).toBe("application/pdf");
   });
 
-  it("undefined mimeType → [Attached file: ...]", () => {
-    expect(
-      buildAnnotations([{ url: "https://files.slack.com/a", name: "data.csv" }]),
-    ).toBe("[Attached file: /home/agent/uploads/data.csv]");
+  it("skips attachments without fetchData", async () => {
+    const blocks = await resolveAttachmentBlocks([
+      { url: "https://files.slack.com/a", name: "data.csv", mimeType: "text/csv" },
+    ]);
+    expect(blocks).toHaveLength(0);
   });
 
-  it("mixed image and non-image attachments", () => {
-    expect(
-      buildAnnotations([
-        { url: "https://x/1", name: "photo.jpg", mimeType: "image/jpeg" },
-        { url: "https://x/2", name: "doc.xlsx", mimeType: "application/vnd.ms-excel" },
-        { url: "https://x/3", name: "chart.gif", mimeType: "image/gif" },
-      ]),
-    ).toBe(
-      "[Attached image: /home/agent/uploads/photo.jpg]\n" +
-        "[Attached file: /home/agent/uploads/doc.xlsx]\n" +
-        "[Attached image: /home/agent/uploads/chart.gif]",
-    );
+  it("skips attachments without mimeType", async () => {
+    const blocks = await resolveAttachmentBlocks([
+      { name: "mystery", fetchData: async () => Buffer.from("data") },
+    ]);
+    expect(blocks).toHaveLength(0);
   });
 
-  it("filters out attachments with missing url or name", () => {
-    expect(
-      buildAnnotations([
-        { url: "", name: "no-url.png", mimeType: "image/png" },
-        { url: "https://x/b", name: "" },
-        { url: "https://x/c", name: "good.txt", mimeType: "text/plain" },
-      ]),
-    ).toBe("[Attached file: /home/agent/uploads/good.txt]");
+  it("mixed image and document attachments", async () => {
+    const blocks = await resolveAttachmentBlocks([
+      { name: "photo.jpg", mimeType: "image/jpeg", fetchData: async () => Buffer.from("jpg") },
+      { name: "doc.xlsx", mimeType: "application/vnd.ms-excel", fetchData: async () => Buffer.from("xlsx") },
+      { name: "chart.gif", mimeType: "image/gif", fetchData: async () => Buffer.from("gif") },
+    ]);
+    expect(blocks).toHaveLength(3);
+    expect(blocks[0].type).toBe("image");
+    expect(blocks[1].type).toBe("document");
+    expect(blocks[2].type).toBe("image");
   });
 
-  it("returns empty string for empty array", () => {
-    expect(buildAnnotations([])).toBe("");
+  it("returns empty array for empty input", async () => {
+    const blocks = await resolveAttachmentBlocks([]);
+    expect(blocks).toHaveLength(0);
   });
 
-  it("image/svg+xml counts as image", () => {
-    expect(
-      buildAnnotations([
-        { url: "https://x/s", name: "logo.svg", mimeType: "image/svg+xml" },
-      ]),
-    ).toBe("[Attached image: /home/agent/uploads/logo.svg]");
+  it("skips attachments where fetchData throws", async () => {
+    const blocks = await resolveAttachmentBlocks([
+      {
+        name: "broken.pdf",
+        mimeType: "application/pdf",
+        fetchData: async () => { throw new Error("network error"); },
+      },
+      {
+        name: "good.png",
+        mimeType: "image/png",
+        fetchData: async () => Buffer.from("png-data"),
+      },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("image");
   });
 
-  it("video and audio are files, not images", () => {
-    expect(
-      buildAnnotations([
-        { url: "https://x/v", name: "clip.mp4", mimeType: "video/mp4" },
-        { url: "https://x/a", name: "voice.ogg", mimeType: "audio/ogg" },
-      ]),
-    ).toBe(
-      "[Attached file: /home/agent/uploads/clip.mp4]\n" +
-        "[Attached file: /home/agent/uploads/voice.ogg]",
-    );
+  it("image/svg+xml counts as image", async () => {
+    const blocks = await resolveAttachmentBlocks([
+      { name: "logo.svg", mimeType: "image/svg+xml", fetchData: async () => Buffer.from("svg") },
+    ]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("image");
+  });
+
+  it("video and audio are documents, not images", async () => {
+    const blocks = await resolveAttachmentBlocks([
+      { name: "clip.mp4", mimeType: "video/mp4", fetchData: async () => Buffer.from("mp4") },
+      { name: "voice.ogg", mimeType: "audio/ogg", fetchData: async () => Buffer.from("ogg") },
+    ]);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].type).toBe("document");
+    expect(blocks[1].type).toBe("document");
+  });
+
+  it("content blocks include correct base64 source structure", async () => {
+    const blocks = await resolveAttachmentBlocks([
+      {
+        name: "test.pdf",
+        mimeType: "application/pdf",
+        fetchData: async () => Buffer.from("hello world"),
+      },
+    ]);
+    expect(blocks).toHaveLength(1);
+    const block = blocks[0] as { type: "document"; source: { type: string; media_type: string; data: string } };
+    expect(block.source.type).toBe("base64");
+    expect(block.source.media_type).toBe("application/pdf");
+    expect(block.source.data).toBe(Buffer.from("hello world").toString("base64"));
   });
 });
 

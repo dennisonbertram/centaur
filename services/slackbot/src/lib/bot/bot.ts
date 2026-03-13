@@ -9,6 +9,7 @@ import {
   normalizeThreadKey,
   postThreadContextMessage,
   reconnectStreamingWithRetries,
+  type ContentBlock,
   type Harness,
 } from "./harness";
 import { splitThreadKey, type CanonicalEvent } from "@centaur/harness-events";
@@ -61,6 +62,35 @@ function looksIncomplete(text: string): boolean {
   if (/\blet me\b.{0,30}$/i.test(trimmed)) return true;
   if (/\bI'll\b.{0,30}$/i.test(trimmed)) return true;
   return false;
+}
+
+/**
+ * Poll GET /agent/status until the agent is idle, then return last_result.
+ * Used as a fallback when Slack streaming expires before the agent finishes.
+ */
+async function pollForLastResult(threadKey: string, maxWaitMs = 5 * 60_000): Promise<string> {
+  const deadline = Date.now() + maxWaitMs;
+  const interval = 3_000;
+  while (Date.now() < deadline) {
+    try {
+      const res = await resilientFetch(
+        `${API_URL}/agent/status?key=${encodeURIComponent(threadKey)}`,
+        { timeoutMs: 10_000, maxAttempts: 1 },
+      );
+      if (res.ok) {
+        const data = await res.json() as Record<string, unknown>;
+        if (!data.busy) {
+          const result = data.last_result;
+          if (typeof result === "string" && result.trim()) return result.trim();
+          return "";
+        }
+      }
+    } catch {
+      // best-effort — keep polling
+    }
+    await new Promise((r) => setTimeout(r, interval));
+  }
+  return "";
 }
 
 const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "";
@@ -210,11 +240,10 @@ function createBot() {
 
   async function* streamProgress(
     threadKey: string,
-    message: string,
+    message: string | ContentBlock[],
     harness: Harness,
     tracker: ProgressTracker,
     executionStartedAt: number,
-    attachments?: Array<{ url: string; name: string; mimeType?: string }>,
     options?: { platform?: string; userId?: string },
   ): AsyncGenerator<StreamChunk> {
     let totalYieldedCount = 0;
@@ -228,7 +257,7 @@ function createBot() {
 
     // Phase 1: initial execute — sends turn.start to the container.
     const phase1 = drainStreamChunks(
-      executeStreamingWithBusyRetries(threadKey, message, harness, attachments, options),
+      executeStreamingWithBusyRetries(threadKey, message, harness, options),
       tracker, new HandoffDetector(),
     );
     let phase1Result: { streamReturn: string; yieldedCount: number; handoff: HandoffResult | null };
@@ -311,11 +340,41 @@ function createBot() {
     }
   }
 
+  async function resolveAttachmentBlocks(
+    attachments: Array<{ url?: string; name?: string; mimeType?: string; fetchData?: () => Promise<Buffer> }>,
+  ): Promise<ContentBlock[]> {
+    const blocks: ContentBlock[] = [];
+    for (const att of attachments) {
+      if (!att.fetchData || !att.mimeType) continue;
+      try {
+        const data = await att.fetchData();
+        const b64 = data.toString("base64");
+        if (att.mimeType.startsWith("image/")) {
+          blocks.push({
+            type: "image",
+            source: { type: "base64", media_type: att.mimeType, data: b64 },
+          });
+        } else {
+          blocks.push({
+            type: "document",
+            source: { type: "base64", media_type: att.mimeType, data: b64 },
+          });
+        }
+      } catch (err) {
+        log.warn("attachment_fetch_failed", {
+          name: att.name || "unknown",
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return blocks;
+  }
+
   async function handleMessage(
     thread: Parameters<Parameters<typeof bot.onNewMention>[0]>[0],
     messageText: string,
     isFirstMessage: boolean,
-    attachments?: Array<{ url?: string; name?: string; mimeType?: string }>,
+    attachments?: Array<{ url?: string; name?: string; mimeType?: string; fetchData?: () => Promise<Buffer> }>,
     userId?: string,
     slackTs?: string,
   ) {
@@ -370,27 +429,18 @@ function createBot() {
         threadHistory = await fetchThreadHistory(thread, slackTs);
       }
 
-      let message = isFirstMessage ? threadHistory + instruction : instruction;
-
-      // Append file attachment annotations so the agent knows files are present
-      const validAttachments = (attachments || []).filter(
-        (a): a is { url: string; name: string; mimeType?: string } => !!a.url && !!a.name,
-      );
-      if (validAttachments.length > 0) {
-        const annotations = validAttachments
-          .map((a) => {
-            const path = `/home/agent/uploads/${a.name}`;
-            return a.mimeType?.startsWith("image/")
-              ? `[Attached image: ${path}]`
-              : `[Attached file: ${path}]`;
-          })
-          .join("\n");
-        message = `${message}\n\n${annotations}`;
-      }
+      let textMessage = isFirstMessage ? threadHistory + instruction : instruction;
 
       if (budgetMode) {
-        message = `[budget: ${budgetMode}]\n\n${message}`;
+        textMessage = `[budget: ${budgetMode}]\n\n${textMessage}`;
       }
+
+      // Resolve file attachments into Anthropic content blocks (base64-encoded).
+      // The Chat SDK's fetchData() handles Slack auth + redirects natively.
+      const contentBlocks = await resolveAttachmentBlocks(attachments || []);
+      const message: string | ContentBlock[] = contentBlocks.length > 0
+        ? [{ type: "text" as const, text: textMessage }, ...contentBlocks]
+        : textMessage;
 
       const tracker = new ProgressTracker();
       const executionStartedAt = Date.now();
@@ -400,14 +450,22 @@ function createBot() {
       // everything appears in a single Slack message (no duplicate follow-up).
       let sentMessage: Awaited<ReturnType<typeof thread.post>> | null = null;
       try {
-        sentMessage = await thread.post(streamProgress(threadKey, message, harness, tracker, executionStartedAt, validAttachments, { platform: "slack", userId }));
+        sentMessage = await thread.post(streamProgress(threadKey, message, harness, tracker, executionStartedAt, { platform: "slack", userId }));
       } catch (streamErr) {
         // Slack killed the streaming state before we called stop() (long-running turn).
-        // Fall back to posting a plain message with whatever result we accumulated.
+        // Fall back to posting a plain message with whatever result we accumulated,
+        // or poll the API for the final result if we don't have one yet.
         const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
         if (errMsg.includes("message_not_in_streaming_state")) {
           log.warn("slack_stream_expired", { thread: threadKey, error: errMsg });
-          const fallback = (tracker.resultText || tracker.lastAssistantText).trim();
+          let fallback = (tracker.resultText || tracker.lastAssistantText).trim();
+
+          // If we don't have the final answer yet, poll the API until the agent
+          // finishes (it's still running — Slack just expired the stream).
+          if (!fallback || isLowValueResult(fallback)) {
+            fallback = await pollForLastResult(normalizeThreadKey(threadKey));
+          }
+
           if (fallback && !isLowValueResult(fallback)) {
             await thread.post({ markdown: fallback });
           } else if (THREAD_VIEWER_URL) {
@@ -476,16 +534,16 @@ function createBot() {
     if (message.author.isMe) return;
     if (message.author.isBot) return;
     await thread.subscribe();
-    let attachments = message.attachments?.map((a) => ({ url: a.url, name: a.name, mimeType: a.mimeType }));
+    let attachments = message.attachments ? [...message.attachments] : [];
     const mentionTs = (message as { ts?: string }).ts || "";
 
     // Slack app_mention events don't include files — re-fetch the message to get them
-    if ((!attachments || attachments.length === 0) && mentionTs) {
+    if (attachments.length === 0 && mentionTs) {
       try {
         const slack = bot.getAdapter("slack") as SlackAdapter;
         const refetched = await slack.fetchMessage(thread.id, mentionTs);
         if (refetched?.attachments && refetched.attachments.length > 0) {
-          attachments = refetched.attachments.map((a) => ({ url: a.url, name: a.name, mimeType: a.mimeType }));
+          attachments = [...refetched.attachments];
           log.info("mention_files_refetched", { thread: thread.id, count: attachments.length });
         }
       } catch (err) {
@@ -555,11 +613,11 @@ function createBot() {
   bot.onSubscribedMessage(async (thread, message) => {
     if (message.author.isMe) return;
     if (message.author.isBot) return;
-    const attachments = message.attachments?.map((a) => ({ url: a.url, name: a.name, mimeType: a.mimeType }));
+    const rawAttachments = message.attachments || [];
     if (!message.isMention) {
       const text = (message.text || "").trim();
       const threadKey = normalizeThreadKey(thread.id);
-      const files = (attachments || [])
+      const files = rawAttachments
         .filter((a) => !!a.url && !!a.name)
         .map((a) => ({ url: a.url!, name: a.name!, mimeType: a.mimeType }));
       if (!text && files.length === 0) return;
@@ -589,7 +647,7 @@ function createBot() {
       return;
     }
     const subTs = (message as { ts?: string }).ts || "";
-    await handleMessage(thread, message.text, false, attachments, message.author.userId, subTs);
+    await handleMessage(thread, message.text, false, rawAttachments, message.author.userId, subTs);
   });
 
   return bot;

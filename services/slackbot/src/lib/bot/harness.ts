@@ -257,11 +257,15 @@ async function* readSSEStream(
   return { lastAssistantText, resultText, sawDone };
 }
 
+export type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
+  | { type: "document"; source: { type: "base64"; media_type: string; data: string } };
+
 export async function* executeStreaming(
   threadKey: string,
-  message: string,
+  message: string | ContentBlock[],
   harness?: Harness | null,
-  attachments?: Array<{ url: string; name: string; mimeType?: string }>,
   options?: { platform?: string; userId?: string },
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const normalizedKey = normalizeThreadKey(threadKey);
@@ -273,9 +277,6 @@ export async function* executeStreaming(
     message,
     harness: harnessName,
   };
-  if (attachments && attachments.length > 0) {
-    body.attachments = attachments;
-  }
   if (options?.platform) body.platform = options.platform;
   if (options?.userId) body.user_id = options.userId;
   const res = await resilientFetch(`${API_URL}/agent/execute`, {
@@ -378,15 +379,14 @@ export async function fetchThreadHarness(threadKey: string): Promise<Harness | n
 
 export async function* executeStreamingWithBusyRetries(
   threadKey: string,
-  message: string,
+  message: string | ContentBlock[],
   harness: Harness,
-  attachments?: Array<{ url: string; name: string; mimeType?: string }>,
   options?: { platform?: string; userId?: string },
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const maxAttempts = 4;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return yield* executeStreaming(threadKey, message, harness, attachments, options);
+      return yield* executeStreaming(threadKey, message, harness, options);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       if (isBusyRunError(detail) && attempt < maxAttempts) {
