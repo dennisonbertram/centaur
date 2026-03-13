@@ -84,7 +84,7 @@ USER agent
 WORKDIR /home/agent
 
 # No RUN instructions after these — all repo-local content at the very end.
-COPY --link --chown=1001:1001 .agents/skills/qa /home/agent/.agents/skills/dogfood
+COPY --link --chown=1001:1001 .agents/skills/ /home/agent/.agents/skills/
 COPY --link --chown=1001:1001 services/sandbox/SYSTEM_PROMPT.md /home/agent/AGENTS.md
 
 ENTRYPOINT ["/entrypoint.sh"]
