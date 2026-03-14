@@ -8,6 +8,8 @@ import { log } from "@/lib/logger";
 import { ProgressTracker } from "./progress-tracker";
 
 const KEEPALIVE_MS = 120_000; // 2 min — Slack expires streaming state after ~5 min
+const STREAM_EXPIRED_POLL_INTERVAL_MS = 3_000;
+const STREAM_EXPIRED_POLL_MAX_MS = 5 * 60_000;
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -112,25 +114,66 @@ export class SlackBot {
 
     try {
       await thread.post(this.stream(threadKey, text, tracker, userId, t0));
-      const finalText = (tracker.resultText || tracker.lastAssistantText).trim();
-      log.info("execute_complete", { thread_key: threadKey, duration_s: Math.round((Date.now() - t0) / 100) / 10, result_length: finalText.length });
-
-      if (this.slack) {
-        try {
-          const { channel, threadTs } = splitThreadKey(thread.id);
-          await this.slack.setAssistantTitle(channel, threadTs, finalText.slice(0, 60));
-        } catch (err) {
-          log.warn("set_title_failed", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
-        }
-      }
     } catch (err) {
-      log.error("execute_error", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
+      const errMsg = err instanceof Error ? err.message : String(err);
+
+      // Slack killed the streaming state before we called stop() (long-running turn).
+      // Fall back to posting a plain message with whatever result we accumulated,
+      // or poll the API for the final result if we don't have one yet.
+      if (errMsg.includes("message_not_in_streaming_state")) {
+        log.warn("slack_stream_expired", { thread_key: threadKey, error: errMsg });
+        let fallback = (tracker.resultText || tracker.lastAssistantText).trim();
+
+        if (!fallback) {
+          fallback = await this.pollForResult(normalizeThreadKey(threadKey));
+        }
+
+        if (fallback) {
+          await thread.post({ markdown: fallback });
+        } else if (this.viewerUrl) {
+          const viewerLink = `${this.viewerUrl}/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
+          await thread.post({ markdown: `Agent completed. [View full output](${viewerLink})` });
+        }
+        return;
+      }
+
+      log.error("execute_error", { thread_key: threadKey, error: errMsg });
       try {
-        await thread.post({ markdown: `Agent request failed: ${err instanceof Error ? err.message : "unknown error"}` });
+        await thread.post({ markdown: `Agent request failed: ${errMsg}` });
       } catch (postErr) {
         log.error("error_post_failed", { thread_key: threadKey, error: postErr instanceof Error ? postErr.message : String(postErr) });
       }
+      return;
     }
+
+    const finalText = (tracker.resultText || tracker.lastAssistantText).trim();
+    log.info("execute_complete", { thread_key: threadKey, duration_s: Math.round((Date.now() - t0) / 100) / 10, result_length: finalText.length });
+
+    if (this.slack) {
+      try {
+        const { channel, threadTs } = splitThreadKey(thread.id);
+        await this.slack.setAssistantTitle(channel, threadTs, finalText.slice(0, 60));
+      } catch (err) {
+        log.warn("set_title_failed", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  }
+
+  private async pollForResult(threadKey: string): Promise<string> {
+    const deadline = Date.now() + STREAM_EXPIRED_POLL_MAX_MS;
+    while (Date.now() < deadline) {
+      try {
+        const data = await this.client.getStatus(threadKey);
+        if (!data.busy) {
+          const result = data.last_result;
+          return typeof result === "string" ? result.trim() : "";
+        }
+      } catch {
+        // best-effort — keep polling
+      }
+      await new Promise((r) => setTimeout(r, STREAM_EXPIRED_POLL_INTERVAL_MS));
+    }
+    return "";
   }
 
   private async *stream(
