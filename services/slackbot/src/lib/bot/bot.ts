@@ -1,10 +1,13 @@
 import { normalizeThreadKey, splitThreadKey } from "@centaur/harness-events";
+import type { CanonicalEvent } from "@centaur/harness-events";
 import { CentaurClient } from "@centaur/api-client";
 import type { InputContentBlock } from "@centaur/api-client";
 
 import type { StreamChunk } from "chat";
 import { log } from "@/lib/logger";
 import { ProgressTracker } from "./progress-tracker";
+
+const KEEPALIVE_MS = 120_000; // 2 min — Slack expires streaming state after ~5 min
 
 // ── Types ─────────────────────────────────────────────────────────────────
 
@@ -135,8 +138,25 @@ export class SlackBot {
   ): AsyncGenerator<StreamChunk> {
     yield { type: "task_update", id: "init", title: "Starting…", status: "in_progress" };
 
-    for await (const event of this.client.execute({ threadKey, message: text, platform: "slack", userId })) {
-      yield* tracker.update(event);
+    const iter = this.client.execute({ threadKey, message: text, platform: "slack", userId })[Symbol.asyncIterator]();
+    let pending: Promise<IteratorResult<CanonicalEvent, void>> | null = null;
+
+    while (true) {
+      if (!pending) pending = iter.next();
+
+      const raced = await Promise.race([
+        pending.then((r) => ({ kind: "value" as const, result: r })),
+        new Promise<{ kind: "keepalive" }>((r) => setTimeout(() => r({ kind: "keepalive" }), KEEPALIVE_MS)),
+      ]);
+
+      if (raced.kind === "keepalive") {
+        yield { type: "task_update", id: "keepalive", title: "Still working…", status: "in_progress" };
+        continue;
+      }
+
+      pending = null;
+      if (raced.result.done) break;
+      yield* tracker.update(raced.result.value);
     }
 
     if (!tracker.initCompleted) yield { type: "task_update", id: "init", title: "Started", status: "complete" };
