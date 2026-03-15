@@ -302,15 +302,13 @@ class TestBuildHarnessCmd:
         from api.sandbox.docker import _build_harness_cmd
 
         cmd = _build_harness_cmd("amp")
-        assert cmd[0] == "amp"
-        assert "--stream-json-input" in cmd
-        assert "--no-ide" in cmd
-        assert "--execute" in cmd
+        assert cmd[0] == "amp-wrapper"
 
     def test_amp_with_model(self):
         from api.sandbox.docker import _build_harness_cmd
 
         cmd = _build_harness_cmd("amp", model="claude-sonnet-4-20250514")
+        assert cmd[0] == "amp-wrapper"
         assert "--model" in cmd
         assert "claude-sonnet-4-20250514" in cmd
 

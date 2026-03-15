@@ -1,9 +1,9 @@
-"""Tests for SSE streaming — verifies stream_exec yields SSE-ready dicts.
+"""Tests for SSE streaming — verifies stream_connect yields SSE-ready dicts.
 
 Regression test for the bug where our hand-rolled keepalive wrapper used
 asyncio.wait_for() which canceled the pending __anext__() during long silent
 periods. Now uses sse-starlette which runs pings in a separate task, and
-stream_exec yields {"data": line} dicts directly.
+stream_connect yields {"data": line} dicts directly.
 """
 
 import asyncio
@@ -25,7 +25,7 @@ async def _collect(source):
 
 @pytest.mark.asyncio
 async def test_stream_yields_data_dicts():
-    """stream_exec and stream_reconnect yield {"data": line} dicts."""
+    """stream_connect and stream_reconnect yield {"data": line} dicts."""
 
     async def mock_stream():
         yield {"data": "event-1"}

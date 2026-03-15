@@ -7,8 +7,9 @@ by sandbox_id.
 
 Streaming architecture (2 layers, 0 queues, 0 threads):
   Docker stdout (async iterator via aiodocker)
-    → stream_exec (async generator: DB ops + turn detection + yields SSE dicts)
+    → stream_connect (persistent SSE wire: DB ops + turn detection + yields SSE dicts)
       → EventSourceResponse (SSE formatting + keepalive via sse-starlette)
+  stdin written via inject_stdin (flush pending messages + write, returns JSON).
 """
 
 from __future__ import annotations
@@ -21,7 +22,6 @@ from typing import Any
 
 import structlog
 
-from api.metrics import record_agent_execution
 from api.sandbox.base import RuntimeState, SandboxSession
 from api.sandbox.harness_protocol import (
     build_user_input,
@@ -126,6 +126,55 @@ async def _db_delete_session(thread_key: str) -> None:
     """Delete a session row from the DB."""
     pool = _get_pool()
     await pool.execute("DELETE FROM sandbox_sessions WHERE thread_key = $1", thread_key)
+
+
+# ── Wire lease helpers (separate from sandbox lifecycle) ─────────────────────
+
+
+async def _db_set_wire(thread_key: str) -> str:
+    """Record an active wire lease for a session. Returns the generated lease_id."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "UPDATE sandbox_sessions SET wire_lease_id = gen_random_uuid()::text, "
+        "wire_connected_at = NOW(), wire_last_seen_at = NOW(), updated_at = NOW() "
+        "WHERE thread_key = $1 RETURNING wire_lease_id",
+        thread_key,
+    )
+    return row["wire_lease_id"]
+
+
+async def _db_clear_wire(thread_key: str, lease_id: str) -> None:
+    """Clear wire lease (only if it matches — prevents stale clears)."""
+    pool = _get_pool()
+    await pool.execute(
+        "UPDATE sandbox_sessions SET wire_lease_id = NULL, wire_connected_at = NULL, "
+        "wire_last_seen_at = NULL, updated_at = NOW() "
+        "WHERE thread_key = $1 AND wire_lease_id = $2",
+        thread_key, lease_id,
+    )
+
+
+async def _db_touch_wire(thread_key: str, lease_id: str) -> None:
+    """Update wire heartbeat timestamp."""
+    pool = _get_pool()
+    await pool.execute(
+        "UPDATE sandbox_sessions SET wire_last_seen_at = NOW(), updated_at = NOW() "
+        "WHERE thread_key = $1 AND wire_lease_id = $2",
+        thread_key, lease_id,
+    )
+
+
+async def _db_find_stale_wires(ttl_s: int = 120) -> list[dict]:
+    """Find sessions with wire leases that haven't been seen recently."""
+    pool = _get_pool()
+    rows = await pool.fetch(
+        "SELECT thread_key, sandbox_id, wire_lease_id, state "
+        "FROM sandbox_sessions "
+        "WHERE wire_lease_id IS NOT NULL "
+        "AND wire_last_seen_at < NOW() - make_interval(secs => $1::double precision)",
+        float(ttl_s),
+    )
+    return [dict(r) for r in rows]
 
 
 # ── Flush pipeline helpers ───────────────────────────────────────────────────
@@ -358,7 +407,8 @@ async def _stream_stdout(
 ) -> AsyncIterator[dict]:
     """Stream sandbox stdout, normalize events, yield SSE dicts.
 
-    Shared inner loop for both stream_exec and stream_reconnect.
+    Keeps streaming across turns until the container exits (EOF).
+    Callers that only need one turn can ``return`` from their own loop.
     """
     result_text = ""
     agent_thread_id: str | None = None
@@ -423,6 +473,7 @@ async def _stream_stdout(
                 )
                 continue
             rt.last_result = result_text
+            turn_id = rt.turn_counter  # pick up latest turn_id for next turn
             yield {"data": json.dumps({
                 "type": "turn.done",
                 "turn_id": turn_id,
@@ -438,10 +489,18 @@ async def _stream_stdout(
                 duration_s=round(time.monotonic() - t0, 2),
                 reason="completed",
             )
-            return
-    # EOF without turn.done — container exited or stream ended
+            # Persist turn, update state, reset for next turn
+            await asyncio.gather(
+                _persist_turn_messages(session.thread_key, "", result_text, session.harness),
+                _db_update_state(session.thread_key, "idle"),
+            )
+            result_text = ""
+            agent_thread_id = None
+            t0 = time.monotonic()
+
+    # EOF — container exited or stream ended
     log.info(
-        "turn_done",
+        "stream_eof",
         thread_key=session.thread_key,
         sandbox=session.sandbox_id[:12],
         harness=session.harness,
@@ -451,129 +510,203 @@ async def _stream_stdout(
     )
 
 
-async def stream_exec(
+# ── New API: connect (persistent stdout wire) + inject_stdin ─────────────────
+
+
+async def stream_connect(
+    session: SandboxSession,
+    *,
+    platform: str | None = None,
+) -> AsyncIterator[dict]:
+    """Attach to a sandbox's stdout and return a persistent SSE wire.
+
+    Stays open across multiple turns until the container exits.
+    Emits a wire.ready event once the reader is attached so the client
+    knows it's safe to call inject_stdin / POST /agent/execute.
+    """
+    rt = _get_runtime(session.sandbox_id)
+    last_heartbeat = time.monotonic()
+
+    if platform:
+        await _insert_system_message(session.thread_key, platform)
+
+    backend = get_backend()
+    await backend.attach(session)
+    await _db_update_state(session.thread_key, "running")
+    lease_id = await _db_set_wire(session.thread_key)
+
+    log.info(
+        "stream_connect",
+        thread_key=session.thread_key,
+        sandbox=session.sandbox_id[:12],
+        lease_id=lease_id,
+    )
+
+    # Signal the client that the wire is ready
+    yield {"data": json.dumps({
+        "type": "wire.ready",
+        "lease_id": lease_id,
+        "turn_counter": rt.turn_counter,
+    })}
+
+    try:
+        async for sse_dict in _stream_stdout(
+            session, backend, rt, rt.turn_counter, time.monotonic(),
+        ):
+            yield sse_dict
+            # Heartbeat every 30s (not per-event to avoid DB churn)
+            now = time.monotonic()
+            if now - last_heartbeat >= 30:
+                last_heartbeat = now
+                try:
+                    await _db_touch_wire(session.thread_key, lease_id)
+                except Exception:
+                    pass
+    finally:
+        await _db_clear_wire(session.thread_key, lease_id)
+        await _db_update_state(session.thread_key, "idle")
+        log.info(
+            "wire_disconnected",
+            thread_key=session.thread_key,
+            sandbox=session.sandbox_id[:12],
+            lease_id=lease_id,
+        )
+
+
+async def inject_stdin(
     session: SandboxSession,
     message: str | list,
     *,
     platform: str | None = None,
     user_id: str | None = None,
-) -> AsyncIterator[dict]:
-    """Run a turn: flush pending messages, write to stdin, stream stdout.
+) -> dict:
+    """Flush pending messages + write to stdin. Does not touch stdout.
 
-    Yields SSE-ready ``{"data": line}`` dicts directly to EventSourceResponse.
-    This is a dumb pipe — it always writes to the container and streams back.
+    Returns a summary dict for the JSON response.
     """
-    started_at = time.monotonic()
     rt = _get_runtime(session.sandbox_id)
     rt.turn_counter += 1
-    turn_id = rt.turn_counter
-    rt.busy = True
-    rt.last_result = None
-    stream_failed = False
-    result_text = ""
-    last_flushed_id: str | None = None
+
+    if platform:
+        await _insert_system_message(session.thread_key, platform)
+
+    last_delivered_id = await _get_last_delivered_id(session.thread_key)
+    flushed = await _flush_pending(session.thread_key, last_delivered_id)
+
+    # Build harness-native input
+    inline_blocks: list[dict] | None = None
+    if isinstance(message, list) and message:
+        inline_blocks = message
+    elif isinstance(message, str) and message:
+        inline_blocks = [{"type": "text", "text": message}]
+
+    if flushed and inline_blocks:
+        msgs = _flushed_to_messages(flushed)
+        content_blocks = messages_to_content_blocks(msgs) + inline_blocks
+        turn_input = build_user_input(content_blocks)
+    elif flushed:
+        msgs = _flushed_to_messages(flushed)
+        content_blocks = messages_to_content_blocks(msgs)
+        turn_input = build_user_input(content_blocks)
+    elif inline_blocks:
+        turn_input = build_user_input(inline_blocks)
+    else:
+        return {"ok": True, "injected": False}
+
+    backend = get_backend()
+    await backend.attach(session)
 
     try:
-        # 1. DB setup — run independent queries concurrently
-        coros: list = [
-            _db_update_state(session.thread_key, "running"),
-            _get_last_delivered_id(session.thread_key),
-        ]
-        if platform:
-            coros.append(_insert_system_message(session.thread_key, platform))
-        results = await asyncio.gather(*coros)
-        last_delivered_id: str | None = results[1]
-
-        # 2. Flush pending messages
-        flushed = await _flush_pending(session.thread_key, last_delivered_id)
-
-        # 3. Build harness-native input
-        inline_blocks: list[dict] | None = None
-        if isinstance(message, list) and message:
-            inline_blocks = message
-        elif isinstance(message, str) and message:
-            inline_blocks = [{"type": "text", "text": message}]
-
-        last_flushed_id = flushed[-1]["id"] if flushed else None
-
-        if flushed and inline_blocks:
-            msgs = _flushed_to_messages(flushed)
-            content_blocks = messages_to_content_blocks(msgs) + inline_blocks
-            turn_input = build_user_input(content_blocks)
-        elif flushed:
-            msgs = _flushed_to_messages(flushed)
-            content_blocks = messages_to_content_blocks(msgs)
-            turn_input = build_user_input(content_blocks)
-        elif inline_blocks:
-            turn_input = build_user_input(inline_blocks)
-        else:
-            turn_input = None
-
-        # 4. Attach and write to stdin
-        backend = get_backend()
+        await backend.write_stdin(session, turn_input)
+    except (BrokenPipeError, OSError, RuntimeError) as exc:
+        log.warning("stdin_broken_pipe", sandbox=session.sandbox_id[:12], error=str(exc))
+        st = await backend.status(session)
+        if st != "running":
+            raise RuntimeError(f"sandbox exited (status={st})") from exc
+        await backend.close_streams(session)
         await backend.attach(session)
+        await backend.write_stdin(session, turn_input)
 
-        t0 = time.monotonic()
-        log.info(
-            "turn_start",
-            thread_key=session.thread_key,
-            sandbox=session.sandbox_id[:12],
-            harness=session.harness,
-            turn_id=turn_id,
-        )
+    await _db_update_state(session.thread_key, "running")
 
-        if turn_input:
+    # Advance cursor so these messages aren't re-flushed
+    last_flushed_id = flushed[-1]["id"] if flushed else None
+    if last_flushed_id:
+        await _advance_cursor(session.thread_key, last_flushed_id)
+
+    log.info(
+        "stdin_injected",
+        thread_key=session.thread_key,
+        sandbox=session.sandbox_id[:12],
+        turn_id=rt.turn_counter,
+    )
+    return {"ok": True, "injected": True, "turn_id": rt.turn_counter}
+
+
+# ── Supervisor ───────────────────────────────────────────────────────────────
+
+
+async def supervise_wires() -> None:
+    """Detect stale wire leases and clean up dead sessions.
+
+    Runs periodically from app lifespan. Checks:
+    1. Wires with no heartbeat in 120s → clear the lease
+    2. Sessions whose container is gone → mark gone
+    """
+    try:
+        stale = await _db_find_stale_wires(ttl_s=120)
+        if not stale:
+            return
+
+        backend = get_backend()
+        for row in stale:
+            thread_key = row["thread_key"]
+            sandbox_id = row["sandbox_id"]
+            lease_id = row["wire_lease_id"]
+
+            # Check if container is still alive
+            session = SandboxSession(
+                sandbox_id=sandbox_id,
+                thread_key=thread_key,
+                harness="",
+                engine="",
+            )
             try:
-                await backend.write_stdin(session, turn_input)
-            except (BrokenPipeError, OSError, RuntimeError) as exc:
-                log.warning("stdin_broken_pipe", sandbox=session.sandbox_id[:12], error=str(exc))
                 st = await backend.status(session)
-                if st != "running":
-                    raise RuntimeError(f"sandbox exited (status={st})") from exc
-                await backend.close_streams(session)
-                await backend.attach(session)
-                await backend.write_stdin(session, turn_input)
+            except Exception:
+                st = "gone"
 
-        # 5. Stream stdout — shared loop handles normalize + turn detection
-        saw_turn_done = False
-        async for sse_dict in _stream_stdout(session, backend, rt, turn_id, t0):
-            yield sse_dict
-            evt_data = json.loads(sse_dict["data"])
-            if evt_data.get("type") == "turn.done":
-                saw_turn_done = True
-                result_text = evt_data.get("result", "")
-            elif evt_data.get("type") == "error":
-                stream_failed = True
-
-        if not saw_turn_done and turn_input:
-            yield {"data": json.dumps({
-                "type": "error",
-                "error": "Sandbox exited before completing the turn.",
-            })}
-            stream_failed = True
-
+            pool = _get_pool()
+            if st != "running":
+                log.warning(
+                    "supervisor_dead_session",
+                    thread_key=thread_key,
+                    sandbox=sandbox_id[:12],
+                    container_status=st,
+                )
+                await _db_update_state(thread_key, "gone")
+                await pool.execute(
+                    "UPDATE sandbox_sessions SET wire_lease_id = NULL, "
+                    "wire_connected_at = NULL, wire_last_seen_at = NULL "
+                    "WHERE thread_key = $1",
+                    thread_key,
+                )
+                _drop_runtime(sandbox_id)
+            else:
+                log.info(
+                    "supervisor_stale_wire_cleared",
+                    thread_key=thread_key,
+                    sandbox=sandbox_id[:12],
+                    lease_id=lease_id,
+                )
+                await pool.execute(
+                    "UPDATE sandbox_sessions SET wire_lease_id = NULL, "
+                    "wire_connected_at = NULL, wire_last_seen_at = NULL, "
+                    "updated_at = NOW() WHERE thread_key = $1 AND wire_lease_id = $2",
+                    thread_key, lease_id,
+                )
     except Exception:
-        stream_failed = True
-        raise
-    finally:
-        rt.busy = False
-        # DB cleanup
-        final_state = "error" if stream_failed else "idle"
-        cleanup: list = [
-            _persist_turn_messages(session.thread_key, "", result_text, session.harness),
-            _db_update_state(session.thread_key, final_state),
-        ]
-        if last_flushed_id and not stream_failed:
-            cleanup.append(_advance_cursor(session.thread_key, last_flushed_id))
-        try:
-            await asyncio.gather(*cleanup)
-        except Exception:
-            log.warning("cleanup_failed", thread_key=session.thread_key, exc_info=True)
-        record_agent_execution(
-            harness=session.harness,
-            status="error" if stream_failed else "completed",
-            duration_s=time.monotonic() - started_at,
-        )
+        log.warning("supervisor_error", exc_info=True)
 
 
 async def stream_reconnect(
@@ -588,22 +721,18 @@ async def stream_reconnect(
     await backend.attach(session, logs=True)
 
     rt = _get_runtime(session.sandbox_id)
-    rt.busy = True
     turn_id = rt.turn_counter
     done_seen = 0
 
-    try:
-        async for sse_dict in _stream_stdout(session, backend, rt, turn_id, time.monotonic()):
-            evt_data = json.loads(sse_dict["data"])
-            if evt_data.get("type") == "turn.done":
-                done_seen += 1
-                if done_seen <= skip_done_count:
-                    continue
-            yield sse_dict
-            if evt_data.get("type") == "turn.done" and done_seen > skip_done_count:
-                return
-    finally:
-        rt.busy = False
+    async for sse_dict in _stream_stdout(session, backend, rt, turn_id, time.monotonic()):
+        evt_data = json.loads(sse_dict["data"])
+        if evt_data.get("type") == "turn.done":
+            done_seen += 1
+            if done_seen <= skip_done_count:
+                continue
+        yield sse_dict
+        if evt_data.get("type") == "turn.done" and done_seen > skip_done_count:
+            return
 
 
 async def _persist_turn_messages(
@@ -680,7 +809,6 @@ async def get_status(thread_key: str) -> dict[str, Any]:
         "started_at": session.started_at,
     }
     if rt:
-        result["busy"] = rt.busy
         if rt.last_result is not None:
             result["last_result"] = rt.last_result
     return result

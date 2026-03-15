@@ -22,6 +22,7 @@ from api.metrics import HTTP_REQUESTS_IN_PROGRESS, observe_http_request
 from api.routers import admin, attachments as attachments_mod, deprecated, health, internal
 from api.routers import agent as agent_router_mod
 from api.tool_manager import ToolManager, load_plugins_config
+from api.agent import supervise_wires
 from api.warm_pool import start_replenish_loop, stop_replenish_loop
 
 configure_structlog()
@@ -77,19 +78,33 @@ async def _push_injection_map() -> None:
         log.warning("injection_map_push_failed", exc_info=True)
 
 
+async def _wire_supervisor_loop() -> None:
+    """Periodically check for stale wire leases and dead sessions."""
+    while True:
+        await asyncio.sleep(30)
+        try:
+            await supervise_wires()
+        except Exception:
+            log.warning("wire_supervisor_tick_failed", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db_pool = await create_pool(settings.database_url)
     await _push_injection_map()
     watcher_task = asyncio.create_task(_watch_tools(tool_manager))
+    supervisor_task = asyncio.create_task(_wire_supervisor_loop())
     await start_replenish_loop()
     try:
         yield
     finally:
         await stop_replenish_loop()
+        supervisor_task.cancel()
         watcher_task.cancel()
         with suppress(asyncio.CancelledError):
             await watcher_task
+        with suppress(asyncio.CancelledError):
+            await supervisor_task
         await close_pool(app.state.db_pool)
 
 
@@ -123,7 +138,7 @@ async def instrument_requests(request, call_next):
         thread_key = trace_id
         structlog.contextvars.bind_contextvars(thread_key=thread_key)
 
-    if request.method == "POST" and request.url.path in ("/agent/execute", "/agent/reconnect"):
+    if request.method == "POST" and request.url.path in ("/agent/execute", "/agent/connect", "/agent/reconnect"):
         try:
             body_bytes = await request.body()
             body_json = json.loads(body_bytes)

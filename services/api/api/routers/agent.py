@@ -21,10 +21,11 @@ from api.agent import (
     claim_for_delivery,
     get_or_spawn,
     get_status,
+    inject_stdin,
     list_undelivered,
     mark_delivered,
     stop_session,
-    stream_exec,
+    stream_connect,
     stream_reconnect,
 )
 from api.deps import require_scope, verify_api_key
@@ -194,9 +195,30 @@ async def execute(request: Request):
         message = await _extract_attachments(pool, thread_key, msg_id, message)
 
     session = await get_or_spawn(thread_key, resolved_harness, engine=engine)
+    result = await inject_stdin(session, message, platform=platform, user_id=user_id)
+    return JSONResponse(content=result)
+
+
+@router.post("/connect", dependencies=[Depends(require_scope("agent:execute"))])
+async def connect(request: Request):
+    """Spawn/get a sandbox and return a persistent SSE stdout wire.
+
+    The wire stays open across multiple turns until the container exits.
+    Use POST /agent/execute to write to stdin.
+    """
+    body = await request.json()
+    thread_key = body.get("thread_key")
+    if not thread_key:
+        raise HTTPException(status_code=422, detail="thread_key is required")
+
+    harness = body.get("harness") or "amp"
+    engine = body.get("engine")
+    platform = body.get("platform")
+
+    session = await get_or_spawn(thread_key, harness, engine=engine)
 
     return EventSourceResponse(
-        stream_exec(session, message, platform=platform, user_id=user_id),
+        stream_connect(session, platform=platform),
         ping_message_factory=lambda: ServerSentEvent(comment="keepalive"),
         sep="\n",
     )

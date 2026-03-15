@@ -1,4 +1,4 @@
-"""Tests for stream_exec result extraction and message persistence."""
+"""Tests for result extraction and message persistence (inject_stdin / stream_connect)."""
 
 import json
 import sys
@@ -16,7 +16,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _extract_result(lines: list[str]) -> str:
-    """Mimic the extraction logic in stream_exec."""
+    """Mimic the extraction logic in _stream_stdout."""
     result_text = ""
     for line in lines:
         try:

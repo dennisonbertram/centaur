@@ -41,9 +41,10 @@ export interface SlackAdapter {
 // ── Bot ───────────────────────────────────────────────────────────────────
 //
 // Mental model:
-//   - First mention  → subscribe + buffer message + execute
+//   - First mention  → subscribe + buffer message + connect wire + execute
 //   - Non-mention in subscribed thread → buffer message (context only)
-//   - Mention in subscribed thread → buffer message + execute
+//   - Mention in subscribed thread with wire open → inject stdin only
+//   - Mention in subscribed thread without wire → connect + execute
 //
 
 export class SlackBot {
@@ -164,9 +165,9 @@ export class SlackBot {
     while (Date.now() < deadline) {
       try {
         const data = await this.client.getStatus(threadKey);
-        if (!data.busy) {
-          const result = data.last_result;
-          return typeof result === "string" ? result.trim() : "";
+        const result = data.last_result;
+        if (typeof result === "string" && result.trim()) {
+          return result.trim();
         }
       } catch {
         // best-effort — keep polling
@@ -181,25 +182,67 @@ export class SlackBot {
   ): AsyncGenerator<StreamChunk> {
     yield { type: "task_update", id: "init", title: "Starting…", status: "in_progress" };
 
-    const iter = this.client.execute({ threadKey, message: text, platform: "slack", userId })[Symbol.asyncIterator]();
+    // 1. Open the persistent stdout wire
+    const wire = this.client.connect({ threadKey, platform: "slack" });
+    const iter = wire[Symbol.asyncIterator]();
+
+    // 2. Wait for wire.ready, then inject stdin
+    let wireReady = false;
+    try {
+      const readyResult = await iter.next();
+      if (!readyResult.done) {
+        const readyEvt = readyResult.value as any;
+        if (readyEvt.type === "wire.ready") {
+          wireReady = true;
+        }
+      }
+    } catch (err) {
+      log.error("wire_connect_failed", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
+    }
+
+    if (!wireReady) {
+      yield { type: "markdown_text", text: "Failed to establish agent connection." };
+      return;
+    }
+
+    // 3. Inject the first message into stdin (fire-and-forget)
+    this.client.execute({ threadKey, message: text, platform: "slack", userId }).catch((err) => {
+      log.error("stdin_inject_failed", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
+    });
+
+    // 4. Stream events from the wire
     let pending: Promise<IteratorResult<CanonicalEvent, void>> | null = null;
 
-    while (true) {
-      if (!pending) pending = iter.next();
+    try {
+      while (true) {
+        if (!pending) pending = iter.next();
 
-      const raced = await Promise.race([
-        pending.then((r) => ({ kind: "value" as const, result: r })),
-        new Promise<{ kind: "keepalive" }>((r) => setTimeout(() => r({ kind: "keepalive" }), KEEPALIVE_MS)),
-      ]);
+        const raced = await Promise.race([
+          pending.then((r) => ({ kind: "value" as const, result: r })),
+          new Promise<{ kind: "keepalive" }>((r) => setTimeout(() => r({ kind: "keepalive" }), KEEPALIVE_MS)),
+        ]);
 
-      if (raced.kind === "keepalive") {
-        yield { type: "task_update", id: "keepalive", title: "Still working…", status: "in_progress" };
-        continue;
+        if (raced.kind === "keepalive") {
+          yield { type: "task_update", id: "keepalive", title: "Still working…", status: "in_progress" };
+          continue;
+        }
+
+        pending = null;
+        if (raced.result.done) break;
+        const event = raced.result.value;
+
+        // turn.done from wire — emit final text and finish this Slack message
+        if ((event as any).type === "turn.done") {
+          const result = ((event as any).result || "").trim();
+          if (result) tracker.resultText = result;
+          break;
+        }
+
+        yield* tracker.update(event);
       }
-
-      pending = null;
-      if (raced.result.done) break;
-      yield* tracker.update(raced.result.value);
+    } finally {
+      // Each Slack message gets its own wire; cleanup is automatic when the
+      // SSE stream ends (container exit or server-side disconnect).
     }
 
     if (!tracker.initCompleted) yield { type: "task_update", id: "init", title: "Started", status: "complete" };

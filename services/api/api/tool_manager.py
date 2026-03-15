@@ -152,9 +152,10 @@ def _friendly_type_name(annotation: Any) -> str:
         return _BUILTIN_TYPE_NAMES[annotation]
     origin = getattr(annotation, "__origin__", None)
     args = getattr(annotation, "__args__", None)
-    # typing.Optional / Union
+    # typing.Optional / Union / str | int (PEP 604)
     if (
-        origin is types.UnionType or (origin is not None and str(origin) == "typing.Union")
+        isinstance(annotation, types.UnionType)
+        or (origin is not None and str(origin) == "typing.Union")
     ) and args:
         parts = [_friendly_type_name(a) for a in args]
         return " | ".join(parts)

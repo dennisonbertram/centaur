@@ -70,13 +70,13 @@ export async function POST(request: Request) {
     console.warn("Failed to buffer user message:", err);
   }
 
+  // 1. Open persistent stdout wire
   let upstream: Response;
   try {
-    upstream = await resilientFetch(`${API_URL}/agent/execute`, {
+    upstream = await resilientFetch(`${API_URL}/agent/connect`, {
       method: "POST",
       body: JSON.stringify({
         thread_key: slackThreadKey,
-        message,
         harness,
         ...(engine ? { engine } : {}),
       }),
@@ -89,6 +89,19 @@ export async function POST(request: Request) {
       { status, headers: { "Cache-Control": "no-store" } },
     );
   }
+
+  // 2. Inject message into stdin (fire-and-forget)
+  resilientFetch(`${API_URL}/agent/execute`, {
+    method: "POST",
+    body: JSON.stringify({
+      thread_key: slackThreadKey,
+      message,
+      harness,
+      ...(engine ? { engine } : {}),
+    }),
+  }).catch((err) => {
+    console.warn("Failed to inject stdin:", err);
+  });
 
   if (!upstream.ok) {
     const text = await upstream.text().catch(() => "");

@@ -510,9 +510,12 @@ function makeMockThread(id = "C123:1234567890.123456"): BotThread {
 function makeMockClient(): CentaurClient {
   return {
     message: vi.fn(async () => {}),
-    execute: vi.fn(async function* () {
+    connect: vi.fn(async function* () {
+      yield { type: "wire.ready" as const, lease_id: "test-lease", turn_counter: 0 };
       yield { type: "result" as const, text: "done" };
+      yield { type: "turn.done" as const, result: "done", turn_id: 1, agent_thread_id: "" };
     }),
+    execute: vi.fn(async () => ({ ok: true, injected: true, turn_id: 1 })),
     getStatus: vi.fn(async () => ({})),
   } as unknown as CentaurClient;
 }
@@ -554,7 +557,9 @@ describe("onSubscribedMessage attachment refetch", () => {
     const parts = msgArgs.parts as Array<{ type: string }>;
     expect(parts.some((b) => b.type === "document")).toBe(true);
 
-    // execute was called with plain text
+    // connect was called (establishes the stdout wire)
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    // execute was called (writes to stdin)
     expect(client.execute).toHaveBeenCalledTimes(1);
     const executeArgs = vi.mocked(client.execute).mock.calls[0][0];
     expect(typeof executeArgs.message).toBe("string");
@@ -596,7 +601,9 @@ describe("onSubscribedMessage attachment refetch", () => {
     const parts = msgArgs.parts as Array<{ type: string }>;
     expect(parts.some((b) => b.type === "image")).toBe(true);
 
-    // execute was called with plain text
+    // connect was called (establishes the stdout wire)
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    // execute was called (writes to stdin)
     expect(client.execute).toHaveBeenCalledTimes(1);
     const executeArgs = vi.mocked(client.execute).mock.calls[0][0];
     expect(typeof executeArgs.message).toBe("string");

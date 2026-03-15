@@ -24,10 +24,11 @@ export interface ExecuteOptions {
 }
 
 /**
- * Centaur API client. Two-step protocol:
+ * Centaur API client. Three-step protocol:
  *
  *   1. client.message()  — POST /agent/messages  (persist user message + attachments)
- *   2. client.execute()  — POST /agent/execute   (run the turn, stream SSE response)
+ *   2. client.connect()  — POST /agent/connect   (spawn + attach stdout → persistent SSE wire)
+ *   3. client.execute()  — POST /agent/execute   (flush + write stdin → 200 OK)
  */
 export class CentaurClient {
   readonly http: AxiosInstance;
@@ -46,7 +47,11 @@ export class CentaurClient {
     });
   }
 
-  /** Step 1: Buffer a user message into chat_messages. Always call before execute(). */
+  private get authHeader(): string {
+    return (this.http.defaults.headers["Authorization"] ?? this.http.defaults.headers.common?.["Authorization"]) as string;
+  }
+
+  /** Buffer a user message into chat_messages. */
   async message(opts: MessageOptions): Promise<void> {
     await this.http.post("/agent/messages", {
       thread_key: opts.threadKey,
@@ -57,22 +62,25 @@ export class CentaurClient {
     });
   }
 
-  /** Step 2: Execute a turn. Streams CanonicalEvents via SSE. */
-  async *execute(opts: ExecuteOptions): AsyncGenerator<CanonicalEvent, void, undefined> {
-    const { threadKey, message, harness, platform, userId, signal } = opts;
-
+  /** Spawn/get sandbox and return persistent SSE stdout wire. */
+  async *connect(opts: {
+    threadKey: string;
+    harness?: string;
+    platform?: string;
+    signal?: AbortSignal;
+  }): AsyncGenerator<CanonicalEvent, void, undefined> {
+    const { threadKey, harness, platform, signal } = opts;
     this.log?.info("sse_connect", { thread_key: threadKey, harness });
 
-    const body: Record<string, unknown> = { thread_key: threadKey, message };
+    const body: Record<string, unknown> = { thread_key: threadKey };
     if (harness) body.harness = harness;
     if (platform) body.platform = platform;
-    if (userId) body.user_id = userId;
 
-    const res = await fetch(`${this.http.defaults.baseURL}/agent/execute`, {
+    const res = await fetch(`${this.http.defaults.baseURL}/agent/connect`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: (this.http.defaults.headers["Authorization"] ?? this.http.defaults.headers.common?.["Authorization"]) as string,
+        Authorization: this.authHeader,
         "X-Trace-Id": threadKey,
       },
       body: JSON.stringify(body),
@@ -81,14 +89,7 @@ export class CentaurClient {
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      let parsed: Record<string, unknown> | undefined;
-      try { parsed = JSON.parse(text); } catch {}
-      const code = parsed?.code as string | undefined;
-      throw new Error(
-        code
-          ? `${code}: ${(parsed?.detail as string) ?? text.slice(0, 300)}`
-          : `/agent/execute failed (${res.status}): ${text.slice(0, 300)}`,
-      );
+      throw new Error(`/agent/connect failed (${res.status}): ${text.slice(0, 300)}`);
     }
 
     this.log?.info("sse_streaming", { thread_key: threadKey });
@@ -100,6 +101,23 @@ export class CentaurClient {
       if (event.data === "[DONE]") return;
       try { yield JSON.parse(event.data) as CanonicalEvent; } catch {}
     }
+  }
+
+  /** Flush pending messages + write to stdin. Returns immediately (no SSE). */
+  async execute(opts: ExecuteOptions): Promise<{ ok: boolean; injected: boolean; turn_id?: number }> {
+    const { threadKey, message, harness, platform, userId } = opts;
+    this.log?.info("execute_stdin", { thread_key: threadKey });
+
+    const body: Record<string, unknown> = {
+      thread_key: threadKey,
+      message,
+    };
+    if (harness) body.harness = harness;
+    if (platform) body.platform = platform;
+    if (userId) body.user_id = userId;
+
+    const { data } = await this.http.post("/agent/execute", body);
+    return data;
   }
 
   /** Check session status (used for recovery on expired streams). */
