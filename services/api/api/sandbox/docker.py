@@ -34,6 +34,15 @@ def _image() -> str:
     return os.getenv("AGENT_IMAGE", "centaur-agent:latest")
 
 
+def _dind_image() -> str:
+    return os.getenv("DIND_IMAGE", "docker:dind")
+
+
+def _dind_name(sandbox_name: str) -> str:
+    """Derive the DinD sidecar container name from the sandbox name."""
+    return sandbox_name.replace("centaur-sandbox-", "centaur-dind-", 1)
+
+
 def _repos_host_dir() -> str:
     return os.getenv("REPOS_HOST_DIR", os.path.expanduser("~/github"))
 
@@ -186,10 +195,35 @@ class DockerSandboxBackend(SandboxBackend):
         if repo:
             env.append(f"AGENT_REPO={repo}")
 
-        # Remove stale container with the same name
-        with contextlib.suppress(Exception):
-            stale = await client.containers.get(container_name)
-            await stale.delete(force=True)
+        # Remove stale containers with the same name
+        dind_name = _dind_name(container_name)
+        for stale_name in (container_name, dind_name):
+            with contextlib.suppress(Exception):
+                stale = await client.containers.get(stale_name)
+                await stale.delete(force=True)
+
+        # Spawn Docker-in-Docker sidecar (docker:dind)
+        network = os.getenv("AGENT_NETWORK", "centaur_agent_net")
+        dind_container = await client.containers.create_or_replace(
+            name=dind_name,
+            config={
+                "Image": _dind_image(),
+                "Env": ["DOCKER_TLS_CERTDIR="],  # disable TLS (internal network only)
+                "Labels": {
+                    "centaur-agent": "true",
+                    "ai2.dind": "true",
+                    "ai2.thread": thread_key,
+                },
+                "HostConfig": {
+                    "Privileged": True,
+                    "NetworkMode": network,
+                },
+            },
+        )
+        await dind_container.start()
+
+        # Point sandbox Docker CLI at the sidecar
+        env.append(f"DOCKER_HOST=tcp://{dind_name}:2375")
 
         labels = {
             "centaur-agent": "true",
@@ -224,7 +258,6 @@ class DockerSandboxBackend(SandboxBackend):
                 binds.append(f"{persona_host}:/home/agent/tools/personas/{persona}:ro")
 
         cmd = _build_harness_cmd(engine, model)
-        network = os.getenv("AGENT_NETWORK", "centaur_agent_net")
 
         config: dict[str, Any] = {
             "Image": _image(),
@@ -307,14 +340,21 @@ class DockerSandboxBackend(SandboxBackend):
 
     async def stop(self, session: SandboxSession) -> None:
         client = self._get_client()
+        # Resolve sandbox container name for DinD sidecar cleanup
+        sandbox_name: str | None = None
         with contextlib.suppress(Exception):
             container = await client.containers.get(session.sandbox_id)
+            info = await container.show()
+            sandbox_name = info.get("Name", "").lstrip("/")
             await container.kill(signal="SIGINT")
         await self.close_streams(session)
         with contextlib.suppress(Exception):
             container = await client.containers.get(session.sandbox_id)
             await container.stop(t=5)
             await container.delete()
+        # Stop the DinD sidecar
+        if sandbox_name:
+            await self._stop_dind(sandbox_name)
         log.info(
             "sandbox_stopped",
             thread_key=session.thread_key,
@@ -340,10 +380,24 @@ class DockerSandboxBackend(SandboxBackend):
     async def stop_by_id(self, sandbox_id: str) -> None:
         """Stop and remove a container by ID (no session needed)."""
         client = self._get_client()
+        sandbox_name: str | None = None
         with contextlib.suppress(Exception):
             container = await client.containers.get(sandbox_id)
+            info = await container.show()
+            sandbox_name = info.get("Name", "").lstrip("/")
             await container.stop(t=5)
             await container.delete()
+        if sandbox_name:
+            await self._stop_dind(sandbox_name)
+
+    async def _stop_dind(self, sandbox_name: str) -> None:
+        """Stop and remove the DinD sidecar for a sandbox."""
+        client = self._get_client()
+        dind_name = _dind_name(sandbox_name)
+        with contextlib.suppress(Exception):
+            dind = await client.containers.get(dind_name)
+            await dind.stop(t=3)
+            await dind.delete()
 
     async def close_streams(self, session: SandboxSession) -> None:
         rt = _get_rt(session)
