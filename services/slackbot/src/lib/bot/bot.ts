@@ -3,12 +3,12 @@ import type { CanonicalEvent } from "@centaur/harness-events";
 import { CentaurClient } from "@centaur/api-client";
 import type { InputContentBlock } from "@centaur/api-client";
 
-import type { StreamChunk } from "chat";
+import { stringifyMarkdown, type StreamChunk } from "chat";
+import type { Root } from "chat";
 import { log } from "@/lib/logger";
 import { ProgressTracker } from "./progress-tracker";
 
 const KEEPALIVE_MS = 120_000; // 2 min — Slack expires streaming state after ~5 min
-const STATUS_REFRESH_MS = 25_000; // Refresh setStatus before Slack's 30s TTL
 const STREAM_EXPIRED_POLL_INTERVAL_MS = 3_000;
 const STREAM_EXPIRED_POLL_MAX_MS = 5 * 60_000;
 const SLACK_MSG_MAX_CHARS = 3900; // Slack's hard limit is 4000; leave margin
@@ -60,6 +60,14 @@ function parseHarnessFlag(text: string): string | undefined {
   return harness;
 }
 
+/** Extract text from a message, preferring the formatted AST (preserves links) over plain text. */
+function richTextFromMessage(msg: { text: string; formatted?: Root }): string {
+  if (msg.formatted) {
+    return stringifyMarkdown(msg.formatted).trim();
+  }
+  return (msg.text || "").trim();
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────
 
 export interface BotThread {
@@ -71,6 +79,7 @@ export interface BotThread {
 
 export interface BotMessage {
   text: string;
+  formatted?: Root;
   isMention?: boolean;
   author: { isMe: boolean; isBot: boolean; userId?: string };
   attachments?: BotAttachment[];
@@ -85,7 +94,7 @@ export interface BotAttachment {
 
 export interface SlackAdapter {
   fetchMessage(threadId: string, ts: string): Promise<{ attachments?: BotAttachment[] } | null>;
-  fetchMessages(threadId: string, options?: { direction?: "forward" | "backward"; limit?: number }): Promise<{ messages: Array<{ text: string; author: { isMe: boolean; isBot: boolean; userId: string }; attachments?: BotAttachment[] }> }>;
+  fetchMessages(threadId: string, options?: { direction?: "forward" | "backward"; limit?: number }): Promise<{ messages: Array<{ text: string; formatted?: Root; author: { isMe: boolean; isBot: boolean; userId: string }; attachments?: BotAttachment[] }> }>;
   setAssistantTitle(channel: string, threadTs: string, title: string): Promise<void>;
 }
 
@@ -135,16 +144,17 @@ export class SlackBot {
     // Buffer prior thread messages as context before the mentioning message
     await this.backfillThreadHistory(thread.id);
 
+    const richText = richTextFromMessage(msg);
     const attachments = await this.resolveAttachments(thread.id, msg);
-    const parts = await this.toParts(msg.text, attachments);
-    await this.bufferAndExecute(thread, msg.text, parts, msg.author.userId);
+    const parts = await this.toParts(richText, attachments);
+    await this.bufferAndExecute(thread, richText, parts, msg.author.userId);
   }
 
   async onSubscribedMessage(thread: BotThread, msg: BotMessage) {
     if (msg.author.isMe || msg.author.isBot) return;
 
     const attachments = msg.isMention ? await this.resolveAttachments(thread.id, msg) : (msg.attachments || []);
-    const text = (msg.text || "").trim();
+    const text = richTextFromMessage(msg);
     if (!text && !attachments.length) return;
 
     const parts = await this.toParts(text || "Shared attachment in thread.", attachments);
@@ -206,15 +216,6 @@ export class SlackBot {
     const t0 = Date.now();
     log.info("execute_start", { thread_key: threadKey, user_id: userId });
 
-    thread.startTyping("Thinking…").catch((err) => {
-      log.warn("start_typing_failed", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
-    });
-
-    // Refresh typing indicator every 25s so it doesn't expire during long tool calls
-    const statusInterval = setInterval(() => {
-      thread.startTyping("Thinking…").catch(() => {});
-    }, STATUS_REFRESH_MS);
-
     try {
       await thread.post(this.stream(threadKey, text, tracker, userId, t0, ac.signal), { taskDisplayMode: "plan" });
     } catch (err) {
@@ -251,8 +252,6 @@ export class SlackBot {
         log.error("error_post_failed", { thread_key: threadKey, error: postErr instanceof Error ? postErr.message : String(postErr) });
       }
       return;
-    } finally {
-      clearInterval(statusInterval);
     }
 
     // Clean up abort controller if we're still the active one
@@ -412,7 +411,7 @@ export class SlackBot {
       // Drop the last non-bot message since it's the mentioning message buffered by bufferAndExecute
       const history = prior.slice(0, -1);
       for (const m of history) {
-        const text = (m.text || "").trim();
+        const text = richTextFromMessage(m);
         if (!text) continue;
         const parts = await this.toParts(text, m.attachments || []);
         await this.client.message({ threadKey, parts, userId: m.author.userId });
