@@ -205,7 +205,7 @@ export class SlackBot {
     const t0 = Date.now();
     log.info("execute_start", { thread_key: threadKey, user_id: userId });
 
-    thread.startTyping("thinking…").catch((err) => {
+    thread.startTyping().catch((err) => {
       log.warn("start_typing_failed", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
     });
 
