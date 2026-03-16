@@ -233,6 +233,7 @@ class BloombergClient:
     def create_universe(self, name: str, identifiers: list[str]) -> dict:
         """Create a universe of securities."""
         body = {
+            "@type": "Universe",
             "identifier": name,
             "title": name,
             "contains": [
@@ -252,11 +253,35 @@ class BloombergClient:
         fields: list[str],
         request_id: str | None = None,
     ) -> dict:
-        """Create a data request."""
+        """Create a data request.
+
+        Args:
+            universe_id: Universe identifier (e.g. "myUniverse"). Bare names
+                are resolved to the full catalog URI automatically.
+            fields: List of Bloomberg field mnemonics
+                (e.g. ["PX_LAST", "PE_RATIO"]).
+            request_id: Optional short identifier (max 21 chars, alphanumeric).
+                Auto-generated if not provided.
+        """
+        rid = request_id or uuid.uuid4().hex[:20]
+        if not universe_id.startswith("/") and not universe_id.startswith("http"):
+            universe_id = f"/eap/catalogs/{self.dl_number}/universes/{universe_id}/"
         body = {
-            "identifier": request_id or str(uuid.uuid4()),
+            "@type": "DataRequest",
+            "identifier": rid,
+            "title": rid,
             "universe": universe_id,
-            "fieldList": [{"mnemonic": f} for f in fields],
+            "trigger": {"@type": "SubmitTrigger"},
+            "formatting": {
+                "@type": "MediaType",
+                "outputMediaType": "application/json",
+            },
+            "fieldList": {
+                "@type": "DataFieldList",
+                "fieldList": [
+                    {"@type": "DataField", "mnemonic": f} for f in fields
+                ],
+            },
         }
         return self._request("POST", f"/eap/catalogs/{self.dl_number}/requests/", json_body=body)
 
