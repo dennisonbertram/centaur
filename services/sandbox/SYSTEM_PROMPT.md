@@ -90,6 +90,21 @@
 |
 |Use unique thread_keys (e.g. "task:<purpose>-<id>") to avoid collisions.
 |The spawned agent runs independently — you can continue your own work while it executes.
+|
+|IMPORTANT — passing files to sub-agents:
+|When dispatching a task that involves files/attachments from the current thread,
+|do NOT tell the sub-agent to re-download from Slack. The files are already stored
+|in the attachments table. Instead:
+|  1. Query your own DB for attachment IDs:
+|     curl -sS -X POST "$CENTAUR_API_URL/agent/query" \
+|       -H "Authorization: Bearer $CENTAUR_API_KEY" \
+|       -H "Content-Type: application/json" \
+|       -d '{"sql":"SELECT id, name, mime_type FROM attachments WHERE thread_key LIKE '\''%<thread_ts>%'\'' ORDER BY created_at"}'
+|  2. Include download instructions in the message to the sub-agent:
+|     "Download these files before starting:
+|      curl -sS -H \"Authorization: Bearer $(cat /home/agent/.api_key)\" \"$CENTAUR_API_URL/agent/attachments/att-abc123/download\" -o \"charter.docx\"
+|      curl -sS -H \"Authorization: Bearer $(cat /home/agent/.api_key)\" \"$CENTAUR_API_URL/agent/attachments/att-def456/download\" -o \"spa.docx\""
+|  This is faster, more reliable, and avoids Slack rate limits.
 
 [Finance domain]
 |CRITICAL: for balance queries, always check ALL custodian tools (run `call tools` to find them all — never assume a single custodian)
