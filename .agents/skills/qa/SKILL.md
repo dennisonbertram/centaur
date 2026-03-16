@@ -114,15 +114,78 @@ Auth failures on etherscan/websearch are known — note but don't block.
 
 **Rules:** Never call write/mutate methods. Use `limit: 2`. Chain dependent calls. See [references/test-inputs.md](references/test-inputs.md).
 
-### 1c. Agent Execute
+### 1c. Agent Execute (connect + execute protocol)
+
+The API uses a two-wire protocol: `/agent/connect` opens a persistent SSE stream, `/agent/execute` injects messages into stdin. Output appears on the connect wire.
+
+**Step 1: Open connect wire** (run in background, write to file):
+
+```bash
+docker exec centaur-api-1 bash -c "curl -s -N -X POST http://localhost:8000/agent/connect \
+  -H 'Content-Type: application/json' \
+  -d '{\"thread_key\": \"test:qa-execute\", \"harness\": \"amp\"}' \
+  > /tmp/sse_qa.txt 2>&1" &
+sleep 5
+```
+
+**Step 2: Execute a message:**
 
 ```bash
 docker exec centaur-api-1 curl -s -X POST http://localhost:8000/agent/execute \
   -H "Content-Type: application/json" \
   -d '{"thread_key":"test:qa-execute","message":"Say hello and nothing else","harness":"amp"}'
+# → {"ok": true, "injected": true, "turn_id": 1}
 ```
 
-**Verify:** SSE stream with `type: turn.done`, non-empty `result`, `session_id` starts with `T-`.
+Wait ~10s, then check the SSE output:
+
+```bash
+docker exec centaur-api-1 cat /tmp/sse_qa.txt
+```
+
+**Verify:** SSE output contains `wire.ready`, `system.init`, `assistant` with response text, and exactly one `turn.done` per turn with non-empty `result`.
+
+**Step 3: Back-to-back follow-up** (same thread, same container):
+
+```bash
+docker exec centaur-api-1 curl -s -X POST http://localhost:8000/agent/execute \
+  -H "Content-Type: application/json" \
+  -d '{"thread_key":"test:qa-execute","message":"Now say goodbye"}'
+```
+
+**Verify:** Second `turn.done` appears on the connect wire with `turn_id: 2`.
+
+### 1c-ii. Handoff Test
+
+Handoffs are transparent — the amp-wrapper detects handoff tool calls, suppresses handoff noise, kills amp, and chains into the new thread. The API sees one continuous stream.
+
+```bash
+docker exec centaur-api-1 curl -s -X POST http://localhost:8000/agent/execute \
+  -H "Content-Type: application/json" \
+  -d '{"thread_key":"test:qa-execute","message":"handoff and say hi 3 times"}'
+```
+
+Wait ~30s, then check SSE output:
+
+**Verify:**
+- No `tool_use` or `tool_result` events for the handoff tool visible in the stream
+- A new `system.init` with a different `session_id` appears (the chained thread)
+- The chained thread's response appears with a `turn.done`
+- No duplicate content — user should NOT see the same text twice
+
+### 1c-iii. Auto-chain (context pressure)
+
+The wrapper auto-chains when context usage exceeds 85% (`AMP_CONTEXT_THRESHOLD` env var). To test, use a low threshold. This requires setting the env var on the sandbox container, which isn't easily done via the API — test locally instead:
+
+```bash
+cd /tmp && mkdir -p test-autochain && cd test-autochain && git init . 2>/dev/null
+(
+  echo '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"say hello"}]}}'
+  sleep 30
+) | AMP_CONTEXT_THRESHOLD=0.01 timeout 30 python3 services/sandbox/amp-wrapper.py 2>/dev/null
+```
+
+**Verify:** Output shows first thread's response + `result`, then seamlessly a new `system.init` with the same `session_id` (continued thread), followed by the chained thread's response.
 
 Clean up: `POST /agent/stop` with `{"thread_key":"test:qa-execute"}`.
 
@@ -413,6 +476,9 @@ cp {SKILL_DIR}/templates/tool-qa-report-template.md {OUTPUT_DIR}/report.md
 | Slackbot port not mapped to host | `web` service removed host port binding | Use `docker exec` to reach slackbot internally at `slackbot:3001` |
 | `call agent execute` returns "Tool 'agent' not found" | Warm pool containers have old `call.sh` without `agent` case | Rebuild sandbox image, drain warm pool (`docker rm -f` warm containers), restart API |
 | Warm pool containers stale after sandbox rebuild | `docker build -t agent2:latest` doesn't update running containers | Drain: `docker ps --filter label=ai2.warm=true -q \| xargs -r docker rm -f` then `docker compose restart api` |
+| Duplicate `turn.done` per turn | `is_turn_done` fires on both `end_turn` and `result` events | The amp-wrapper suppresses `result` events — only `end_turn` triggers `turn.done`. If you see doubles, the sandbox has an old wrapper |
+| Handoff output invisible / missing | amp-wrapper suppresses handoff tool events and chains transparently | Expected behavior — check for a new `system.init` with a different `session_id` in the stream |
+| Agent says "handoffs are disabled" | Sandbox has old SYSTEM_PROMPT.md baked in | Rebuild sandbox: `docker compose build sandbox`, drain warm pool |
 
 ## Issue Investigation
 

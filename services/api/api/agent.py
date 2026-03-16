@@ -413,7 +413,6 @@ async def _stream_stdout(
     result_text = ""
     agent_thread_id: str | None = None
     first_output = False
-    pending_handoff = False
 
     async for line in backend.stream_stdout(session):
         if not first_output:
@@ -441,37 +440,10 @@ async def _stream_stdout(
         if evt.get("type") == "error":
             result_text = ""
 
-        # Detect handoff(follow=true) in assistant tool_use events
-        if session.engine in ("amp", "claude-code") and evt.get("type") == "assistant":
-            for block in evt.get("message", {}).get("content", []):
-                if (
-                    isinstance(block, dict)
-                    and block.get("type") == "tool_use"
-                    and block.get("name") == "handoff"
-                    and isinstance(block.get("input"), dict)
-                    and block["input"].get("follow") is True
-                ):
-                    pending_handoff = True
-                    log.info(
-                        "handoff_follow_detected",
-                        thread_key=session.thread_key,
-                        sandbox=session.sandbox_id[:12],
-                    )
-                    break
-
         for canonical in normalize_harness_event(session.engine, evt):
             yield {"data": json.dumps(canonical, separators=(",", ":"))}
 
         if is_turn_done(session.engine, evt):
-            if pending_handoff:
-                pending_handoff = False
-                log.info(
-                    "handoff_turn_done_skipped",
-                    thread_key=session.thread_key,
-                    sandbox=session.sandbox_id[:12],
-                    turn_id=turn_id,
-                )
-                continue
             rt.last_result = result_text
             turn_id = rt.turn_counter  # pick up latest turn_id for next turn
             yield {"data": json.dumps({

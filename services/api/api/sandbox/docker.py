@@ -58,11 +58,7 @@ _HARNESS_STUB_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AMP_API_KEY", "GIT
 def _build_harness_cmd(engine: str, model: str | None = None) -> list[str]:
     """Build the container CMD for a given harness engine."""
     if engine == "amp":
-        # amp-wrapper handles follow-handoff chaining transparently
-        cmd = ["amp-wrapper"]
-        if model:
-            cmd.extend(["--model", model])
-        return cmd
+        return ["amp-wrapper"]
     if engine == "claude-code":
         cmd = [
             "claude", "--dangerously-skip-permissions",

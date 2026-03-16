@@ -126,13 +126,33 @@ curl -s -X POST http://localhost:8000/agent/execute \
 
 Centaur is a modular service architecture. Each service communicates through well-defined interfaces. As long as you implement these interfaces, you can swap or extend any layer independently.
 
-**Client → API** (two-step message + execute protocol):
+**Client → API** (connect + execute protocol):
 
-Clients (slackbot, web app, CLI) are dumb adapters. They translate platform events into a standard two-step protocol and render the SSE response for their platform. The API is the stateful brain — it owns session lifecycle, harness resolution, message persistence, and context accumulation.
+Clients (slackbot, web app, CLI) are dumb adapters. They translate platform events into a standard protocol and render the SSE response for their platform. The API is the stateful brain — it owns session lifecycle, harness resolution, message persistence, and context accumulation.
 
-**Step 1: Buffer the message** (`POST /agent/messages`)
+The protocol separates the **stdout stream** from **stdin writes**:
 
-Clients first persist the user message (and any attachments) to `chat_messages`. This is a durable write — even if execute fails, the message is saved. Inline base64 image/document blocks are automatically extracted to the `attachments` table and replaced with lightweight `attachment_ref` parts.
+**Step 1: Open the stdout wire** (`POST /agent/connect`)
+
+Opens a persistent SSE connection to the sandbox's stdout. The wire stays open across multiple turns until the container exits. Call this once per session — all subsequent turns stream through the same connection.
+
+```
+POST /agent/connect
+{
+  "thread_key": "slack:C0AJ07U8Z1N:1773364194.179929",
+  "harness": "amp",
+  "platform": "slack"
+}
+
+← SSE stream (stays open across turns)
+← data: {"type":"assistant","message":{...}}
+← data: {"type":"turn.done","turn_id":1,"result":"...","agent_thread_id":""}
+← ... (more turns as execute calls are made)
+```
+
+**Step 2: Buffer messages** (`POST /agent/messages`)
+
+Persist user messages (and any attachments) to `chat_messages`. This is a durable write — even if execute fails, the message is saved. Inline base64 image/document blocks are automatically extracted to the `attachments` table and replaced with lightweight `attachment_ref` parts.
 
 ```
 POST /agent/messages
@@ -144,65 +164,50 @@ POST /agent/messages
   "metadata": {"user_name": "alice", "platform": "slack"}
 }
 
-// With attachments — parts contain Anthropic content blocks:
-POST /agent/messages
-{
-  "thread_key": "slack:C0AJ07U8Z1N:1773364194.179929",
-  "role": "user",
-  "parts": [
-    {"type": "text", "text": "what is this document?"},
-    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "..."}},
-    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}}
-  ],
-  "user_id": "U123",
-  "metadata": {"user_name": "alice", "platform": "slack"}
-}
-
 ← {"ok": true, "inserted": 1}
 ```
 
-**Step 2: Execute the turn** (`POST /agent/execute`)
+**Step 3: Inject stdin** (`POST /agent/execute`)
 
-Triggers the sandbox to process all un-delivered messages. The API flushes pending messages from `chat_messages` (using the `last_delivered_id` cursor in `sandbox_sessions`) into the sandbox's stdin. On first execute for a thread, a system message with platform formatting rules is also inserted.
+Writes the message to the sandbox's stdin. Does NOT return an SSE stream — output appears on the connect wire from Step 1. On first execute for a thread, a system message with platform formatting rules is also injected.
 
 ```
 POST /agent/execute
 {
   "thread_key": "slack:C0AJ07U8Z1N:1773364194.179929",
-  "message": "analyze this",              // plain text (duplicated for harness parsing)
+  "message": "analyze this",
   "harness": "amp",
   "platform": "slack",
   "user_id": "U123"
 }
 
-// With attachments — message is an array of Anthropic content blocks:
-POST /agent/execute
+← {"ok": true, "injected": true, "turn_id": 1}
+```
+
+**Reconnect** (`POST /agent/reconnect`)
+
+Re-attach to a running container's stdout without sending a new turn. Used by the slackbot to recover an in-progress stream after an API restart.
+
+```
+POST /agent/reconnect
 {
   "thread_key": "slack:C0AJ07U8Z1N:1773364194.179929",
-  "message": [
-    {"type": "text", "text": "what is this document?"},
-    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "..."}},
-    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}}
-  ],
   "harness": "amp",
-  "platform": "slack",
-  "user_id": "U123"
+  "skip_done_count": 0
 }
 
-← SSE stream of CanonicalEvents (NDJSON, one event per `data:` line)
-← data: {"type":"assistant","message":{...}}
-← data: {"type":"turn.done","turn_id":1,"result":"...","agent_thread_id":""}
+← SSE stream (same format as connect)
 ```
 
 **What gets written to Postgres after a full turn:**
 
 | Table | What | When |
 |-------|------|------|
-| `chat_messages` (role=user) | User message parts (with `attachment_ref` replacing inline blobs) | Step 1 (`/agent/messages`) |
-| `attachments` | Raw binary blobs extracted from base64 image/document parts | Step 1 (automatic) |
-| `chat_messages` (role=system) | Platform formatting context (e.g. Slack markdown rules) | Step 2 (first execute only) |
-| `chat_messages` (role=assistant) | Final assistant response text | Step 2 (after `turn.done`) |
-| `sandbox_sessions` | Session state (`idle`), `last_delivered_id` cursor, `thread_name` | Step 2 (after `turn.done`) |
+| `chat_messages` (role=user) | User message parts (with `attachment_ref` replacing inline blobs) | Step 2 (`/agent/messages`) |
+| `attachments` | Raw binary blobs extracted from base64 image/document parts | Step 2 (automatic) |
+| `chat_messages` (role=system) | Platform formatting context (e.g. Slack markdown rules) | Step 3 (first execute only) |
+| `chat_messages` (role=assistant) | Final assistant response text | Step 3 (after `turn.done`) |
+| `sandbox_sessions` | Session state (`idle`), `last_delivered_id` cursor, `thread_name` | Step 3 (after `turn.done`) |
 
 Multiple messages can be buffered via repeated `/agent/messages` calls before a single `/agent/execute`. The flush pipeline delivers all un-delivered messages to the sandbox in order.
 
@@ -542,7 +547,21 @@ docker compose build sandbox
 source .env
 ```
 
-### 2. Execute a message (auto-spawns container)
+### 2. Open the stdout wire (terminal 1)
+
+```bash
+curl -s -N -X POST http://localhost:8000/agent/connect \
+  -H "Authorization: Bearer $API_SECRET_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "thread_key": "test:e2e-1",
+    "harness": "amp"
+  }'
+```
+
+This returns an SSE stream that stays open across all turns.
+
+### 3. Execute a message (terminal 2)
 
 ```bash
 curl -s -X POST http://localhost:8000/agent/execute \
@@ -555,7 +574,9 @@ curl -s -X POST http://localhost:8000/agent/execute \
   }'
 ```
 
-### 3. Follow-up (same container, same session)
+Output streams on the connect wire in terminal 1. Execute returns `{"ok": true, "injected": true, "turn_id": 1}`.
+
+### 4. Follow-up (same container, same session)
 
 ```bash
 curl -s -X POST http://localhost:8000/agent/execute \
@@ -567,7 +588,7 @@ curl -s -X POST http://localhost:8000/agent/execute \
   }'
 ```
 
-### 4. Inspect / Clean up
+### 5. Inspect / Clean up
 
 ```bash
 curl -s "http://localhost:8000/agent/status?key=test:e2e-1" \

@@ -89,11 +89,11 @@
 |Do NOT waste time checking env vars, searching for tokens, or trying curl — use the slack tool.
 |For files in other Slack messages, use the same get_message_files → download_file flow.
 
-[Handoff tool — DISABLED]
-|Do NOT use the `handoff` tool. It does not work in this sandbox — followed threads
-|do not stream output back to Slack. If you need to do more work, just keep going
-|in the current thread. If the user explicitly asks you to hand off, explain that
-|handoffs are not supported and continue the work directly.
+[Handoff tool]
+|The `handoff` tool works in this sandbox. When you use `handoff` with `follow: true`,
+|the wrapper automatically continues execution in the new thread — output keeps
+|streaming back to the user seamlessly. Use handoffs when the task genuinely benefits
+|from a fresh context (long thread, context degrading, focused sub-task).
 
 [Staking]
 |anchorage → anchorage staking tools or BQ anchorage_balances_view.stakedBalanceQuantity
