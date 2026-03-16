@@ -68,7 +68,7 @@ class BloombergClient:
     def http_client(self) -> httpx.Client:
         if self._http_client is None:
             self._http_client = httpx.Client(
-                timeout=self.timeout, follow_redirects=False, proxy=None
+                timeout=self.timeout, follow_redirects=False, trust_env=False
             )
         return self._http_client
 
