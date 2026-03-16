@@ -30,6 +30,7 @@ from api.sandbox.harness_protocol import (
     is_turn_done,
     messages_to_content_blocks,
 )
+from api.deps import mint_sandbox_token
 from api.sandbox.normalize import normalize_harness_event
 from api.sandbox.registry import get_backend
 
@@ -586,6 +587,14 @@ async def inject_stdin(
         return {"ok": True, "injected": False}
 
     backend = get_backend()
+
+    # Refresh sandbox token on every turn so it never expires mid-session
+    try:
+        fresh_token = mint_sandbox_token(session.thread_key, session.sandbox_id)
+        await backend.refresh_token_by_id(session.sandbox_id, fresh_token)
+    except Exception:
+        log.warning("token_refresh_failed", sandbox=session.sandbox_id[:12])
+
     await backend.attach(session)
 
     try:

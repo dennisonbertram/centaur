@@ -115,7 +115,8 @@ def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
                     "type": "text",
                     "text": (
                         f"User attached file: {name} ({mime}). "
-                        f"Download with: curl -sS -H \"Authorization: Bearer $CENTAUR_API_KEY\" "
+                        f"Download with: curl -sS -H \"Authorization: Bearer "
+                        f"$(cat /home/agent/.api_key)\" "
                         f"\"$CENTAUR_API_URL/agent/attachments/{att_id}/download\" -o \"{name}\""
                     ),
                 })
