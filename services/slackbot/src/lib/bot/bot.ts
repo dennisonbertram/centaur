@@ -10,6 +10,40 @@ import { ProgressTracker } from "./progress-tracker";
 const KEEPALIVE_MS = 120_000; // 2 min — Slack expires streaming state after ~5 min
 const STREAM_EXPIRED_POLL_INTERVAL_MS = 3_000;
 const STREAM_EXPIRED_POLL_MAX_MS = 5 * 60_000;
+const SLACK_MSG_MAX_CHARS = 3900; // Slack's hard limit is 4000; leave margin
+
+/**
+ * Split text into chunks that fit within Slack's message limit.
+ * Splits on paragraph boundaries (double newline), falling back to single newlines,
+ * then hard-cutting at the limit if no natural break is found.
+ */
+export function splitSlackMessage(text: string, limit = SLACK_MSG_MAX_CHARS): string[] {
+  if (text.length <= limit) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > limit) {
+    let cut = -1;
+    // Prefer splitting at a paragraph boundary
+    const paraIdx = remaining.lastIndexOf("\n\n", limit);
+    if (paraIdx > limit * 0.3) {
+      cut = paraIdx;
+    } else {
+      // Fall back to single newline
+      const nlIdx = remaining.lastIndexOf("\n", limit);
+      if (nlIdx > limit * 0.3) {
+        cut = nlIdx;
+      } else {
+        // Hard cut at last space
+        const spIdx = remaining.lastIndexOf(" ", limit);
+        cut = spIdx > limit * 0.3 ? spIdx : limit;
+      }
+    }
+    chunks.push(remaining.slice(0, cut).trimEnd());
+    remaining = remaining.slice(cut).trimStart();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
 
 /** Extract harness/persona flag (e.g. --invest, --legal) from message text. */
 function parseHarnessFlag(text: string): string | undefined {
@@ -192,7 +226,9 @@ export class SlackBot {
         }
 
         if (fallback) {
-          await thread.post({ markdown: fallback });
+          for (const chunk of splitSlackMessage(fallback)) {
+            await thread.post({ markdown: chunk });
+          }
         } else if (this.viewerUrl) {
           const viewerLink = `${this.viewerUrl}/${encodeURIComponent(normalizeThreadKey(threadKey))}`;
           await thread.post({ markdown: `Agent completed. [View full output](${viewerLink})` });
@@ -214,8 +250,17 @@ export class SlackBot {
     // Clean up abort controller if we're still the active one
     if (this.streamAbort.get(threadKey) === ac) this.streamAbort.delete(threadKey);
 
+    // Post any overflow chunks that didn't fit in the streaming message
+    for (const chunk of tracker.overflowChunks) {
+      try {
+        await thread.post({ markdown: chunk });
+      } catch (err) {
+        log.warn("overflow_post_failed", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
     const finalText = (tracker.resultText || tracker.lastAssistantText).trim();
-    log.info("execute_complete", { thread_key: threadKey, duration_s: Math.round((Date.now() - t0) / 100) / 10, result_length: finalText.length });
+    log.info("execute_complete", { thread_key: threadKey, duration_s: Math.round((Date.now() - t0) / 100) / 10, result_length: finalText.length, overflow_chunks: tracker.overflowChunks.length });
 
     if (this.slack) {
       try {
@@ -324,7 +369,9 @@ export class SlackBot {
     // Complete all in-progress steps and set plan title to "Completed"
     yield* tracker.finalize();
 
-    // Emit the final response as markdown_text so Slack's streaming API includes it
+    // Emit the final response as markdown_text so Slack's streaming API includes it.
+    // If the text exceeds Slack's 4k char limit, yield only the first chunk here
+    // and stash overflow for the caller to post as separate messages.
     const finalText = (tracker.resultText || tracker.lastAssistantText).trim();
     if (finalText) {
       const dur = (Date.now() - t0) / 1000;
@@ -332,9 +379,12 @@ export class SlackBot {
       const harness = tracker.agentThreadId
         ? `[agent](https://ampcode.com/threads/${tracker.agentThreadId})`
         : "agent";
-      let md = `_${[process.env.APP_NAME || "Centaur", harness, durStr].join(" · ")}_\n\n${finalText}`;
-      if (this.viewerUrl) md += `\n\n[Thread Viewer](${this.viewerUrl}/${encodeURIComponent(threadKey)})`;
-      yield { type: "markdown_text", text: md };
+      const prefix = `_${[process.env.APP_NAME || "Centaur", harness, durStr].join(" · ")}_\n\n`;
+      const suffix = this.viewerUrl ? `\n\n[Thread Viewer](${this.viewerUrl}/${encodeURIComponent(threadKey)})` : "";
+      const fullMd = `${prefix}${finalText}${suffix}`;
+      const chunks = splitSlackMessage(fullMd);
+      yield { type: "markdown_text", text: chunks[0] };
+      tracker.overflowChunks = chunks.slice(1);
     } else {
       yield { type: "markdown_text", text: "Agent completed with no output." };
     }

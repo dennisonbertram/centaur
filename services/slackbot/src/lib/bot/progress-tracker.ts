@@ -42,6 +42,8 @@ export class ProgressTracker {
   resultText = "";
   /** Agent thread ID (Amp session ID from system.init). */
   agentThreadId = "";
+  /** Overflow chunks when the final text exceeds Slack's message limit. */
+  overflowChunks: string[] = [];
 
   private activeTools = new Map<string, ActiveTool>();
   private tasks = new Map<string, { title: string; status: TaskStatus }>();

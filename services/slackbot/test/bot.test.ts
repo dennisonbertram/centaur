@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { ProgressTracker } from "../src/lib/bot/progress-tracker";
+import { splitSlackMessage } from "../src/lib/bot/bot";
 import { normalizeHarnessEvent, type CanonicalEvent } from "@centaur/harness-events";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -464,4 +465,77 @@ describe("simulated stream deaths", () => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// 5. splitSlackMessage
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe("splitSlackMessage", () => {
+  it("returns single chunk for short text", () => {
+    const chunks = splitSlackMessage("Hello world", 100);
+    expect(chunks).toEqual(["Hello world"]);
+  });
+
+  it("returns single chunk for text exactly at limit", () => {
+    const text = "a".repeat(100);
+    expect(splitSlackMessage(text, 100)).toEqual([text]);
+  });
+
+  it("splits on paragraph boundary", () => {
+    const para1 = "a".repeat(60);
+    const para2 = "b".repeat(60);
+    const text = `${para1}\n\n${para2}`;
+    const chunks = splitSlackMessage(text, 80);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toBe(para1);
+    expect(chunks[1]).toBe(para2);
+  });
+
+  it("splits on newline when no paragraph break available", () => {
+    const line1 = "a".repeat(60);
+    const line2 = "b".repeat(60);
+    const text = `${line1}\n${line2}`;
+    const chunks = splitSlackMessage(text, 80);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toBe(line1);
+    expect(chunks[1]).toBe(line2);
+  });
+
+  it("splits on space when no newline available", () => {
+    const text = "word ".repeat(20).trim(); // 99 chars
+    const chunks = splitSlackMessage(text, 50);
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(50);
+    }
+  });
+
+  it("hard cuts when no natural break point", () => {
+    const text = "a".repeat(200);
+    const chunks = splitSlackMessage(text, 100);
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toBe("a".repeat(100));
+    expect(chunks[1]).toBe("a".repeat(100));
+  });
+
+  it("handles real-world long response with multiple paragraphs", () => {
+    const paragraphs = Array.from({ length: 10 }, (_, i) => `Paragraph ${i}: ${"x".repeat(500)}`);
+    const text = paragraphs.join("\n\n");
+    const chunks = splitSlackMessage(text, 3900);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(3900);
+    }
+    // Reassembling should recover all content
+    const reassembled = chunks.join("\n\n");
+    for (const para of paragraphs) {
+      expect(reassembled).toContain(para);
+    }
+  });
+
+  it("uses default limit of 3900", () => {
+    const text = "a".repeat(3900);
+    expect(splitSlackMessage(text)).toEqual([text]);
+    const longText = "a".repeat(3901);
+    expect(splitSlackMessage(longText).length).toBeGreaterThanOrEqual(2);
+  });
+});
 
