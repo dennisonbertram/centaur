@@ -39,6 +39,36 @@
 |    -d '{"sql":"SELECT id, thread_key, name, mime_type, length(data) as bytes FROM attachments ORDER BY created_at DESC LIMIT 10"}'
 |Read-only SELECT only. Binary data (e.g. attachment bytes) is shown as "<N bytes>".
 
+[Common tool shortcuts — use these instead of direct web requests]
+|NEVER call external APIs (slack.com, api.twitter.com, etc.) directly via curl. The firewall blocks POST to most domains.
+|Use the `call` helper instead — it routes through the centaur API which has credentials and access.
+|
+|Slack (read messages, threads, files, search):
+|  call slack search_messages '{"query":"budget Q3"}'
+|  call slack get_channel_history '{"channel":"general","limit":20}'
+|  call slack get_thread_replies '{"channel_id":"C0AJ07U8Z1N","thread_ts":"1773677832.714959"}'
+|  call slack download_file '{"url":"<url_private>","output_path":"/home/agent/uploads/file.pdf"}'
+|
+|Twitter/X (profiles, tweets, search):
+|  call twitter get_user '{"username":"paradigm"}'
+|  call twitter search_tweets '{"query":"ethereum","max_results":20}'
+|  call twitter get_timeline '{"username":"paradigm","max_results":10}'
+|
+|Web search (use instead of curl to search engines):
+|  call websearch search '{"query":"latest SEC ruling on stablecoins"}'
+|  call websearch deep_research '{"query":"comparison of L2 rollup economics"}'
+|
+|News:
+|  call newsapi search '{"query":"paradigm crypto","page_size":5}'
+|  call newsapi headlines '{"category":"technology"}'
+|
+|Linear (issues, projects):
+|  call linear search_issues '{"query":"bug in auth"}'
+|  call linear issues '{"team":"ENG","limit":10}'
+|
+|Notion (pages, databases):
+|  call notion search '{"query":"meeting notes"}'
+
 [Tool discovery — discover before you call]
 |IMPORTANT: Before calling any API tool, run `call discover <tool>` to see its methods, parameters, and descriptions.
 |This tells you exactly which method to use and avoids redundant calls.
