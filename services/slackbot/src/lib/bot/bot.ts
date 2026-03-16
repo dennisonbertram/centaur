@@ -149,6 +149,7 @@ export class SlackBot {
   async onNewMention(thread: BotThread, msg: BotMessage) {
     if (msg.author.isMe || msg.author.isBot) return;
     await thread.subscribe();
+    thread.startTyping().catch(() => {});
 
     // Buffer prior thread messages as context before the mentioning message
     await this.backfillThreadHistory(thread.id);
@@ -179,6 +180,7 @@ export class SlackBot {
 
     // Only execute on mention
     if (msg.isMention) {
+      thread.startTyping().catch(() => {});
       await this.execute(thread, threadKey, text, msg.author.userId);
     }
   }
