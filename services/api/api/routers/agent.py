@@ -8,6 +8,7 @@ import re
 import time as _time
 import uuid
 
+import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -265,6 +266,158 @@ async def _extract_attachments(
     return out
 
 
+# URL patterns for auto-archiving
+_DOCSEND_RE = re.compile(r"https?://(?:www\.)?docsend\.com/view/([a-zA-Z0-9]+)")
+_GDOC_RE = re.compile(
+    r"https?://docs\.google\.com/(document|spreadsheets|presentation)/d/([a-zA-Z0-9_-]+)"
+)
+_GDRIVE_RE = re.compile(r"https?://drive\.google\.com/file/d/([a-zA-Z0-9_-]+)")
+
+_GDOC_EXPORT_FORMATS: dict[str, tuple[str, str]] = {
+    "document": ("pdf", "application/pdf"),
+    "spreadsheets": ("xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+    "presentation": ("pdf", "application/pdf"),
+}
+
+_MIME_EXT: dict[str, str] = {
+    "application/pdf": "pdf",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "text/plain": "txt",
+}
+
+
+async def _read_and_cleanup(path: str) -> bytes:
+    """Read a file's bytes and delete it."""
+    import os
+
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+async def _resolve_urls(
+    pool, thread_key: str, message_id: str, parts: list[dict], request: Request,
+) -> list[dict]:
+    """Scan text parts for DocSend / Google Docs / Google Drive URLs.
+
+    Downloads the referenced documents via internal tool clients (gsuite,
+    docsend), stores them in the ``attachments`` table, and appends
+    ``attachment_ref`` parts to the returned list.  The original parts are
+    preserved unchanged.  Failures are logged but never block the message.
+    """
+    urls: list[tuple[str, str, dict]] = []  # (kind, url, extra)
+    for part in parts:
+        if part.get("type") != "text":
+            continue
+        text = part.get("text", "")
+        for m in _DOCSEND_RE.finditer(text):
+            urls.append(("docsend", m.group(0), {"doc_id": m.group(1)}))
+        for m in _GDOC_RE.finditer(text):
+            urls.append(("gdoc", m.group(0), {"doc_type": m.group(1), "file_id": m.group(2)}))
+        for m in _GDRIVE_RE.finditer(text):
+            urls.append(("gdrive", m.group(0), {"file_id": m.group(1)}))
+
+    if not urls:
+        return parts
+
+    from api.app import get_tool_manager
+
+    tm = get_tool_manager()
+    new_refs: list[dict] = []
+
+    for kind, url, extra in urls:
+        try:
+            if kind == "docsend":
+                result = await tm.call_tool_raw("docsend", "download", {"url": url})
+                if not isinstance(result, dict):
+                    log.warning("url_resolve_failed", url=url, reason="unexpected result")
+                    continue
+                if result.get("error") and not result.get("data"):
+                    log.warning("url_resolve_failed", url=url, reason=result["error"])
+                    continue
+                if result.get("status") != "ok" or not result.get("data"):
+                    log.warning("url_resolve_failed", url=url, reason=result.get("error", "no data"))
+                    continue
+                raw_bytes = base64.b64decode(result["data"])
+                filename = result.get("filename", f"docsend_{extra['doc_id']}.pdf")
+                mime_type = result.get("mime_type", "application/pdf")
+
+            elif kind == "gdoc":
+                doc_type = extra["doc_type"]
+                file_id = extra["file_id"]
+                fmt, mime_type = _GDOC_EXPORT_FORMATS.get(doc_type, ("pdf", "application/pdf"))
+                result = await tm.call_tool_raw(
+                    "gsuite", "drive_export",
+                    {"file_id": file_id, "export_format": fmt},
+                )
+                if isinstance(result, dict) and result.get("error"):
+                    log.warning("url_resolve_failed", url=url, reason=result["error"])
+                    continue
+                raw_bytes = await _read_and_cleanup(str(result))
+                ext = "xlsx" if fmt == "xlsx" else "pdf"
+                filename = f"gdoc_{file_id}.{ext}"
+
+            elif kind == "gdrive":
+                file_id = extra["file_id"]
+                # Get file metadata first for name/mime
+                meta = await tm.call_tool_raw("gsuite", "drive_get", {"file_id": file_id})
+                if isinstance(meta, dict) and meta.get("error"):
+                    log.warning("url_resolve_failed", url=url, reason=meta["error"])
+                    continue
+
+                import tempfile
+
+                tmp = tempfile.mktemp(prefix=f"gdrive_{file_id}_")
+                result = await tm.call_tool_raw(
+                    "gsuite", "drive_download",
+                    {"file_id": file_id, "output_path": tmp},
+                )
+                if isinstance(result, dict) and result.get("error"):
+                    log.warning("url_resolve_failed", url=url, reason=result["error"])
+                    continue
+                raw_bytes = await _read_and_cleanup(str(result))
+                if isinstance(meta, dict):
+                    mime_type = meta.get("mimeType", "application/octet-stream")
+                    name = meta.get("name", file_id)
+                else:
+                    mime_type = "application/octet-stream"
+                    name = file_id
+                ext = _MIME_EXT.get(mime_type, mime_type.split("/")[-1] if "/" in mime_type else "bin")
+                filename = f"{name}.{ext}" if "." not in name else name
+
+            else:
+                continue
+
+            att_id = f"att-{uuid.uuid4().hex[:16]}"
+            await pool.execute(
+                "INSERT INTO attachments (id, thread_key, message_id, name, mime_type, data) "
+                "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
+                att_id, thread_key, message_id, filename, mime_type, raw_bytes,
+            )
+            new_refs.append({
+                "type": "attachment_ref",
+                "id": att_id,
+                "name": filename,
+                "mime_type": mime_type,
+                "source_url": url,
+            })
+            log.info("url_resolved", url=url, kind=kind, att_id=att_id, size=len(raw_bytes))
+
+        except Exception:
+            log.warning("url_resolve_failed", url=url, kind=kind, exc_info=True)
+
+    return [*parts, *new_refs]
+
+
 @router.post("/messages", dependencies=[Depends(require_scope("agent:execute"))])
 async def post_messages(request: Request):
     """Buffer messages into chat_messages for a thread."""
@@ -322,10 +475,19 @@ async def post_messages(request: Request):
             inserted += 1
 
         if has_blobs:
-            new_parts = await _extract_attachments(pool, thread_key, msg_id, parts)
+            parts = await _extract_attachments(pool, thread_key, msg_id, parts)
             await pool.execute(
                 "UPDATE chat_messages SET parts = $1::jsonb WHERE id = $2",
-                _json.dumps(new_parts),
+                _json.dumps(parts),
+                msg_id,
+            )
+
+        # Auto-archive DocSend / Google Docs / Google Drive URLs
+        url_parts = await _resolve_urls(pool, thread_key, msg_id, parts, request)
+        if len(url_parts) != len(parts):
+            await pool.execute(
+                "UPDATE chat_messages SET parts = $1::jsonb WHERE id = $2",
+                _json.dumps(url_parts),
                 msg_id,
             )
 
