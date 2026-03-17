@@ -22,8 +22,12 @@ This is the **Policy Explainer Index** ([link](https://docs.google.com/document/
 **Workflow:**
 1. Read the Policy Explainer Index to check if the topic has been analyzed
 2. If an explainer exists, read the linked analysis doc for full detail
-3. Only then supplement with external sources (OCC/SEC/CFTC websites, Federal Register, etc.) if needed
-4. Always cite the internal analysis as the primary source
+3. Pull recent posts from **#gigabrain-feed** for additional policy intel:
+   ```bash
+   call slack get_channel_history '{"channel":"C0AM0TR8N91","limit":50}'
+   ```
+4. Only then supplement with external sources (OCC/SEC/CFTC websites, Federal Register, etc.) if needed
+5. Always cite the internal analysis as the primary source
 
 ## Core Capabilities
 
@@ -56,6 +60,7 @@ This is the **Policy Explainer Index** ([link](https://docs.google.com/document/
 |--------|------|---------|
 | **Shift / paradigmdb** | `call paradigmdb` | Portfolio companies, prior interactions, notes |
 | **Slack** | `call slack search_messages` | Policy team discussions, intel |
+| **#gigabrain-feed** | `call slack get_channel_history '{"channel":"C0AM0TR8N91"}'` | Curated policy intel feed — regulatory updates, legislative signals, and policy analysis posted by the policy team. Check this channel early in any policy workflow. |
 | **GSuite** | `call gsuite` | Meeting notes, Hill interaction logs, Drive docs |
 | **Archived docs / notes** | `call gsuite`, `call slack search_messages`, `call websearch search` | Archived policy documents, notes, and discussion |
 
@@ -80,6 +85,7 @@ Generate a policy briefing memo before Hill meetings.
 2. Search internal sources for prior Paradigm interactions:
    ```bash
    call slack search_messages '{"query":"from:#policy [member_name]"}'
+   call slack search_messages '{"query":"in:#gigabrain-feed [member_name]"}'
    call gsuite gmail_search '{"query":"[member_name]"}'
    call paradigmdb notes_search '{"query":"[member_name]"}'
    ```
@@ -382,16 +388,21 @@ The system should answer questions like:
 
 **Agent:**
 1. Read Policy Explainer Index first for internal analysis
-2. Web search for Senator Lummis profile, recent statements, committee assignments
-3. Search internal sources:
+2. Pull recent #gigabrain-feed posts for stablecoin intel:
+   ```bash
+   call slack get_channel_history '{"channel":"C0AM0TR8N91","limit":50}'
+   ```
+3. Web search for Senator Lummis profile, recent statements, committee assignments
+4. Search internal sources:
    ```bash
    call slack search_messages '{"query":"Lummis"}'
+   call slack search_messages '{"query":"in:#gigabrain-feed Lummis"}'
    call gsuite gmail_search '{"query":"Lummis"}'
    call paradigmdb notes_search '{"query":"Lummis"}'
    ```
-4. Find current stablecoin legislation status
-5. Check portfolio companies in stablecoin space
-6. Generate briefer using template
+5. Find current stablecoin legislation status
+6. Check portfolio companies in stablecoin space
+7. Generate briefer using template
 
 ---
 
