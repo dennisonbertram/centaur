@@ -51,8 +51,8 @@ This is the **Policy Explainer Index** ([link](https://docs.google.com/document/
 | **Congress.gov** | `call congress` | Bills, members, committees, hearings, votes, amendments |
 | **Federal Register** | `call fedreg` | Regulatory dockets, comment periods, rulemakings |
 | **OpenFEC** | `call openfec` | Campaign contributions, candidates, committees, filings |
-| **LegiStorm** | `call legistorm` | Staffer database, career tracking, office moves |
-| **Plural Policy** | — | Bill momentum scores, AI summaries (future) |
+| **LegiStorm** | `call legistorm` | Congressional staff (`get_staff`), members (`get_members`), hearings (`get_hearings`), offices (`get_offices`), caucuses (`get_caucuses`), town halls (`get_townhalls`), privately funded travel (`get_trips`). All list endpoints require `updated_from`/`updated_to` date params (YYYY-MM-DD). |
+| **Plural (Open States)** | `call plural` | State-level legislation (`search_bills`, `get_bill`), legislators (`search_people`), committees (`list_committees`), and legislative events (`list_events`). Use `jurisdiction` param (e.g. `"New York"`, `"California"`). Covers all 50 states + territories. |
 
 ### Internal Sources
 
@@ -81,7 +81,11 @@ Generate a policy briefing memo before Hill meetings.
 **Input:** Member/staffer name, meeting context, date
 
 **Steps:**
-1. Look up member profile via web search (committee assignments, voting history, public statements)
+1. Look up member profile via web search and LegiStorm:
+   ```bash
+   # LegiStorm member profile, committee assignments, staff
+   call legistorm get_members '{"updated_from":"2025-01-01","updated_to":"2026-12-31","state_id":"[XX]"}'
+   ```
 2. Search internal sources for prior Paradigm interactions:
    ```bash
    call slack search_messages '{"query":"from:#policy [member_name]"}'
@@ -171,8 +175,10 @@ call gsuite gmail_search '{"query":"[staffer_name]"}'
 # Check if mentioned in notes
 call paradigmdb notes_search '{"query":"[staffer_name]"}'
 
-# LegiStorm lookup
-call legistorm staff '{"name":"[staffer_name]"}'
+# LegiStorm lookup — get_staff requires date range; use a wide window to find current staff
+call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","member_id":[member_id]}'
+# Or search all recent staff updates
+call legistorm get_staff '{"updated_from":"2026-01-01","updated_to":"2026-12-31","limit":20}'
 ```
 
 ### 3. Bill Tracking & Analysis
@@ -199,13 +205,20 @@ Monitor crypto-relevant legislation across federal and state jurisdictions.
 
 **Search Commands:**
 ```bash
-# Search bills via Congress.gov API
+# Search federal bills via Congress.gov API
 call congress bills '{"congress":119,"limit":50}'
 call congress bill '{"congress":119,"type":"hr","number":4763,"detail":"summaries"}'
 
-# Search hearings
+# Search federal hearings
 call congress hearings '{"congress":119,"chamber":"senate"}'
-call legistorm townhalls '{}'
+call legistorm get_hearings '{"updated_from":"2026-01-01","updated_to":"2026-12-31","chamber":"S"}'
+call legistorm get_townhalls '{"updated_from":"2026-01-01","updated_to":"2026-12-31"}'
+
+# Search STATE-LEVEL bills via Plural (Open States)
+call plural search_bills '{"jurisdiction":"New York","q":"cryptocurrency","sort":"updated_desc"}'
+call plural search_bills '{"jurisdiction":"California","q":"digital assets"}'
+# Get specific state bill details
+call plural get_bill '{"jurisdiction":"New York","session":"2025-2026","bill_id":"S1234"}'
 
 # Search for internal discussions
 call slack search_messages '{"query":"[bill number]"}'
@@ -281,8 +294,21 @@ call fedreg search '{"query":"cryptocurrency","agency":"securities-and-exchange-
 call fedreg search '{"query":"digital assets","agency":"commodity-futures-trading-commission"}'
 call fedreg search '{"query":"stablecoin","type":"PRORULE"}'
 
-# State-level via web search
-web_search "state cryptocurrency legislation 2026"
+# State-level legislation via Plural (Open States) — check priority states
+call plural search_bills '{"jurisdiction":"New York","q":"cryptocurrency","action_since":"2026-01-01"}'
+call plural search_bills '{"jurisdiction":"Texas","q":"digital assets","action_since":"2026-01-01"}'
+call plural search_bills '{"jurisdiction":"California","q":"blockchain","action_since":"2026-01-01"}'
+call plural search_bills '{"jurisdiction":"Wyoming","q":"digital assets","action_since":"2026-01-01"}'
+call plural search_bills '{"jurisdiction":"Illinois","q":"cryptocurrency","action_since":"2026-01-01"}'
+
+# State-level events (hearings, floor sessions)
+call plural list_events '{"jurisdiction":"New York","after":"2026-01-01","require_bills":true}'
+
+# LegiStorm for congressional hearing trends
+call legistorm get_hearings '{"updated_from":"2026-01-01","updated_to":"2026-12-31","limit":20}'
+
+# Supplement with web search
+call websearch search '{"query":"state cryptocurrency legislation 2026"}'
 ```
 
 ### 7. Regulatory Docket Monitoring
@@ -395,7 +421,11 @@ The system should answer questions like:
    ```bash
    call slack get_channel_history '{"channel":"C0AM0TR8N91","limit":50}'
    ```
-3. Web search for Senator Lummis profile, recent statements, committee assignments
+3. Look up Senator Lummis via LegiStorm and web search:
+   ```bash
+   call legistorm get_members '{"updated_from":"2025-01-01","updated_to":"2026-12-31","state_id":"WY"}'
+   call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","member_id":[lummis_member_id]}'
+   ```
 4. Search internal sources:
    ```bash
    call slack search_messages '{"query":"Lummis"}'
@@ -403,7 +433,11 @@ The system should answer questions like:
    call gsuite gmail_search '{"query":"Lummis"}'
    call paradigmdb notes_search '{"query":"Lummis"}'
    ```
-5. Find current stablecoin legislation status
+5. Find current stablecoin legislation — federal and state:
+   ```bash
+   call congress bills '{"congress":119}'
+   call plural search_bills '{"q":"stablecoin","action_since":"2026-01-01"}'
+   ```
 6. Check portfolio companies in stablecoin space
 7. Generate briefer using template
 
@@ -413,6 +447,5 @@ The system should answer questions like:
 
 | Integration | Purpose | Priority |
 |-------------|---------|----------|
-| Plural Policy API | Bill tracking, momentum scores | High |
 | Shift direct integration | Portfolio cross-reference | Medium |
 | Regulations.gov API | Docket comments, rulemaking tracking | Medium |
