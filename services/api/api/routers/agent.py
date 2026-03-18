@@ -644,18 +644,19 @@ async def reconnect(req: ReconnectRequest):
     Used by the slackbot to recover an in-progress stream after an API restart.
     Returns 404 if no running session exists for this thread.
     """
-    from api.sandbox.registry import get_backend
+    # Snapshot existing session to detect container replacement
+    existing = await _db_get_session(req.thread_key)
+    existing_sandbox = existing.sandbox_id if existing else None
 
-    session = await _db_get_session(req.thread_key)
-    if not session:
-        raise HTTPException(status_code=404, detail="No session found for this thread")
+    session = await get_or_spawn(req.thread_key, req.harness, engine=req.engine)
 
-    backend = get_backend()
-    st = await backend.status(session)
-    if st != "running":
-        # Reconcile DB state so future lookups don't hit a stale row
-        await _db_update_state(req.thread_key, "gone")
-        raise HTTPException(status_code=404, detail=f"Container not running (status={st})")
+    # If container was replaced (dead → new warm container), flush pending messages
+    if session.sandbox_id != existing_sandbox:
+        try:
+            await inject_stdin(session, "", platform=None, user_id=None)
+        except Exception:
+            log.warning("reconnect_flush_failed", thread_key=req.thread_key,
+                        sandbox=session.sandbox_id[:12])
 
     return EventSourceResponse(
         stream_reconnect(session, skip_done_count=req.skip_done_count),

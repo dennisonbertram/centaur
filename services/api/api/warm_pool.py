@@ -82,6 +82,29 @@ async def _spawn_warm_container() -> WarmContainer | None:
 
 async def replenish() -> int:
     """Spawn sandboxes until the pool reaches target size. Returns count spawned."""
+    # Health-check existing pool entries
+    backend = get_backend()
+    async with _pool_lock:
+        alive = []
+        for warm in _pool:
+            try:
+                st = await backend.status_by_id(warm.sandbox_id)
+                if st == "running" and (time.time() - warm.created_at) < 3600:
+                    alive.append(warm)
+                else:
+                    log.info(
+                        "warm_pool_evicted",
+                        sandbox=warm.sandbox_id[:12],
+                        status=st,
+                        age_s=round(time.time() - warm.created_at),
+                    )
+                    with contextlib.suppress(Exception):
+                        await backend.stop_by_id(warm.sandbox_id)
+            except Exception:
+                log.info("warm_pool_evicted_error", sandbox=warm.sandbox_id[:12])
+        if len(alive) != len(_pool):
+            _pool[:] = alive
+
     spawned = 0
     while True:
         async with _pool_lock:
@@ -233,11 +256,8 @@ async def claim_container(
             await backend.stop_by_id(warm.sandbox_id)
         return None
 
-    new_name = f"centaur-sandbox-{thread_key.replace(':', '-').replace('.', '-')[:40]}"
-    await backend.rename_by_id(warm.sandbox_id, new_name)
-
     try:
-        fresh_token = mint_sandbox_token(thread_key, new_name)
+        fresh_token = mint_sandbox_token(thread_key, warm.sandbox_id)
         await backend.refresh_token_by_id(warm.sandbox_id, fresh_token)
     except Exception:
         log.warning("warm_claim_token_refresh_failed", sandbox=warm.sandbox_id[:12])
@@ -341,13 +361,11 @@ async def start_replenish_loop() -> asyncio.Task:
 
 
 async def stop_replenish_loop() -> None:
-    """Cancel replenish loop and drain the pool."""
+    """Cancel replenish loop."""
     global _replenish_task
     if _replenish_task:
         _replenish_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await _replenish_task
         _replenish_task = None
-    cleaned = await cleanup_pool()
-    if cleaned:
-        log.info("warm_pool_drained", cleaned=cleaned)
+    log.info("warm_pool_loop_stopped", pool_size=len(_pool))

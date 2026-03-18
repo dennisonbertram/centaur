@@ -19,6 +19,17 @@
 |To modify a repo (commit, push, open PR): run `git-branch <org/repo>` → creates writable clone at ~/branches/<org>/<repo>
 |NEVER run git commit/push inside ~/github/ — it is read-only. Always use git-branch first.
 
+[Container Lifecycle — IMPORTANT]
+|Your container is ephemeral and may be recycled between turns if idle for 30+ minutes.
+|Do NOT assume files, git branches, or installed packages persist across turns.
+|
+|Rules:
+|  - Always push work-in-progress to a git branch before finishing a turn
+|  - Upload important artifacts via the API (attachments) rather than saving only locally
+|  - If you need files from a previous session, re-download or re-clone them
+|  - Your conversation context IS preserved — you remember what was discussed even after container recycling
+|  - Repos at ~/github/ are always available (read-only host mounts)
+
 [API access — use `call` helper (returns TOON, saves tokens)]
 |call <tool> <method> [json_body] → e.g. call arkham get_transfers '{"address":"0x..."}'
 |call tools                      → list all available tools with descriptions

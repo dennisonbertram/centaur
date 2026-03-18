@@ -15,7 +15,9 @@ Streaming architecture (2 layers, 0 queues, 0 threads):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import os
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -37,7 +39,9 @@ from api.sandbox.registry import get_backend
 log = structlog.get_logger()
 
 _ENGINE_HARNESSES = {"amp", "claude-code", "codex", "pi-mono"}
-_REUSABLE_DB_STATES = {"running", "idle", "delivering", "error"}
+_REUSABLE_DB_STATES = {"running", "idle", "delivering", "error", "suspended"}
+
+IDLE_TTL_S = int(os.getenv("IDLE_TTL_S", "1800"))  # 30 minutes
 
 # ── Process-local runtime state (ephemeral: stream handles, turn counters) ───
 
@@ -73,7 +77,7 @@ async def _db_get_session(thread_key: str) -> SandboxSession | None:
     """Load a session from the DB. Returns None if not found."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT thread_key, sandbox_id, harness, engine, state, started_at "
+        "SELECT thread_key, sandbox_id, harness, engine, state, started_at, agent_thread_id "
         "FROM sandbox_sessions WHERE thread_key = $1",
         thread_key,
     )
@@ -87,6 +91,7 @@ async def _db_get_session(thread_key: str) -> SandboxSession | None:
         started_at=row["started_at"].timestamp() if row["started_at"] else 0.0,
         backend_name="docker",
         db_state=row["state"],
+        agent_thread_id=row["agent_thread_id"] or "",
     )
     _get_runtime(session.sandbox_id)
     return session
@@ -97,18 +102,20 @@ async def _db_insert_session(
     *,
     harness: str,
     engine: str,
+    agent_thread_id: str = "",
 ) -> bool:
     """Insert a session row. Returns True if we won the insert race."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "INSERT INTO sandbox_sessions (thread_key, sandbox_id, harness, engine, state, started_at) "
-        "VALUES ($1, $2, $3, $4, 'running', NOW()) "
+        "INSERT INTO sandbox_sessions (thread_key, sandbox_id, harness, engine, state, started_at, agent_thread_id) "
+        "VALUES ($1, $2, $3, $4, 'running', NOW(), $5) "
         "ON CONFLICT (thread_key) DO NOTHING "
         "RETURNING thread_key",
         session.thread_key,
         session.sandbox_id,
         harness,
         engine,
+        agent_thread_id or None,
     )
     return row is not None
 
@@ -298,7 +305,9 @@ async def get_or_spawn(
     """Get existing session or spawn a new sandbox.
 
     Tries (in order): DB session → warm pool → cold spawn.
+    For suspended/dead sessions, preserves agent_thread_id for resume.
     """
+    old_agent_thread_id: str = ""
     session = await _db_get_session(thread_key)
     if session:
         if session.db_state in _REUSABLE_DB_STATES:
@@ -307,15 +316,15 @@ async def get_or_spawn(
             if st == "running":
                 _get_runtime(session.sandbox_id)
                 return session
-            # DB points at a reusable session but the container is gone — clean up.
+            # Container is gone — save agent_thread_id for resume, clean up row
+            old_agent_thread_id = session.agent_thread_id
             await _db_delete_session(thread_key)
             _drop_runtime(session.sandbox_id)
         else:
-            # state is stopped/gone/creating — clean up stale row
+            # state is stopped/gone — clean up stale row
+            old_agent_thread_id = session.agent_thread_id
             await _db_delete_session(thread_key)
             _drop_runtime(session.sandbox_id)
-            backend = get_backend()
-            await backend.stop_by_id(session.sandbox_id)
 
     # Resolve harness profile (engine, persona, repo) once for both warm and cold paths
     resolved_engine, persona, repo = _resolve_harness_profile(harness, engine_override=engine)
@@ -326,7 +335,10 @@ async def get_or_spawn(
 
         claimed = await claim_container(thread_key, harness, persona=persona, repo=repo)
         if claimed:
-            won = await _db_insert_session(claimed, harness=claimed.harness, engine=claimed.engine)
+            if old_agent_thread_id:
+                claimed.agent_thread_id = old_agent_thread_id
+            won = await _db_insert_session(claimed, harness=claimed.harness, engine=claimed.engine,
+                                            agent_thread_id=old_agent_thread_id)
             if won:
                 _get_runtime(claimed.sandbox_id)
                 return claimed
@@ -335,13 +347,15 @@ async def get_or_spawn(
     resolved_engine, persona, repo = _resolve_harness_profile(harness, engine_override=engine)
     backend = get_backend()
     session = await backend.create(thread_key, harness, resolved_engine, persona=persona, repo=repo)
+    if old_agent_thread_id:
+        session.agent_thread_id = old_agent_thread_id
     _get_runtime(session.sandbox_id)
     log.info("pipe_session_spawned", thread_key=thread_key, sandbox=session.sandbox_id[:12])
 
     # INSERT into sandbox_sessions — race-safe
-    won = await _db_insert_session(session, harness=session.harness, engine=session.engine)
+    won = await _db_insert_session(session, harness=session.harness, engine=session.engine,
+                                    agent_thread_id=old_agent_thread_id)
     if not won:
-        # Another request won the race — stop our container, return the winner
         log.warning("spawn_race_lost", thread_key=thread_key, sandbox=session.sandbox_id[:12])
         await backend.stop_by_id(session.sandbox_id)
         _drop_runtime(session.sandbox_id)
@@ -446,6 +460,18 @@ async def _stream_stdout(
 
         if is_turn_done(session.engine, evt):
             rt.last_result = result_text
+            # Persist agent_thread_id for conversation resume
+            if agent_thread_id:
+                try:
+                    pool = _get_pool()
+                    await pool.execute(
+                        "UPDATE sandbox_sessions SET agent_thread_id = $1, updated_at = NOW() "
+                        "WHERE thread_key = $2",
+                        agent_thread_id,
+                        session.thread_key,
+                    )
+                except Exception:
+                    log.warning("agent_thread_id_persist_failed", thread_key=session.thread_key)
             turn_id = rt.turn_counter  # pick up latest turn_id for next turn
             yield {"data": json.dumps({
                 "type": "turn.done",
@@ -619,8 +645,8 @@ async def inject_stdin(
         st = await backend.status(session)
         if st != "running":
             raise RuntimeError(f"sandbox exited (status={st})") from exc
-        await backend.close_streams(session)
-        await backend.attach(session)
+        # Only reset stdin — leave stdout reader intact
+        await backend.reattach_stdin(session)
         await backend.write_stdin(session, turn_input)
 
     await _db_update_state(session.thread_key, "running")
@@ -703,6 +729,116 @@ async def supervise_wires() -> None:
                 )
     except Exception:
         log.warning("supervisor_error", exc_info=True)
+
+
+async def reconcile_tick() -> None:
+    """Periodic reconciliation: check DB vs Docker, enforce idle TTL, clean orphans.
+
+    Runs every 60s from app lifespan. Replaces supervise_wires().
+    """
+    try:
+        pool = _get_pool()
+        backend = get_backend()
+
+        # Step A: Reconcile DB sessions against Docker
+        rows = await pool.fetch(
+            "SELECT thread_key, sandbox_id, state "
+            "FROM sandbox_sessions "
+            "WHERE state IN ('running', 'idle', 'delivering', 'error') "
+            "LIMIT 50"
+        )
+        for row in rows:
+            thread_key = row["thread_key"]
+            sandbox_id = row["sandbox_id"]
+            try:
+                st = await backend.status_by_id(sandbox_id)
+            except Exception:
+                continue  # transient Docker error — skip, don't destroy
+            if st not in ("running", "created"):
+                log.info(
+                    "reconcile_session_gone",
+                    thread_key=thread_key,
+                    sandbox=sandbox_id[:12],
+                    container_status=st,
+                    db_state=row["state"],
+                )
+                await pool.execute(
+                    "UPDATE sandbox_sessions SET state = 'suspended', "
+                    "wire_lease_id = NULL, wire_connected_at = NULL, "
+                    "wire_last_seen_at = NULL, updated_at = NOW() "
+                    "WHERE thread_key = $1 AND state != 'suspended'",
+                    thread_key,
+                )
+                _drop_runtime(sandbox_id)
+
+        # Step B: Idle TTL enforcement
+        idle_rows = await pool.fetch(
+            "SELECT thread_key, sandbox_id FROM sandbox_sessions "
+            "WHERE state = 'idle' "
+            "AND updated_at < NOW() - make_interval(secs => $1::double precision)",
+            float(IDLE_TTL_S),
+        )
+        for row in idle_rows:
+            thread_key = row["thread_key"]
+            sandbox_id = row["sandbox_id"]
+            log.info("idle_ttl_expired", thread_key=thread_key, sandbox=sandbox_id[:12])
+            session = SandboxSession(
+                sandbox_id=sandbox_id,
+                thread_key=thread_key,
+                harness="",
+                engine="",
+            )
+            with contextlib.suppress(Exception):
+                await backend.stop(session)
+            await pool.execute(
+                "UPDATE sandbox_sessions SET state = 'suspended', "
+                "wire_lease_id = NULL, wire_connected_at = NULL, "
+                "wire_last_seen_at = NULL, updated_at = NOW() "
+                "WHERE thread_key = $1",
+                thread_key,
+            )
+            _drop_runtime(sandbox_id)
+
+        # Step C: Clean old terminated rows
+        await pool.execute(
+            "DELETE FROM sandbox_sessions "
+            "WHERE state IN ('gone', 'stopped') "
+            "AND updated_at < NOW() - INTERVAL '1 hour'"
+        )
+
+        # Step D: Clean orphan DinD sidecars
+        try:
+            dind_containers = await backend.list_containers({"ai2.dind": "true"})
+            sandbox_containers = await backend.list_containers(
+                {"centaur-agent": "true", "ai2.pipe": "true"}
+            )
+            live_sandbox_names = {c["name"] for c in sandbox_containers if c["status"] == "running"}
+            for dind in dind_containers:
+                # Derive expected sandbox name from DinD name
+                dind_name = dind["name"]
+                expected_sandbox = dind_name.replace("centaur-dind-", "centaur-sandbox-", 1)
+                if expected_sandbox not in live_sandbox_names:
+                    # Check age — only kill DinDs older than 5 minutes
+                    import datetime
+
+                    try:
+                        created = datetime.datetime.fromisoformat(
+                            dind["created"].replace("Z", "+00:00")
+                        )
+                        age_s = (
+                            datetime.datetime.now(datetime.timezone.utc) - created
+                        ).total_seconds()
+                    except Exception:
+                        age_s = 9999
+                    if age_s > 300:
+                        log.info("reconcile_orphan_dind", dind=dind_name, age_s=round(age_s))
+                        with contextlib.suppress(Exception):
+                            await backend.stop_by_id(dind["id"])
+        except Exception:
+            log.warning("reconcile_dind_scan_failed", exc_info=True)
+
+    except Exception:
+        log.warning("reconcile_tick_error", exc_info=True)
 
 
 async def stream_reconnect(

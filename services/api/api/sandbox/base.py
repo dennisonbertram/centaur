@@ -17,7 +17,8 @@ class RuntimeState:
     """
 
     turn_counter: int = 0
-    stream: Any = None  # aiodocker Stream (read_out / write_in)
+    stdout_stream: Any = None  # aiodocker Stream for reading stdout
+    stdin_stream: Any = None  # aiodocker Stream for writing stdin
     last_result: str | None = None
 
 
@@ -32,6 +33,7 @@ class SandboxSession:
     started_at: float = 0.0
     backend_name: str = ""  # "docker", "iron", etc.
     db_state: str = ""
+    agent_thread_id: str = ""
 
 
 class SandboxBackend(abc.ABC):

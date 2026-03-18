@@ -309,26 +309,27 @@ class DockerSandboxBackend(SandboxBackend):
 
     async def attach(self, session: SandboxSession, *, logs: bool = False) -> None:
         rt = _get_rt(session)
-        if rt.stream is not None:
-            return
         client = self._get_client()
         container = await client.containers.get(session.sandbox_id)
-        rt.stream = container.attach(stdin=True, stdout=True, stderr=False, logs=logs)
+        if rt.stdout_stream is None:
+            rt.stdout_stream = container.attach(stdin=False, stdout=True, stderr=False, logs=logs)
+        if rt.stdin_stream is None:
+            rt.stdin_stream = container.attach(stdin=True, stdout=False, stderr=False)
 
     async def write_stdin(self, session: SandboxSession, obj: dict) -> None:
         rt = _get_rt(session)
-        if rt.stream is None:
-            raise RuntimeError("not attached")
+        if rt.stdin_stream is None:
+            raise RuntimeError("not attached (stdin)")
         payload = json.dumps(obj, separators=(",", ":")) + "\n"
-        await rt.stream.write_in(payload.encode())
+        await rt.stdin_stream.write_in(payload.encode())
 
     async def stream_stdout(self, session: SandboxSession) -> AsyncIterator[str]:
         rt = _get_rt(session)
-        if rt.stream is None:
-            raise RuntimeError("not attached")
+        if rt.stdout_stream is None:
+            raise RuntimeError("not attached (stdout)")
         buf = ""
         while True:
-            msg = await rt.stream.read_out()
+            msg = await rt.stdout_stream.read_out()
             if msg is None:
                 break
             # msg.stream: 1=stdout, 2=stderr; we only attached stdout
@@ -402,10 +403,33 @@ class DockerSandboxBackend(SandboxBackend):
 
     async def close_streams(self, session: SandboxSession) -> None:
         rt = _get_rt(session)
-        if rt.stream is not None:
+        if rt.stdout_stream is not None:
             with contextlib.suppress(Exception):
-                await rt.stream.close()
-            rt.stream = None
+                await rt.stdout_stream.close()
+            rt.stdout_stream = None
+        if rt.stdin_stream is not None:
+            with contextlib.suppress(Exception):
+                await rt.stdin_stream.close()
+            rt.stdin_stream = None
+
+    async def close_stdin(self, session: SandboxSession) -> None:
+        """Close only the stdin stream (leaves stdout reader intact)."""
+        rt = _get_rt(session)
+        if rt.stdin_stream is not None:
+            with contextlib.suppress(Exception):
+                await rt.stdin_stream.close()
+            rt.stdin_stream = None
+
+    async def reattach_stdin(self, session: SandboxSession) -> None:
+        """Re-open only the stdin connection (leaves stdout reader intact)."""
+        rt = _get_rt(session)
+        if rt.stdin_stream is not None:
+            with contextlib.suppress(Exception):
+                await rt.stdin_stream.close()
+            rt.stdin_stream = None
+        client = self._get_client()
+        container = await client.containers.get(session.sandbox_id)
+        rt.stdin_stream = container.attach(stdin=True, stdout=False, stderr=False)
 
     async def rename_by_id(self, sandbox_id: str, new_name: str) -> None:
         """Rename a sandbox and its DinD sidecar by ID."""
@@ -493,3 +517,27 @@ class DockerSandboxBackend(SandboxBackend):
                 )
             )
         return sessions
+
+    async def list_containers(self, label_filters: dict[str, str]) -> list[dict]:
+        """List containers matching label filters. Returns list of {id, name, labels, created, status}."""
+        client = self._get_client()
+        filters = {"label": [f"{k}={v}" for k, v in label_filters.items()]}
+        containers = await client.containers.list(
+            all=True,
+            filters=json.dumps(filters),
+        )
+        results = []
+        for c in containers:
+            info = await c.show()
+            labels = info.get("Config", {}).get("Labels", {})
+            name = info.get("Name", "").lstrip("/")
+            created = info.get("Created", "")
+            status = info.get("State", {}).get("Status", "unknown")
+            results.append({
+                "id": c.id,
+                "name": name,
+                "labels": labels,
+                "created": created,
+                "status": status,
+            })
+        return results
