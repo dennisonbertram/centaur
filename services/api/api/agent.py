@@ -77,7 +77,7 @@ async def _db_get_session(thread_key: str) -> SandboxSession | None:
     """Load a session from the DB. Returns None if not found."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT thread_key, sandbox_id, harness, engine, state, started_at, agent_thread_id "
+        "SELECT thread_key, sandbox_id, harness, engine, state, started_at, agent_thread_id, last_delivered_id "
         "FROM sandbox_sessions WHERE thread_key = $1",
         thread_key,
     )
@@ -92,6 +92,7 @@ async def _db_get_session(thread_key: str) -> SandboxSession | None:
         backend_name="docker",
         db_state=row["state"],
         agent_thread_id=row["agent_thread_id"] or "",
+        last_delivered_id=row["last_delivered_id"] or "",
     )
     _get_runtime(session.sandbox_id)
     return session
@@ -103,12 +104,13 @@ async def _db_insert_session(
     harness: str,
     engine: str,
     agent_thread_id: str = "",
+    last_delivered_id: str = "",
 ) -> bool:
     """Insert a session row. Returns True if we won the insert race."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "INSERT INTO sandbox_sessions (thread_key, sandbox_id, harness, engine, state, started_at, agent_thread_id) "
-        "VALUES ($1, $2, $3, $4, 'running', NOW(), $5) "
+        "INSERT INTO sandbox_sessions (thread_key, sandbox_id, harness, engine, state, started_at, agent_thread_id, last_delivered_id) "
+        "VALUES ($1, $2, $3, $4, 'running', NOW(), $5, $6) "
         "ON CONFLICT (thread_key) DO NOTHING "
         "RETURNING thread_key",
         session.thread_key,
@@ -116,6 +118,7 @@ async def _db_insert_session(
         harness,
         engine,
         agent_thread_id or None,
+        last_delivered_id or None,
     )
     return row is not None
 
@@ -308,6 +311,7 @@ async def get_or_spawn(
     For suspended/dead sessions, preserves agent_thread_id for resume.
     """
     old_agent_thread_id: str = ""
+    old_last_delivered_id: str = ""
     session = await _db_get_session(thread_key)
     if session:
         if session.db_state in _REUSABLE_DB_STATES:
@@ -316,13 +320,15 @@ async def get_or_spawn(
             if st == "running":
                 _get_runtime(session.sandbox_id)
                 return session
-            # Container is gone — save agent_thread_id for resume, clean up row
+            # Container is gone — save agent_thread_id and cursor for resume, clean up row
             old_agent_thread_id = session.agent_thread_id
+            old_last_delivered_id = session.last_delivered_id
             await _db_delete_session(thread_key)
             _drop_runtime(session.sandbox_id)
         else:
             # state is stopped/gone — clean up stale row
             old_agent_thread_id = session.agent_thread_id
+            old_last_delivered_id = session.last_delivered_id
             await _db_delete_session(thread_key)
             _drop_runtime(session.sandbox_id)
 
@@ -338,7 +344,8 @@ async def get_or_spawn(
             if old_agent_thread_id:
                 claimed.agent_thread_id = old_agent_thread_id
             won = await _db_insert_session(claimed, harness=claimed.harness, engine=claimed.engine,
-                                            agent_thread_id=old_agent_thread_id)
+                                            agent_thread_id=old_agent_thread_id,
+                                            last_delivered_id=old_last_delivered_id)
             if won:
                 _get_runtime(claimed.sandbox_id)
                 return claimed
@@ -354,7 +361,8 @@ async def get_or_spawn(
 
     # INSERT into sandbox_sessions — race-safe
     won = await _db_insert_session(session, harness=session.harness, engine=session.engine,
-                                    agent_thread_id=old_agent_thread_id)
+                                    agent_thread_id=old_agent_thread_id,
+                                    last_delivered_id=old_last_delivered_id)
     if not won:
         log.warning("spawn_race_lost", thread_key=thread_key, sandbox=session.sandbox_id[:12])
         await backend.stop_by_id(session.sandbox_id)

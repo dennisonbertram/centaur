@@ -34,6 +34,7 @@ class SandboxSession:
     backend_name: str = ""  # "docker", "iron", etc.
     db_state: str = ""
     agent_thread_id: str = ""
+    last_delivered_id: str = ""
 
 
 class SandboxBackend(abc.ABC):
