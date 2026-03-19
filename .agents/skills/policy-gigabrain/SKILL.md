@@ -577,6 +577,12 @@ Include the effective date or comment deadline if material to investment decisio
 
 Do not editorialize beyond what the source document supports. Do not use legal citations.
 
+**Slack-specific style guidance:**
+- Prefer simple, plain words over legal jargon: "request" over "proposed rule change," "approval" over "regulatory approval."
+- Do not include operational or structural details that belong in the index entry (e.g., same order book, execution priority, shareholder rights). The Slack message is a signal, not a summary.
+- Do not use throat-clearing phrases like "the order is significant because" or "notably" — let the substance speak for itself.
+- Do not editorialize with adjectives like "incremental," "landmark," or "sweeping" unless the source document uses them. State what happened and let the reader draw conclusions.
+
 ---
 
 #### Style Rules (Scoped to This Workflow)
@@ -621,6 +627,7 @@ Before delivering the index entry, check for and address each of the following:
 - Do not proceed if you cannot parse the full document
 - Do not include ex-portfolio companies as current portfolio references
 - Do not copy large chunks of source text verbatim — summarize and identify key points
+- Do not pack the Slack message with structural details (execution mechanics, shareholder rights, operational specifics) — keep those for the index entry
 
 ---
 
@@ -657,6 +664,9 @@ Key Aspects
 > As Alex mentioned above, CFTC issued two documents this morning related to prediction markets:
 > • **First**, CFTC staff issued a guidance document with a series of "reminders" about existing swaps regulations…
 > • **Second**, CFTC issued an Advanced Notice of Proposed Rulemaking. Our full index entry is [here]…
+
+**Exchange approval (SEC Nasdaq Tokenized Securities):**
+> The SEC approved Nasdaq's request to allow certain securities to trade in tokenized form, the first time a major U.S. exchange has received approval for tokenized trading of traditional equities. The approval is limited to a DTC pilot program covering Russell 1000 stocks and major index ETFs. While the scope is narrow and the pilot must still stand up DTC's settlement infrastructure before trading can begin, the SEC approved it entirely within existing market structure rather than requiring new rulemaking, which suggests a potential path for broader tokenization through exchange-level rule changes. Our full index entry is [here].
 
 ---
 
