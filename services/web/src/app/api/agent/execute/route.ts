@@ -54,34 +54,76 @@ export async function POST(request: Request) {
     );
   }
 
-  // Buffer the user message via POST /agent/messages
+  let upstream: Response;
+  const requestNonce = `web-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  let assignmentGeneration = 0;
+  let executionId = "";
+
   try {
-    await resilientFetch(`${API_URL}/agent/messages`, {
+    const spawnResp = await resilientFetch(`${API_URL}/agent/spawn`, {
       method: "POST",
       body: JSON.stringify({
         thread_key: slackThreadKey,
-        role: "user",
-        parts: [{ type: "text", text: message }],
+        spawn_id: `${requestNonce}:spawn`,
+        harness,
+        ...(engine ? { engine } : {}),
+      }),
+      timeoutMs: 10_000,
+    });
+
+    const spawnJson = (await spawnResp.json()) as Record<string, unknown>;
+    assignmentGeneration = Number(spawnJson.assignment_generation ?? 0);
+    if (!Number.isFinite(assignmentGeneration) || assignmentGeneration <= 0) {
+      throw new ApiError("Spawn did not return a valid assignment_generation", 502);
+    }
+
+    await resilientFetch(`${API_URL}/agent/message`, {
+      method: "POST",
+      body: JSON.stringify({
+        thread_key: slackThreadKey,
+        assignment_generation: assignmentGeneration,
+        message_id: `${requestNonce}:message`,
+        event: {
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: message }],
+          },
+        },
         metadata: { source: "thread_ui" },
       }),
       timeoutMs: 10_000,
     });
-  } catch (err) {
-    console.warn("Failed to buffer user message:", err);
-  }
 
-  // 1. Open persistent stdout wire
-  let upstream: Response;
-  try {
-    upstream = await resilientFetch(`${API_URL}/agent/connect`, {
+    const executeResp = await resilientFetch(`${API_URL}/agent/execute`, {
       method: "POST",
       body: JSON.stringify({
         thread_key: slackThreadKey,
+        assignment_generation: assignmentGeneration,
+        execute_id: `${requestNonce}:execute`,
         harness,
-        ...(engine ? { engine } : {}),
+        delivery: {
+          platform: "web",
+          thread_key: slackThreadKey,
+        },
+        metadata: { source: "thread_ui" },
       }),
-      stream: true,
+      timeoutMs: 10_000,
     });
+
+    const executeJson = (await executeResp.json()) as Record<string, unknown>;
+    executionId = String(executeJson.execution_id ?? "").trim();
+    if (!executionId) {
+      throw new ApiError("Execute did not return execution_id", 502);
+    }
+
+    upstream = await resilientFetch(
+      `${API_URL}/agent/threads/${encodeURIComponent(slackThreadKey)}/events?execution_id=${encodeURIComponent(executionId)}`,
+      {
+        method: "GET",
+        stream: true,
+      },
+    );
   } catch (err) {
     const status = err instanceof ApiError ? (err.status ?? 502) : 502;
     return Response.json(
@@ -89,19 +131,6 @@ export async function POST(request: Request) {
       { status, headers: { "Cache-Control": "no-store" } },
     );
   }
-
-  // 2. Inject message into stdin (fire-and-forget)
-  resilientFetch(`${API_URL}/agent/execute`, {
-    method: "POST",
-    body: JSON.stringify({
-      thread_key: slackThreadKey,
-      message,
-      harness,
-      ...(engine ? { engine } : {}),
-    }),
-  }).catch((err) => {
-    console.warn("Failed to inject stdin:", err);
-  });
 
   if (!upstream.ok) {
     const text = await upstream.text().catch(() => "");
@@ -125,12 +154,48 @@ export async function POST(request: Request) {
 
   let eventIndex = 0;
   const conversionState = createConversionState();
+  let sawHarnessTerminal = false;
 
   const uiChunkStream = rawEvents.pipeThrough(
     new TransformStream({
       transform(parseResult, controller) {
         if (!parseResult.success) return;
         const rawEvent = parseResult.value;
+
+        if (typeof rawEvent.type === "string" && rawEvent.type === "execution.state") {
+          const status = typeof rawEvent.status === "string" ? rawEvent.status : "";
+          if ((status === "completed" || status === "failed_permanent" || status === "cancelled") && !sawHarnessTerminal) {
+            const terminalText =
+              (typeof rawEvent.result_text === "string" && rawEvent.result_text.trim()) ||
+              (typeof rawEvent.error_text === "string" && rawEvent.error_text.trim()) ||
+              (typeof rawEvent.terminal_reason === "string" && rawEvent.terminal_reason.trim()) ||
+              "Execution finished.";
+            const chunks = canonicalEventToStreamChunks(
+              0,
+              eventIndex,
+              { type: "result", text: terminalText },
+              conversionState,
+            );
+            eventIndex += 1;
+            for (const chunk of chunks) {
+              controller.enqueue(chunk);
+            }
+          }
+          return;
+        }
+
+        if (typeof rawEvent.type === "string" && rawEvent.type.startsWith("final_delivery.")) {
+          return;
+        }
+
+        if (
+          (typeof rawEvent.type === "string" && rawEvent.type === "turn.done") ||
+          (typeof rawEvent.type === "string" && rawEvent.type === "result") ||
+          (typeof rawEvent.type === "string" && rawEvent.type === "error")
+        ) {
+          sawHarnessTerminal = true;
+        }
+
         const canonicalEvents = normalizeHarnessEvent(harness, rawEvent);
         const chunks = canonicalEvents.flatMap((event, offset) =>
           canonicalEventToStreamChunks(0, eventIndex + offset, event, conversionState),

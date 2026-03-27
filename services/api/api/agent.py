@@ -19,6 +19,7 @@ import contextlib
 import json
 import os
 import time
+import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -41,7 +42,9 @@ log = structlog.get_logger()
 _ENGINE_HARNESSES = {"amp", "claude-code", "codex", "pi-mono"}
 _REUSABLE_DB_STATES = {"running", "idle", "delivering", "error", "suspended"}
 
-IDLE_TTL_S = int(os.getenv("IDLE_TTL_S", "1800"))  # 30 minutes
+IDLE_TTL_S = int(os.getenv("IDLE_TTL_S", "86400"))  # 24 hours
+STREAM_EOF_REATTACH_MAX = int(os.getenv("STREAM_EOF_REATTACH_MAX", "6"))
+STREAM_EOF_REATTACH_BACKOFF_S = float(os.getenv("STREAM_EOF_REATTACH_BACKOFF_S", "1.0"))
 
 # ── Process-local runtime state (ephemeral: stream handles, turn counters) ───
 
@@ -60,6 +63,18 @@ def _drop_runtime(sandbox_id: str) -> None:
     _runtime.pop(sandbox_id, None)
 
 
+def _elapsed_since(start_s: float) -> float:
+    """Return a non-negative elapsed duration for logging.
+
+    Most callers pass a monotonic start time, but we defensively fall back to
+    wall-clock time if an epoch timestamp is passed through an older code path.
+    """
+    elapsed_s = time.monotonic() - start_s
+    if elapsed_s >= 0:
+        return round(elapsed_s, 2)
+    return round(max(time.time() - start_s, 0.0), 2)
+
+
 # ── DB pool access ───────────────────────────────────────────────────────────
 
 
@@ -73,11 +88,32 @@ def _get_pool():
 # ── DB helpers (async) ───────────────────────────────────────────────────────
 
 
+def _coerce_json_object(value: Any) -> dict[str, Any] | None:
+    """Best-effort decode for json/jsonb values returned as text by asyncpg.
+
+    We accept already-decoded dicts and decode JSON strings. Some older rows may
+    contain a double-encoded JSON string; decode one extra layer to recover.
+    """
+    current: Any = value
+    for _ in range(2):
+        if isinstance(current, dict):
+            return current
+        if not isinstance(current, str):
+            return None
+        try:
+            current = json.loads(current)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return current if isinstance(current, dict) else None
+
+
 async def _db_get_session(thread_key: str) -> SandboxSession | None:
     """Load a session from the DB. Returns None if not found."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "SELECT thread_key, sandbox_id, harness, engine, state, started_at, agent_thread_id, last_delivered_id "
+        "SELECT thread_key, sandbox_id, harness, engine, state, started_at, "
+        "agent_thread_id, last_delivered_id, inflight_turn_id, inflight_turn_input, "
+        "inflight_attempts, last_result "
         "FROM sandbox_sessions WHERE thread_key = $1",
         thread_key,
     )
@@ -93,8 +129,16 @@ async def _db_get_session(thread_key: str) -> SandboxSession | None:
         db_state=row["state"],
         agent_thread_id=row["agent_thread_id"] or "",
         last_delivered_id=row["last_delivered_id"] or "",
+        inflight_turn_id=row["inflight_turn_id"] or "",
+        inflight_turn_input=_coerce_json_object(row["inflight_turn_input"]),
+        inflight_attempts=int(row["inflight_attempts"] or 0),
+        last_result=row["last_result"] or "",
     )
-    _get_runtime(session.sandbox_id)
+    rt = _get_runtime(session.sandbox_id)
+    if session.inflight_turn_id and rt.turn_counter == 0:
+        rt.turn_counter = 1
+    if session.last_result and rt.last_result is None:
+        rt.last_result = session.last_result
     return session
 
 
@@ -105,12 +149,21 @@ async def _db_insert_session(
     engine: str,
     agent_thread_id: str = "",
     last_delivered_id: str = "",
+    inflight_turn_id: str = "",
+    inflight_turn_input: dict | None = None,
+    inflight_attempts: int = 0,
+    last_result: str = "",
 ) -> bool:
     """Insert a session row. Returns True if we won the insert race."""
     pool = _get_pool()
     row = await pool.fetchrow(
-        "INSERT INTO sandbox_sessions (thread_key, sandbox_id, harness, engine, state, started_at, agent_thread_id, last_delivered_id) "
-        "VALUES ($1, $2, $3, $4, 'running', NOW(), $5, $6) "
+        "INSERT INTO sandbox_sessions ("
+        "thread_key, sandbox_id, harness, engine, state, started_at, "
+        "agent_thread_id, last_delivered_id, inflight_turn_id, inflight_turn_input, "
+        "inflight_started_at, inflight_attempts, last_result, last_result_at"
+        ") VALUES ($1, $2, $3, $4, 'running', NOW(), $5, $6, $7::text, $8::jsonb, "
+        "CASE WHEN $7::text IS NULL THEN NULL ELSE NOW() END, $9, $10, "
+        "CASE WHEN $10::text = '' THEN NULL ELSE NOW() END) "
         "ON CONFLICT (thread_key) DO NOTHING "
         "RETURNING thread_key",
         session.thread_key,
@@ -119,8 +172,62 @@ async def _db_insert_session(
         engine,
         agent_thread_id or None,
         last_delivered_id or None,
+        inflight_turn_id or None,
+        json.dumps(inflight_turn_input) if inflight_turn_input is not None else None,
+        max(0, inflight_attempts),
+        last_result,
     )
     return row is not None
+
+
+async def _db_set_inflight_turn(
+    thread_key: str,
+    turn_id: str,
+    turn_input: dict,
+    *,
+    attempts: int,
+) -> None:
+    """Persist the active turn payload for restart-safe replay."""
+    pool = _get_pool()
+    await pool.execute(
+        "UPDATE sandbox_sessions SET inflight_turn_id = $1, inflight_turn_input = $2::jsonb, "
+        "inflight_started_at = NOW(), inflight_attempts = $3, state = 'running', "
+        "last_result = NULL, last_result_at = NULL, updated_at = NOW() "
+        "WHERE thread_key = $4",
+        turn_id,
+        json.dumps(turn_input),
+        max(1, attempts),
+        thread_key,
+    )
+
+
+async def _db_complete_inflight_turn(thread_key: str, result_text: str) -> None:
+    """Mark the active turn complete and persist the final result."""
+    pool = _get_pool()
+    await pool.execute(
+        "UPDATE sandbox_sessions SET state = 'idle', inflight_turn_id = NULL, inflight_turn_input = NULL, "
+        "inflight_started_at = NULL, inflight_attempts = 0, last_result = $1, last_result_at = NOW(), "
+        "updated_at = NOW() WHERE thread_key = $2",
+        result_text,
+        thread_key,
+    )
+
+
+async def _db_get_inflight_turn(thread_key: str) -> tuple[str, dict, int] | None:
+    """Return in-flight turn payload (id, input, attempts) or None."""
+    pool = _get_pool()
+    row = await pool.fetchrow(
+        "SELECT inflight_turn_id, inflight_turn_input, inflight_attempts "
+        "FROM sandbox_sessions WHERE thread_key = $1",
+        thread_key,
+    )
+    if row is None:
+        return None
+    turn_id = row["inflight_turn_id"] or ""
+    turn_input = _coerce_json_object(row["inflight_turn_input"])
+    if not turn_id or turn_input is None:
+        return None
+    return turn_id, turn_input, int(row["inflight_attempts"] or 0)
 
 
 async def _db_update_state(thread_key: str, state: str) -> None:
@@ -161,7 +268,8 @@ async def _db_clear_wire(thread_key: str, lease_id: str) -> None:
         "UPDATE sandbox_sessions SET wire_lease_id = NULL, wire_connected_at = NULL, "
         "wire_last_seen_at = NULL, updated_at = NOW() "
         "WHERE thread_key = $1 AND wire_lease_id = $2",
-        thread_key, lease_id,
+        thread_key,
+        lease_id,
     )
 
 
@@ -171,7 +279,8 @@ async def _db_touch_wire(thread_key: str, lease_id: str) -> None:
     await pool.execute(
         "UPDATE sandbox_sessions SET wire_last_seen_at = NOW(), updated_at = NOW() "
         "WHERE thread_key = $1 AND wire_lease_id = $2",
-        thread_key, lease_id,
+        thread_key,
+        lease_id,
     )
 
 
@@ -191,9 +300,7 @@ async def _db_find_stale_wires(ttl_s: int = 120) -> list[dict]:
 # ── Flush pipeline helpers ───────────────────────────────────────────────────
 
 
-async def _flush_pending(
-    thread_key: str, last_delivered_id: str | None
-) -> list[dict]:
+async def _flush_pending(thread_key: str, last_delivered_id: str | None) -> list[dict]:
     """Fetch messages from chat_messages that haven't been delivered yet.
 
     If last_delivered_id is NULL, returns ALL messages (full replay).
@@ -227,11 +334,13 @@ def _flushed_to_messages(flushed_rows: list[dict]) -> list[dict]:
         if isinstance(parts, str):
             parts = json.loads(parts)
         user_id = row.get("user_id")
-        messages.append({
-            "role": row.get("role", "user"),
-            "parts": parts,
-            **({"user_id": user_id} if user_id else {}),
-        })
+        messages.append(
+            {
+                "role": row.get("role", "user"),
+                "parts": parts,
+                **({"user_id": user_id} if user_id else {}),
+            }
+        )
     return messages
 
 
@@ -282,7 +391,10 @@ def _resolve_harness_profile(
 
     normalized = (harness or "").strip() or "amp"
     normalized_engine_override = (engine_override or "").strip() or None
-    if normalized_engine_override and normalized_engine_override not in _ENGINE_HARNESSES:
+    if (
+        normalized_engine_override
+        and normalized_engine_override not in _ENGINE_HARNESSES
+    ):
         raise ValueError(f"Unknown engine override: {normalized_engine_override}")
     if normalized in _ENGINE_HARNESSES:
         return normalized_engine_override or normalized, None, None
@@ -312,6 +424,10 @@ async def get_or_spawn(
     """
     old_agent_thread_id: str = ""
     old_last_delivered_id: str = ""
+    old_inflight_turn_id: str = ""
+    old_inflight_turn_input: dict | None = None
+    old_inflight_attempts: int = 0
+    old_last_result: str = ""
     session = await _db_get_session(thread_key)
     if session:
         if session.db_state in _REUSABLE_DB_STATES:
@@ -323,48 +439,90 @@ async def get_or_spawn(
             # Container is gone — save agent_thread_id and cursor for resume, clean up row
             old_agent_thread_id = session.agent_thread_id
             old_last_delivered_id = session.last_delivered_id
+            old_inflight_turn_id = session.inflight_turn_id
+            old_inflight_turn_input = session.inflight_turn_input
+            old_inflight_attempts = session.inflight_attempts
+            old_last_result = session.last_result
             await _db_delete_session(thread_key)
             _drop_runtime(session.sandbox_id)
         else:
             # state is stopped/gone — clean up stale row
             old_agent_thread_id = session.agent_thread_id
             old_last_delivered_id = session.last_delivered_id
+            old_inflight_turn_id = session.inflight_turn_id
+            old_inflight_turn_input = session.inflight_turn_input
+            old_inflight_attempts = session.inflight_attempts
+            old_last_result = session.last_result
             await _db_delete_session(thread_key)
             _drop_runtime(session.sandbox_id)
 
     # Resolve harness profile (engine, persona, repo) once for both warm and cold paths
-    resolved_engine, persona, repo = _resolve_harness_profile(harness, engine_override=engine)
+    resolved_engine, persona, repo = _resolve_harness_profile(
+        harness, engine_override=engine
+    )
 
     # Try warm pool first
-    if not engine:
+    should_try_warm = (
+        not engine and not old_agent_thread_id and not old_inflight_turn_id
+    )
+    if should_try_warm:
         from api.warm_pool import claim_container
 
         claimed = await claim_container(thread_key, harness, persona=persona, repo=repo)
         if claimed:
             if old_agent_thread_id:
                 claimed.agent_thread_id = old_agent_thread_id
-            won = await _db_insert_session(claimed, harness=claimed.harness, engine=claimed.engine,
-                                            agent_thread_id=old_agent_thread_id,
-                                            last_delivered_id=old_last_delivered_id)
+            won = await _db_insert_session(
+                claimed,
+                harness=claimed.harness,
+                engine=claimed.engine,
+                agent_thread_id=old_agent_thread_id,
+                last_delivered_id=old_last_delivered_id,
+                inflight_turn_id=old_inflight_turn_id,
+                inflight_turn_input=old_inflight_turn_input,
+                inflight_attempts=old_inflight_attempts,
+                last_result=old_last_result,
+            )
             if won:
                 _get_runtime(claimed.sandbox_id)
                 return claimed
 
     # Cold spawn
-    resolved_engine, persona, repo = _resolve_harness_profile(harness, engine_override=engine)
+    resolved_engine, persona, repo = _resolve_harness_profile(
+        harness, engine_override=engine
+    )
     backend = get_backend()
-    session = await backend.create(thread_key, harness, resolved_engine, persona=persona, repo=repo)
+    session = await backend.create(
+        thread_key,
+        harness,
+        resolved_engine,
+        persona=persona,
+        repo=repo,
+        resume_thread_id=old_agent_thread_id or None,
+    )
     if old_agent_thread_id:
         session.agent_thread_id = old_agent_thread_id
     _get_runtime(session.sandbox_id)
-    log.info("pipe_session_spawned", thread_key=thread_key, sandbox=session.sandbox_id[:12])
+    log.info(
+        "pipe_session_spawned", thread_key=thread_key, sandbox=session.sandbox_id[:12]
+    )
 
     # INSERT into sandbox_sessions — race-safe
-    won = await _db_insert_session(session, harness=session.harness, engine=session.engine,
-                                    agent_thread_id=old_agent_thread_id,
-                                    last_delivered_id=old_last_delivered_id)
+    won = await _db_insert_session(
+        session,
+        harness=session.harness,
+        engine=session.engine,
+        agent_thread_id=old_agent_thread_id,
+        last_delivered_id=old_last_delivered_id,
+        inflight_turn_id=old_inflight_turn_id,
+        inflight_turn_input=old_inflight_turn_input,
+        inflight_attempts=old_inflight_attempts,
+        last_result=old_last_result,
+    )
     if not won:
-        log.warning("spawn_race_lost", thread_key=thread_key, sandbox=session.sandbox_id[:12])
+        log.warning(
+            "spawn_race_lost", thread_key=thread_key, sandbox=session.sandbox_id[:12]
+        )
         await backend.stop_by_id(session.sandbox_id)
         _drop_runtime(session.sandbox_id)
         winner = await _db_get_session(thread_key)
@@ -400,18 +558,20 @@ def _build_session_context(
         lines.append(f"- **Platform**: {platform}")
 
     if platform and platform.lower() == "slack":
-        lines.extend([
-            "",
-            "## Slack Formatting Rules",
-            "",
-            "- Use standard markdown links `[Display Text](URL)` for hyperlinks",
-            "- Do NOT use Slack-native `<URL|text>` link syntax",
-            "- Preserve Slack user mentions (`<@UXXXXXXX>`) exactly as-is — only use these for actual Slack users",
-            "- For Twitter/X handles, link to the profile WITHOUT an @ prefix in the display text: `[handle](https://x.com/handle)` (NOT `[@handle](...)`)",
-            "- Prefer concise, well-structured markdown; long replies may be split across multiple Slack messages",
-            "- Markdown tables are allowed and may render as native Slack tables when the structure is clean",
-            "- NEVER put links/URLs inside code blocks (``` ```) — they won't be clickable. Use markdown tables or plain text with `[text](url)` links instead",
-        ])
+        lines.extend(
+            [
+                "",
+                "## Slack Formatting Rules",
+                "",
+                "- Use standard markdown links `[Display Text](URL)` for hyperlinks",
+                "- Do NOT use Slack-native `<URL|text>` link syntax",
+                "- Preserve Slack user mentions (`<@UXXXXXXX>`) exactly as-is — only use these for actual Slack users",
+                "- For Twitter/X handles, link to the profile WITHOUT an @ prefix in the display text: `[handle](https://x.com/handle)` (NOT `[@handle](...)`)",
+                "- Prefer concise, well-structured markdown; long replies may be split across multiple Slack messages",
+                "- Markdown tables are allowed and may render as native Slack tables when the structure is clean",
+                "- NEVER put links/URLs inside code blocks (``` ```) — they won't be clickable. Use markdown tables or plain text with `[text](url)` links instead",
+            ]
+        )
         if user_id:
             lines.append(
                 f"- After completing a long task, tag the requester with their real Slack mention: <@{user_id}>"
@@ -419,6 +579,47 @@ def _build_session_context(
 
     lines.extend(["", "---", ""])
     return "\n".join(lines)
+
+
+def _terminal_error_from_harness_event(event: dict) -> str | None:
+    """Return terminal error text when an end-of-turn event represents failure."""
+    event_type = event.get("type")
+
+    if event_type == "error":
+        err = event.get("error")
+        if isinstance(err, str) and err.strip():
+            return err.strip()
+        if isinstance(err, dict):
+            message = err.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+        message = event.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+        return "Harness reported an error"
+
+    if event_type == "result":
+        subtype = str(event.get("subtype") or "").strip().lower()
+        is_error = bool(event.get("is_error")) or (
+            subtype not in {"", "success"}
+        )
+        if not is_error:
+            return None
+
+        err = event.get("error")
+        if isinstance(err, str) and err.strip():
+            return err.strip()
+        if isinstance(err, dict):
+            message = err.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+
+        result = event.get("result")
+        if isinstance(result, str) and result.strip():
+            return result.strip()
+        return "Harness reported an error"
+
+    return None
 
 
 async def _stream_stdout(
@@ -436,74 +637,132 @@ async def _stream_stdout(
     result_text = ""
     agent_thread_id: str | None = None
     first_output = False
+    eof_reattach_attempts = 0
 
-    async for line in backend.stream_stdout(session):
-        if not first_output:
-            first_output = True
+    while True:
+        async for line in backend.stream_stdout(session):
+            eof_reattach_attempts = 0
+            if not first_output:
+                first_output = True
+                log.info(
+                    "turn_first_output",
+                    thread_key=session.thread_key,
+                    sandbox=session.sandbox_id[:12],
+                    harness=session.harness,
+                    turn_id=turn_id,
+                    elapsed_s=_elapsed_since(t0),
+                )
+
+            try:
+                evt = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            tid = extract_thread_id(session.engine, evt)
+            if tid:
+                agent_thread_id = tid
+            r = extract_result(session.engine, evt)
+            if r is not None:
+                result_text = r
+            if evt.get("type") == "error":
+                result_text = ""
+
+            for canonical in normalize_harness_event(session.engine, evt):
+                yield {"data": json.dumps(canonical, separators=(",", ":"))}
+
+            if is_turn_done(session.engine, evt):
+                terminal_error = _terminal_error_from_harness_event(evt)
+                terminal_result = result_text or terminal_error or ""
+                rt.last_result = result_text
+                # Persist agent_thread_id for conversation resume
+                if agent_thread_id:
+                    try:
+                        pool = _get_pool()
+                        await pool.execute(
+                            "UPDATE sandbox_sessions SET agent_thread_id = $1, updated_at = NOW() "
+                            "WHERE thread_key = $2",
+                            agent_thread_id,
+                            session.thread_key,
+                        )
+                    except Exception:
+                        log.warning(
+                            "agent_thread_id_persist_failed", thread_key=session.thread_key
+                        )
+                turn_id = rt.turn_counter  # pick up latest turn_id for next turn
+                # Persist completion before emitting turn.done so reconnect callers
+                # can't cancel the stream before durable state is committed.
+                await asyncio.gather(
+                    _persist_turn_messages(
+                        session.thread_key, "", terminal_result, session.harness
+                    ),
+                    _db_complete_inflight_turn(session.thread_key, terminal_result),
+                )
+                turn_done_payload: dict[str, Any] = {
+                    "type": "turn.done",
+                    "turn_id": turn_id,
+                    "result": terminal_result,
+                    "agent_thread_id": agent_thread_id or "",
+                }
+                if terminal_error:
+                    turn_done_payload["is_error"] = True
+                    turn_done_payload["error"] = terminal_error
+                yield {
+                    "data": json.dumps(turn_done_payload)
+                }
+                log.info(
+                    "turn_done",
+                    thread_key=session.thread_key,
+                    sandbox=session.sandbox_id[:12],
+                    harness=session.harness,
+                    turn_id=turn_id,
+                    duration_s=_elapsed_since(t0),
+                    reason="error" if terminal_error else "completed",
+                )
+                result_text = ""
+                agent_thread_id = None
+                t0 = time.monotonic()
+
+        status = "gone"
+        with contextlib.suppress(Exception):
+            status = await backend.status(session)
+
+        if status in {"running", "created"}:
+            eof_reattach_attempts += 1
+            if eof_reattach_attempts > STREAM_EOF_REATTACH_MAX:
+                log.warning(
+                    "stream_eof_reattach_exhausted",
+                    thread_key=session.thread_key,
+                    sandbox=session.sandbox_id[:12],
+                    harness=session.harness,
+                    turn_id=turn_id,
+                    attempts=eof_reattach_attempts,
+                )
+                break
             log.info(
-                "turn_first_output",
+                "stream_eof_running_reattach",
                 thread_key=session.thread_key,
                 sandbox=session.sandbox_id[:12],
                 harness=session.harness,
                 turn_id=turn_id,
-                elapsed_s=round(time.monotonic() - t0, 2),
+                attempts=eof_reattach_attempts,
             )
-
-        try:
-            evt = json.loads(line)
-        except (json.JSONDecodeError, TypeError):
+            with contextlib.suppress(Exception):
+                await backend.close_streams(session)
+            try:
+                await backend.attach(session)
+            except Exception:
+                log.warning(
+                    "stream_eof_reattach_failed",
+                    thread_key=session.thread_key,
+                    sandbox=session.sandbox_id[:12],
+                    harness=session.harness,
+                    turn_id=turn_id,
+                )
+                break
+            await asyncio.sleep(STREAM_EOF_REATTACH_BACKOFF_S)
             continue
 
-        tid = extract_thread_id(session.engine, evt)
-        if tid:
-            agent_thread_id = tid
-        r = extract_result(session.engine, evt)
-        if r is not None:
-            result_text = r
-        if evt.get("type") == "error":
-            result_text = ""
-
-        for canonical in normalize_harness_event(session.engine, evt):
-            yield {"data": json.dumps(canonical, separators=(",", ":"))}
-
-        if is_turn_done(session.engine, evt):
-            rt.last_result = result_text
-            # Persist agent_thread_id for conversation resume
-            if agent_thread_id:
-                try:
-                    pool = _get_pool()
-                    await pool.execute(
-                        "UPDATE sandbox_sessions SET agent_thread_id = $1, updated_at = NOW() "
-                        "WHERE thread_key = $2",
-                        agent_thread_id,
-                        session.thread_key,
-                    )
-                except Exception:
-                    log.warning("agent_thread_id_persist_failed", thread_key=session.thread_key)
-            turn_id = rt.turn_counter  # pick up latest turn_id for next turn
-            yield {"data": json.dumps({
-                "type": "turn.done",
-                "turn_id": turn_id,
-                "result": result_text or "",
-                "agent_thread_id": agent_thread_id or "",
-            })}
-            log.info(
-                "turn_done",
-                thread_key=session.thread_key,
-                sandbox=session.sandbox_id[:12],
-                harness=session.harness,
-                turn_id=turn_id,
-                duration_s=round(time.monotonic() - t0, 2),
-                reason="completed",
-            )
-            # Persist turn, update state, reset for next turn
-            await asyncio.gather(
-                _persist_turn_messages(session.thread_key, "", result_text, session.harness),
-                _db_update_state(session.thread_key, "idle"),
-            )
-            result_text = ""
-            agent_thread_id = None
-            t0 = time.monotonic()
+        break
 
     # EOF — container exited or stream ended
     log.info(
@@ -512,7 +771,7 @@ async def _stream_stdout(
         sandbox=session.sandbox_id[:12],
         harness=session.harness,
         turn_id=turn_id,
-        duration_s=round(time.monotonic() - t0, 2),
+        duration_s=_elapsed_since(t0),
         reason="eof",
     )
 
@@ -549,11 +808,15 @@ async def stream_connect(
     )
 
     # Signal the client that the wire is ready
-    yield {"data": json.dumps({
-        "type": "wire.ready",
-        "lease_id": lease_id,
-        "turn_counter": rt.turn_counter,
-    })}
+    yield {
+        "data": json.dumps(
+            {
+                "type": "wire.ready",
+                "lease_id": lease_id,
+                "turn_counter": rt.turn_counter,
+            }
+        )
+    }
 
     # Heartbeat runs as an independent task so it fires even during long
     # silent tool calls (when _stream_stdout yields nothing for minutes).
@@ -575,7 +838,11 @@ async def stream_connect(
 
     try:
         async for sse_dict in _stream_stdout(
-            session, backend, rt, rt.turn_counter, time.monotonic(),
+            session,
+            backend,
+            rt,
+            rt.turn_counter,
+            time.monotonic(),
         ):
             yield sse_dict
     finally:
@@ -586,7 +853,8 @@ async def stream_connect(
         except (asyncio.CancelledError, Exception):
             pass
         await _db_clear_wire(session.thread_key, lease_id)
-        await _db_update_state(session.thread_key, "idle")
+        if await _db_get_inflight_turn(session.thread_key) is None:
+            await _db_update_state(session.thread_key, "idle")
         log.info(
             "wire_disconnected",
             thread_key=session.thread_key,
@@ -607,7 +875,6 @@ async def inject_stdin(
     Returns a summary dict for the JSON response.
     """
     rt = _get_runtime(session.sandbox_id)
-    rt.turn_counter += 1
 
     if platform:
         await _insert_system_message(session.thread_key, platform)
@@ -635,6 +902,16 @@ async def inject_stdin(
     else:
         return {"ok": True, "injected": False}
 
+    rt.turn_counter += 1
+    rt.last_result = None
+    durable_turn_id = f"turn-{uuid.uuid4().hex[:16]}"
+    await _db_set_inflight_turn(
+        session.thread_key,
+        durable_turn_id,
+        turn_input,
+        attempts=1,
+    )
+
     backend = get_backend()
 
     # Refresh sandbox token on every turn so it never expires mid-session
@@ -649,7 +926,9 @@ async def inject_stdin(
     try:
         await backend.write_stdin(session, turn_input)
     except (BrokenPipeError, OSError, RuntimeError, AssertionError) as exc:
-        log.warning("stdin_broken_pipe", sandbox=session.sandbox_id[:12], error=str(exc))
+        log.warning(
+            "stdin_broken_pipe", sandbox=session.sandbox_id[:12], error=str(exc)
+        )
         st = await backend.status(session)
         if st != "running":
             raise RuntimeError(f"sandbox exited (status={st})") from exc
@@ -669,8 +948,75 @@ async def inject_stdin(
         thread_key=session.thread_key,
         sandbox=session.sandbox_id[:12],
         turn_id=rt.turn_counter,
+        durable_turn_id=durable_turn_id,
     )
-    return {"ok": True, "injected": True, "turn_id": rt.turn_counter}
+    return {
+        "ok": True,
+        "injected": True,
+        "turn_id": rt.turn_counter,
+        "durable_turn_id": durable_turn_id,
+    }
+
+
+async def replay_inflight_turn(session: SandboxSession) -> dict:
+    """Replay the persisted in-flight turn into a (new) sandbox.
+
+    This is used after container replacement so Slack reconnect can continue
+    without losing the active turn.
+    """
+    inflight = await _db_get_inflight_turn(session.thread_key)
+    if inflight is None:
+        return {"ok": True, "replayed": False}
+
+    durable_turn_id, turn_input, attempts = inflight
+    next_attempt = attempts + 1
+    rt = _get_runtime(session.sandbox_id)
+    rt.turn_counter += 1
+    rt.last_result = None
+
+    await _db_set_inflight_turn(
+        session.thread_key,
+        durable_turn_id,
+        turn_input,
+        attempts=next_attempt,
+    )
+
+    backend = get_backend()
+
+    try:
+        fresh_token = mint_sandbox_token(session.thread_key, session.sandbox_id)
+        await backend.refresh_token_by_id(session.sandbox_id, fresh_token)
+    except Exception:
+        log.warning("token_refresh_failed", sandbox=session.sandbox_id[:12])
+
+    await backend.attach(session)
+    try:
+        await backend.write_stdin(session, turn_input)
+    except (BrokenPipeError, OSError, RuntimeError, AssertionError) as exc:
+        log.warning(
+            "replay_broken_pipe", sandbox=session.sandbox_id[:12], error=str(exc)
+        )
+        st = await backend.status(session)
+        if st != "running":
+            raise RuntimeError(f"sandbox exited during replay (status={st})") from exc
+        await backend.reattach_stdin(session)
+        await backend.write_stdin(session, turn_input)
+
+    await _db_update_state(session.thread_key, "running")
+    log.info(
+        "inflight_turn_replayed",
+        thread_key=session.thread_key,
+        sandbox=session.sandbox_id[:12],
+        durable_turn_id=durable_turn_id,
+        attempt=next_attempt,
+    )
+    return {
+        "ok": True,
+        "replayed": True,
+        "turn_id": rt.turn_counter,
+        "durable_turn_id": durable_turn_id,
+        "attempt": next_attempt,
+    }
 
 
 # ── Supervisor ───────────────────────────────────────────────────────────────
@@ -733,7 +1079,8 @@ async def supervise_wires() -> None:
                     "UPDATE sandbox_sessions SET wire_lease_id = NULL, "
                     "wire_connected_at = NULL, wire_last_seen_at = NULL, "
                     "updated_at = NOW() WHERE thread_key = $1 AND wire_lease_id = $2",
-                    thread_key, lease_id,
+                    thread_key,
+                    lease_id,
                 )
     except Exception:
         log.warning("supervisor_error", exc_info=True)
@@ -748,6 +1095,26 @@ async def reconcile_tick() -> None:
         pool = _get_pool()
         backend = get_backend()
 
+        async def _mark_inactive(thread_key: str) -> None:
+            try:
+                await pool.execute(
+                    "UPDATE sandbox_sessions SET state = 'suspended', "
+                    "wire_lease_id = NULL, wire_connected_at = NULL, "
+                    "wire_last_seen_at = NULL, updated_at = NOW() "
+                    "WHERE thread_key = $1",
+                    thread_key,
+                )
+            except Exception:
+                # Compatibility fallback for deployments missing the suspended state.
+                log.warning("reconcile_suspend_fallback_gone", thread_key=thread_key)
+                await pool.execute(
+                    "UPDATE sandbox_sessions SET state = 'gone', "
+                    "wire_lease_id = NULL, wire_connected_at = NULL, "
+                    "wire_last_seen_at = NULL, updated_at = NOW() "
+                    "WHERE thread_key = $1",
+                    thread_key,
+                )
+
         # Step A: Reconcile DB sessions against Docker
         rows = await pool.fetch(
             "SELECT thread_key, sandbox_id, state "
@@ -759,25 +1126,27 @@ async def reconcile_tick() -> None:
             thread_key = row["thread_key"]
             sandbox_id = row["sandbox_id"]
             try:
-                st = await backend.status_by_id(sandbox_id)
+                try:
+                    st = await backend.status_by_id(sandbox_id)
+                except Exception:
+                    continue  # transient Docker error — skip, don't destroy
+                if st not in ("running", "created"):
+                    log.info(
+                        "reconcile_session_gone",
+                        thread_key=thread_key,
+                        sandbox=sandbox_id[:12],
+                        container_status=st,
+                        db_state=row["state"],
+                    )
+                    await _mark_inactive(thread_key)
+                    _drop_runtime(sandbox_id)
             except Exception:
-                continue  # transient Docker error — skip, don't destroy
-            if st not in ("running", "created"):
-                log.info(
-                    "reconcile_session_gone",
+                log.warning(
+                    "reconcile_session_row_error",
                     thread_key=thread_key,
                     sandbox=sandbox_id[:12],
-                    container_status=st,
-                    db_state=row["state"],
+                    exc_info=True,
                 )
-                await pool.execute(
-                    "UPDATE sandbox_sessions SET state = 'suspended', "
-                    "wire_lease_id = NULL, wire_connected_at = NULL, "
-                    "wire_last_seen_at = NULL, updated_at = NOW() "
-                    "WHERE thread_key = $1 AND state != 'suspended'",
-                    thread_key,
-                )
-                _drop_runtime(sandbox_id)
 
         # Step B: Idle TTL enforcement
         idle_rows = await pool.fetch(
@@ -789,23 +1158,25 @@ async def reconcile_tick() -> None:
         for row in idle_rows:
             thread_key = row["thread_key"]
             sandbox_id = row["sandbox_id"]
-            log.info("idle_ttl_expired", thread_key=thread_key, sandbox=sandbox_id[:12])
-            session = SandboxSession(
-                sandbox_id=sandbox_id,
-                thread_key=thread_key,
-                harness="",
-                engine="",
-            )
-            with contextlib.suppress(Exception):
-                await backend.stop(session)
-            await pool.execute(
-                "UPDATE sandbox_sessions SET state = 'suspended', "
-                "wire_lease_id = NULL, wire_connected_at = NULL, "
-                "wire_last_seen_at = NULL, updated_at = NOW() "
-                "WHERE thread_key = $1",
-                thread_key,
-            )
-            _drop_runtime(sandbox_id)
+            try:
+                log.info("idle_ttl_expired", thread_key=thread_key, sandbox=sandbox_id[:12])
+                session = SandboxSession(
+                    sandbox_id=sandbox_id,
+                    thread_key=thread_key,
+                    harness="",
+                    engine="",
+                )
+                with contextlib.suppress(Exception):
+                    await backend.stop(session)
+                await _mark_inactive(thread_key)
+                _drop_runtime(sandbox_id)
+            except Exception:
+                log.warning(
+                    "reconcile_idle_row_error",
+                    thread_key=thread_key,
+                    sandbox=sandbox_id[:12],
+                    exc_info=True,
+                )
 
         # Step C: Clean old terminated rows
         await pool.execute(
@@ -820,11 +1191,15 @@ async def reconcile_tick() -> None:
             sandbox_containers = await backend.list_containers(
                 {"centaur-agent": "true", "ai2.pipe": "true"}
             )
-            live_sandbox_names = {c["name"] for c in sandbox_containers if c["status"] == "running"}
+            live_sandbox_names = {
+                c["name"] for c in sandbox_containers if c["status"] == "running"
+            }
             for dind in dind_containers:
                 # Derive expected sandbox name from DinD name
                 dind_name = dind["name"]
-                expected_sandbox = dind_name.replace("centaur-dind-", "centaur-sandbox-", 1)
+                expected_sandbox = dind_name.replace(
+                    "centaur-dind-", "centaur-sandbox-", 1
+                )
                 if expected_sandbox not in live_sandbox_names:
                     # Check age — only kill DinDs older than 5 minutes
                     import datetime
@@ -839,7 +1214,9 @@ async def reconcile_tick() -> None:
                     except Exception:
                         age_s = 9999
                     if age_s > 300:
-                        log.info("reconcile_orphan_dind", dind=dind_name, age_s=round(age_s))
+                        log.info(
+                            "reconcile_orphan_dind", dind=dind_name, age_s=round(age_s)
+                        )
                         with contextlib.suppress(Exception):
                             await backend.stop_by_id(dind["id"])
         except Exception:
@@ -864,7 +1241,9 @@ async def stream_reconnect(
     turn_id = rt.turn_counter
     done_seen = 0
 
-    async for sse_dict in _stream_stdout(session, backend, rt, turn_id, time.monotonic()):
+    async for sse_dict in _stream_stdout(
+        session, backend, rt, turn_id, time.monotonic()
+    ):
         evt_data = json.loads(sse_dict["data"])
         if evt_data.get("type") == "turn.done":
             done_seen += 1
@@ -943,14 +1322,21 @@ async def get_status(thread_key: str) -> dict[str, Any]:
     result: dict[str, Any] = {
         "thread_key": thread_key,
         "status": st,
+        "state": session.db_state,
         "sandbox_id": session.sandbox_id[:12],
         "harness": session.harness,
         "engine": session.engine,
         "started_at": session.started_at,
     }
-    if rt:
-        if rt.last_result is not None:
-            result["last_result"] = rt.last_result
+    if session.inflight_turn_id:
+        result["inflight_turn_id"] = session.inflight_turn_id
+    if session.inflight_attempts:
+        result["inflight_attempts"] = session.inflight_attempts
+    if session.last_result:
+        result["last_result"] = session.last_result
+    elif rt and rt.last_result is not None:
+        # Best-effort bridge while the turn.done DB write is in-flight.
+        result["last_result"] = rt.last_result
     return result
 
 

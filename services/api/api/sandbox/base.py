@@ -35,6 +35,10 @@ class SandboxSession:
     db_state: str = ""
     agent_thread_id: str = ""
     last_delivered_id: str = ""
+    inflight_turn_id: str = ""
+    inflight_turn_input: dict | None = None
+    inflight_attempts: int = 0
+    last_result: str = ""
 
 
 class SandboxBackend(abc.ABC):
@@ -61,6 +65,7 @@ class SandboxBackend(abc.ABC):
         repo: str | None = None,
         warm: bool = False,
         model: str | None = None,
+        resume_thread_id: str | None = None,
     ) -> SandboxSession:
         """Create and start a new sandbox. Block until ready."""
 

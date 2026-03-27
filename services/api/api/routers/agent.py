@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json as _json
+import os
 import re
-import time as _time
 import uuid
 
 
@@ -19,19 +20,30 @@ from pydantic import BaseModel
 
 from api.agent import (
     _db_get_session,
-    _db_update_state,
-    _resolve_harness_profile,
     claim_for_delivery,
     get_or_spawn,
     get_status,
     inject_stdin,
     list_undelivered,
     mark_delivered,
+    replay_inflight_turn,
     stop_session,
     stream_connect,
     stream_reconnect,
 )
 from api.deps import require_scope, verify_api_key
+from api.runtime_control import (
+    ControlPlaneError,
+    append_message,
+    cancel_execution,
+    canonical_json,
+    enqueue_execution,
+    get_active_assignment,
+    get_execution,
+    list_thread_executions,
+    release_assignment,
+    spawn_assignment,
+)
 from api.warm_pool import pool_status
 from api.warm_pool import replenish as replenish_pool
 
@@ -111,100 +123,149 @@ def parse_harness_from_message(text: str) -> tuple[str | None, str, bool]:
 
 class ExecuteRequest(BaseModel):
     thread_key: str
-    message: str | list[Any] = ""
+    assignment_generation: int
+    execute_id: str | None = None
     harness: str | None = None
-    engine: str | None = None
+    delivery: dict[str, Any] | None = None
     platform: str | None = None
     user_id: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class SpawnRequest(BaseModel):
+    thread_key: str
+    spawn_id: str | None = None
+    harness: str | None = None
+    engine: str | None = None
+    persona_id: str | None = None
+    agents_md_override: str | None = None
+
+
+class MessageRequest(BaseModel):
+    thread_key: str
+    assignment_generation: int
+    message_id: str | None = None
+    event: dict[str, Any] | None = None
+    role: str | None = None
+    parts: list[dict[str, Any]] | None = None
+    user_id: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+def _normalize_message_event(body: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+    if body.get("user_id"):
+        metadata = {**metadata, "user_id": body.get("user_id")}
+
+    raw_event = body.get("event")
+    if isinstance(raw_event, dict):
+        return raw_event, metadata
+
+    parts = body.get("parts")
+    if not isinstance(parts, list):
+        parts = []
+
+    role = body.get("role") if isinstance(body.get("role"), str) else "user"
+    event = {
+        "type": "user",
+        "message": {
+            "role": role,
+            "content": parts,
+        },
+    }
+    return event, metadata
+
+
+def _json_error(code: str, message: str, status: int) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"code": code, "message": message})
+
+
+def _legacy_wire_api_enabled() -> bool:
+    return os.getenv("LEGACY_AGENT_WIRE_API_ENABLED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _legacy_wire_error(endpoint: str) -> JSONResponse:
+    return _json_error(
+        "LEGACY_ENDPOINT_REMOVED",
+        (
+            f"{endpoint} is no longer supported. "
+            "Use /agent/spawn, /agent/message, /agent/execute, and "
+            "/agent/threads/{thread_key}/events."
+        ),
+        410,
+    )
 
 
 @router.post("/execute", dependencies=[Depends(require_scope("agent:execute"))])
 async def execute(request: Request):
-    body = await request.json()
-    thread_key = body.get("thread_key")
-    if not thread_key:
-        raise HTTPException(status_code=422, detail="thread_key is required")
+    body = ExecuteRequest.model_validate(await request.json())
+    pool = request.app.state.db_pool
+    execute_id = body.execute_id or f"exec-{uuid.uuid4().hex[:16]}"
+    delivery = body.delivery or {
+        "channel": "slack",
+        "platform": body.platform or "slack",
+        "recipient_user_id": body.user_id,
+    }
+    metadata = body.metadata or {}
+    if body.user_id:
+        metadata = {**metadata, "user_id": body.user_id}
 
-    explicit_harness: str | None = body.get("harness")
-    engine = body.get("engine")
-    platform = body.get("platform")
-    user_id = body.get("user_id")
-    message = body.get("message", "")
-
-    # ── Parse harness directives from message text ───────────────────────
-    parsed_harness: str | None = None
-    parsed_explicit = False
-    if isinstance(message, str) and message:
-        parsed_harness, message, parsed_explicit = parse_harness_from_message(message)
-    elif isinstance(message, list):
-        # For content-block messages, parse flags from the first text block
-        for i, block in enumerate(message):
-            if isinstance(block, dict) and block.get("type") == "text":
-                parsed_harness, cleaned_text, parsed_explicit = parse_harness_from_message(
-                    block["text"]
-                )
-                message = [
-                    {**block, "text": cleaned_text} if j == i else b
-                    for j, b in enumerate(message)
-                ]
-                break
-
-    # ── Resolve final harness ────────────────────────────────────────────
-    # Priority: explicit request field > parsed from message > existing session > default
-    existing_session = await _db_get_session(thread_key)
-    existing_harness = existing_session.harness if existing_session else None
-
-    if explicit_harness:
-        resolved_harness = explicit_harness
-    elif parsed_harness:
-        resolved_harness = parsed_harness
-    elif existing_harness:
-        resolved_harness = existing_harness
-    else:
-        resolved_harness = "amp"
-
-    # ── Validate harness against existing session ────────────────────────
-    requested = explicit_harness or (parsed_harness if parsed_explicit else None)
-    if existing_harness and requested and requested != existing_harness:
-        # Personas (e.g. --invest, --legal) resolve to a base engine (amp).
-        # Only reject if the resolved engine actually differs from the existing session.
-        requested_engine, _, _ = _resolve_harness_profile(requested)
-        existing_engine, _, _ = _resolve_harness_profile(existing_harness)
-        if requested_engine != existing_engine:
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "code": "HARNESS_MISMATCH",
-                    "expected_harness": existing_harness,
-                    "requested_harness": requested,
-                },
-            )
-
-    # ── Validate message is non-empty after stripping flags ──────────────
-    msg_empty = False
-    if isinstance(message, str):
-        msg_empty = not message.strip()
-    elif isinstance(message, list):
-        msg_empty = not any(
-            isinstance(b, dict) and b.get("type") == "text" and b.get("text", "").strip()
-            for b in message
+    try:
+        result = await enqueue_execution(
+            pool,
+            thread_key=body.thread_key,
+            assignment_generation=body.assignment_generation,
+            execute_id=execute_id,
+            harness=body.harness,
+            delivery=delivery,
+            metadata=metadata,
         )
+    except ControlPlaneError as exc:
+        return _json_error(exc.code, exc.message, exc.status_code)
 
-    if msg_empty:
-        return JSONResponse(
-            status_code=400,
-            content={"code": "EMPTY_PROMPT"},
+    return JSONResponse(status_code=202, content=result)
+
+
+@router.post("/spawn", dependencies=[Depends(require_scope("agent:execute"))])
+async def spawn(req: SpawnRequest, request: Request):
+    pool = request.app.state.db_pool
+    spawn_id = req.spawn_id or f"spawn-{uuid.uuid4().hex[:16]}"
+    try:
+        return await spawn_assignment(
+            pool,
+            thread_key=req.thread_key,
+            spawn_id=spawn_id,
+            harness=req.harness,
+            engine=req.engine,
+            persona_id=req.persona_id,
+            agents_md_override=req.agents_md_override,
         )
+    except ControlPlaneError as exc:
+        return _json_error(exc.code, exc.message, exc.status_code)
 
-    # ── Extract inline attachments (image/document → attachment_ref) ─────
-    if isinstance(message, list):
-        pool = request.app.state.db_pool
-        msg_id = f"exec-{uuid.uuid4().hex[:16]}"
-        message = await _extract_attachments(pool, thread_key, msg_id, message)
 
-    session = await get_or_spawn(thread_key, resolved_harness, engine=engine)
-    result = await inject_stdin(session, message, platform=platform, user_id=user_id)
-    return JSONResponse(content=result)
+@router.post("/message", dependencies=[Depends(require_scope("agent:execute"))])
+async def post_message(request: Request):
+    body = MessageRequest.model_validate(await request.json())
+    event, metadata = _normalize_message_event(body.model_dump(exclude_none=True))
+    message_id = body.message_id or f"msg-{uuid.uuid4().hex[:16]}"
+    pool = request.app.state.db_pool
+    try:
+        return await append_message(
+            pool,
+            thread_key=body.thread_key,
+            assignment_generation=body.assignment_generation,
+            message_id=message_id,
+            event=event,
+            metadata=metadata,
+        )
+    except ControlPlaneError as exc:
+        return _json_error(exc.code, exc.message, exc.status_code)
 
 
 @router.post("/connect", dependencies=[Depends(require_scope("agent:execute"))])
@@ -214,6 +275,9 @@ async def connect(request: Request):
     The wire stays open across multiple turns until the container exits.
     Use POST /agent/execute to write to stdin.
     """
+    if not _legacy_wire_api_enabled():
+        return _legacy_wire_error("/agent/connect")
+
     body = await request.json()
     thread_key = body.get("thread_key")
     if not thread_key:
@@ -500,79 +564,50 @@ async def _resolve_urls(
 
 @router.post("/messages", dependencies=[Depends(require_scope("agent:execute"))])
 async def post_messages(request: Request):
-    """Buffer messages into chat_messages for a thread."""
+    """Batch variant of /agent/message."""
     body = await request.json()
     thread_key = body.get("thread_key")
     if not thread_key:
         raise HTTPException(status_code=422, detail="thread_key is required")
+    assignment_generation = body.get("assignment_generation")
+    if assignment_generation is None:
+        raise HTTPException(status_code=422, detail="assignment_generation is required")
 
-    # Normalize: single message or batch
-    raw_messages = body.get("messages")
+    raw_messages = body.get("messages") if isinstance(body.get("messages"), list) else None
     if raw_messages is None:
-        # Single message request
-        raw_messages = [{
-            "role": body.get("role", "user"),
-            "parts": body.get("parts", []),
-            "user_id": body.get("user_id"),
-            "metadata": body.get("metadata"),
-        }]
+        raw_messages = [body]
 
     pool = request.app.state.db_pool
     inserted = 0
+    stored: list[str] = []
+
     for msg in raw_messages:
-        parts = msg.get("parts", [])
-        role = msg.get("role", "user")
-        user_id = msg.get("user_id")
-        metadata = msg.get("metadata") or {}
-
-        # Generate deterministic ID from thread_key + slack_ts or timestamp
-        slack_ts = metadata.get("slack_ts", "")
-        if slack_ts:
-            msg_id = f"{thread_key}-{slack_ts}"
-        else:
-            msg_id = f"{thread_key}-{int(_time.time() * 1000000)}"
-
-        # Insert the message first (attachments FK references it), then
-        # extract inline base64 blobs → attachments table → update parts.
-        has_blobs = any(
-            p.get("type") in ("image", "document")
-            and p.get("source", {}).get("type") == "base64"
-            for p in parts
-        )
-
-        result = await pool.execute(
-            "INSERT INTO chat_messages (id, thread_key, role, parts, user_id, metadata) "
-            "VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb) "
-            "ON CONFLICT (id) DO NOTHING",
-            msg_id,
-            thread_key,
-            role,
-            _json.dumps(parts),
-            user_id,
-            _json.dumps(metadata),
-        )
-        if "INSERT 0 1" in result:
+        if not isinstance(msg, dict):
+            continue
+        normalized = {
+            **body,
+            **msg,
+            "thread_key": thread_key,
+            "assignment_generation": msg.get("assignment_generation", assignment_generation),
+        }
+        event, metadata = _normalize_message_event(normalized)
+        message_id = str(msg.get("message_id") or f"msg-{uuid.uuid4().hex[:16]}")
+        try:
+            result = await append_message(
+                pool,
+                thread_key=thread_key,
+                assignment_generation=int(normalized["assignment_generation"]),
+                message_id=message_id,
+                event=event,
+                metadata=metadata,
+            )
             inserted += 1
-
-        if has_blobs:
-            parts = await _extract_attachments(pool, thread_key, msg_id, parts)
-            await pool.execute(
-                "UPDATE chat_messages SET parts = $1::jsonb WHERE id = $2",
-                _json.dumps(parts),
-                msg_id,
-            )
-
-        # Auto-archive DocSend / Google Docs / Google Drive URLs
-        url_parts = await _resolve_urls(pool, thread_key, msg_id, parts, request)
-        if len(url_parts) != len(parts):
-            await pool.execute(
-                "UPDATE chat_messages SET parts = $1::jsonb WHERE id = $2",
-                _json.dumps(url_parts),
-                msg_id,
-            )
+            stored.append(str(result.get("message_id") or message_id))
+        except ControlPlaneError as exc:
+            return _json_error(exc.code, exc.message, exc.status_code)
 
     log.info("message_buffered", thread_key=thread_key, message_count=len(raw_messages), inserted=inserted)
-    return {"ok": True, "inserted": inserted}
+    return {"ok": True, "inserted": inserted, "message_ids": stored}
 
 
 @router.get("/messages", dependencies=[Depends(require_scope("agent:execute"))])
@@ -644,6 +679,9 @@ async def reconnect(req: ReconnectRequest):
     Used by the slackbot to recover an in-progress stream after an API restart.
     Returns 404 if no running session exists for this thread.
     """
+    if not _legacy_wire_api_enabled():
+        return _legacy_wire_error("/agent/reconnect")
+
     # Snapshot existing session to detect container replacement
     existing = await _db_get_session(req.thread_key)
     existing_sandbox = existing.sandbox_id if existing else None
@@ -653,7 +691,9 @@ async def reconnect(req: ReconnectRequest):
     # If container was replaced (dead → new warm container), flush pending messages
     if session.sandbox_id != existing_sandbox:
         try:
-            await inject_stdin(session, "", platform=None, user_id=None)
+            replay = await replay_inflight_turn(session)
+            if not replay.get("replayed"):
+                await inject_stdin(session, "", platform=None, user_id=None)
         except Exception:
             log.warning("reconnect_flush_failed", thread_key=req.thread_key,
                         sandbox=session.sandbox_id[:12])
@@ -721,7 +761,273 @@ async def status(request: Request, key: str):
             result["pending_messages"] = count_row["cnt"] if count_row else 0
     except Exception:
         pass
+    try:
+        active = await get_active_assignment(request.app.state.db_pool, key)
+        if active:
+            result["active_assignment"] = {
+                "assignment_generation": int(active["assignment_generation"]),
+                "runtime_id": active["runtime_id"],
+                "harness": active["harness"],
+                "persona_id": active["persona_id"],
+                "prompt_ref": active["prompt_ref"],
+                "effective_agents_md_sha256": active["effective_agents_md_sha256"],
+                "state": active["state"],
+            }
+    except Exception:
+        pass
     return result
+
+
+@router.get("/executions/{execution_id}", dependencies=[Depends(require_scope("agent:execute"))])
+async def execution_status(request: Request, execution_id: str):
+    pool = request.app.state.db_pool
+    result = await get_execution(pool, execution_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="execution not found")
+    return result
+
+
+@router.get("/threads/{thread_key}/executions", dependencies=[Depends(require_scope("agent:execute"))])
+async def thread_executions(request: Request, thread_key: str, limit: int = 20):
+    pool = request.app.state.db_pool
+    return {
+        "thread_key": thread_key,
+        "executions": await list_thread_executions(pool, thread_key, limit),
+    }
+
+
+@router.get("/threads/{thread_key}/events", dependencies=[Depends(require_scope("agent:execute"))])
+async def thread_events(
+    request: Request,
+    thread_key: str,
+    after_event_id: int = 0,
+    execution_id: str | None = None,
+    poll_ms: int = 500,
+):
+    pool = request.app.state.db_pool
+    poll_s = max(0.05, min(poll_ms / 1000.0, 5.0))
+
+    async def _iter_events():
+        cursor = max(0, after_event_id)
+        while True:
+            if await request.is_disconnected():
+                break
+
+            if execution_id:
+                rows = await pool.fetch(
+                    "SELECT event_id, event_kind, event_json FROM agent_execution_events "
+                    "WHERE thread_key = $1 AND event_id > $2 AND execution_id = $3 "
+                    "ORDER BY event_id ASC LIMIT 200",
+                    thread_key,
+                    cursor,
+                    execution_id,
+                )
+            else:
+                rows = await pool.fetch(
+                    "SELECT event_id, event_kind, event_json FROM agent_execution_events "
+                    "WHERE thread_key = $1 AND event_id > $2 "
+                    "ORDER BY event_id ASC LIMIT 200",
+                    thread_key,
+                    cursor,
+                )
+
+            if not rows:
+                await asyncio.sleep(poll_s)
+                continue
+
+            for row in rows:
+                cursor = int(row["event_id"])
+                payload = row["event_json"]
+                if isinstance(payload, str):
+                    try:
+                        payload = _json.loads(payload)
+                    except Exception:
+                        payload = {"type": "unknown", "raw": payload}
+                yield ServerSentEvent(
+                    id=str(cursor),
+                    event=str(row["event_kind"]),
+                    data=_json.dumps(payload, separators=(",", ":")),
+                )
+
+    return EventSourceResponse(
+        _iter_events(),
+        ping_message_factory=lambda: ServerSentEvent(comment="keepalive"),
+        sep="\n",
+    )
+
+
+class ReleaseRequest(BaseModel):
+    release_id: str | None = None
+    cancel_inflight: bool = False
+
+
+@router.post("/threads/{thread_key}/release", dependencies=[Depends(require_scope("agent:execute"))])
+async def release_thread(request: Request, thread_key: str, body: ReleaseRequest):
+    pool = request.app.state.db_pool
+    release_id = body.release_id or f"rel-{uuid.uuid4().hex[:16]}"
+    try:
+        return await release_assignment(
+            pool,
+            thread_key=thread_key,
+            release_id=release_id,
+            cancel_inflight=body.cancel_inflight,
+        )
+    except ControlPlaneError as exc:
+        return _json_error(exc.code, exc.message, exc.status_code)
+
+
+@router.post("/executions/{execution_id}/cancel", dependencies=[Depends(require_scope("agent:execute"))])
+async def execution_cancel(request: Request, execution_id: str):
+    pool = request.app.state.db_pool
+    result = await cancel_execution(pool, execution_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="execution not found")
+    return result
+
+
+class ClaimFinalDeliveryRequest(BaseModel):
+    consumer_id: str
+    limit: int = 1
+    lease_seconds: int = 60
+    platform: str | None = None
+
+
+@router.post("/final-deliveries/claim", dependencies=[Depends(require_scope("agent:execute"))])
+async def claim_final_delivery(request: Request, body: ClaimFinalDeliveryRequest):
+    pool = request.app.state.db_pool
+    limit = max(1, min(body.limit, 20))
+    lease_seconds = max(15, min(body.lease_seconds, 600))
+    platform = body.platform.strip() if body.platform else None
+    rows = await pool.fetch(
+        "WITH candidates AS ("
+        "  SELECT execution_id FROM agent_final_delivery_outbox "
+        "  WHERE state = 'pending' "
+        "    AND COALESCE(next_attempt_at, NOW()) <= NOW() "
+        "    AND (lease_expires_at IS NULL OR lease_expires_at <= NOW()) "
+        "    AND ($4::text IS NULL OR delivery->>'platform' = $4) "
+        "  ORDER BY created_at ASC "
+        "  LIMIT $1 "
+        "  FOR UPDATE SKIP LOCKED"
+        "), claimed AS ("
+        "  UPDATE agent_final_delivery_outbox o "
+        "  SET state = 'sending', lease_owner = $2, "
+        "      lease_expires_at = NOW() + make_interval(secs => $3), "
+        "      last_attempt_at = NOW(), attempt_count = o.attempt_count + 1, updated_at = NOW() "
+        "  FROM candidates c "
+        "  WHERE o.execution_id = c.execution_id "
+        "  RETURNING o.execution_id, o.thread_key, o.delivery, o.final_payload, o.attempt_count"
+        ") SELECT * FROM claimed",
+        limit,
+        body.consumer_id,
+        lease_seconds,
+        platform,
+    )
+    deliveries = []
+    for row in rows:
+        delivery = row["delivery"]
+        payload = row["final_payload"]
+        if isinstance(delivery, str):
+            delivery = _json.loads(delivery)
+        if isinstance(payload, str):
+            payload = _json.loads(payload)
+        deliveries.append(
+            {
+                "execution_id": row["execution_id"],
+                "thread_key": row["thread_key"],
+                "attempt_count": int(row["attempt_count"]),
+                "delivery": delivery,
+                "final_payload": payload,
+            }
+        )
+    return {"deliveries": deliveries}
+
+
+class MarkFinalDeliveredRequest(BaseModel):
+    consumer_id: str | None = None
+
+
+@router.post(
+    "/final-deliveries/{execution_id}/delivered",
+    dependencies=[Depends(require_scope("agent:execute"))],
+)
+async def mark_final_delivered(
+    request: Request,
+    execution_id: str,
+    body: MarkFinalDeliveredRequest,
+):
+    pool = request.app.state.db_pool
+    owner_check = ""
+    params: list[Any] = [execution_id]
+    if body.consumer_id:
+        owner_check = " AND lease_owner = $2"
+        params.append(body.consumer_id)
+
+    row = await pool.fetchrow(
+        (
+            "UPDATE agent_final_delivery_outbox SET state = 'delivered', delivered_at = NOW(), "
+            "lease_owner = NULL, lease_expires_at = NULL, updated_at = NOW() "
+            "WHERE execution_id = $1"
+        )
+        + owner_check
+        + " RETURNING execution_id, thread_key",
+        *params,
+    )
+    if not row:
+        raise HTTPException(status_code=409, detail="delivery not claimable")
+
+    await pool.execute(
+        "INSERT INTO agent_execution_events (thread_key, execution_id, event_kind, event_json) "
+        "VALUES ($1, $2, 'final_delivery_delivered', $3::jsonb)",
+        row["thread_key"],
+        execution_id,
+        canonical_json(
+            {
+                "type": "final_delivery.delivered",
+                "execution_id": execution_id,
+                "thread_key": row["thread_key"],
+            }
+        ),
+    )
+    return {"ok": True, "execution_id": execution_id}
+
+
+class MarkFinalFailedRequest(BaseModel):
+    consumer_id: str | None = None
+    error: str
+    retry_after_seconds: int = 15
+
+
+@router.post(
+    "/final-deliveries/{execution_id}/failed",
+    dependencies=[Depends(require_scope("agent:execute"))],
+)
+async def mark_final_failed(
+    request: Request,
+    execution_id: str,
+    body: MarkFinalFailedRequest,
+):
+    pool = request.app.state.db_pool
+    delay = max(5, min(body.retry_after_seconds, 600))
+    owner_check = ""
+    params: list[Any] = [execution_id, delay, body.error]
+    if body.consumer_id:
+        owner_check = " AND lease_owner = $4"
+        params.append(body.consumer_id)
+
+    row = await pool.fetchrow(
+        (
+            "UPDATE agent_final_delivery_outbox SET state = 'pending', last_error = $3, "
+            "next_attempt_at = NOW() + make_interval(secs => $2), "
+            "lease_owner = NULL, lease_expires_at = NULL, updated_at = NOW() "
+            "WHERE execution_id = $1"
+        )
+        + owner_check
+        + " RETURNING execution_id, thread_key",
+        *params,
+    )
+    if not row:
+        raise HTTPException(status_code=409, detail="delivery not claimable")
+    return {"ok": True, "execution_id": execution_id}
 
 
 @router.get("/pool", dependencies=[Depends(require_scope("admin"))])

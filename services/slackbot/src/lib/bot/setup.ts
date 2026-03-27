@@ -13,6 +13,9 @@ function wrapAdapter(adapter: SlackAdapter): BotSlackAdapter {
     fetchMessage: (threadId, ts) => adapter.fetchMessage(threadId, ts) as any,
     fetchMessages: (threadId, options) => adapter.fetchMessages(threadId, options) as any,
     setAssistantTitle: (channel, threadTs, title) => adapter.setAssistantTitle(channel, threadTs, title),
+    postMessage: (threadId, message) => adapter.postMessage(threadId, message) as any,
+    getInstallation: (teamId) => adapter.getInstallation(teamId) as any,
+    withBotToken: async (token, fn) => await adapter.withBotToken(token, fn),
   };
 }
 
@@ -60,6 +63,7 @@ function create() {
 
   const slack = hasSlackCreds ? chat.getAdapter("slack") as SlackAdapter : undefined;
   const bot = SlackBot.createFromEnv(slack ? wrapAdapter(slack) : undefined);
+  bot.startFinalDeliveryWorker();
 
   chat.onNewMention((t, m) => bot.onNewMention(wrapThread(t), m as any));
   chat.onSubscribedMessage((t, m) => bot.onSubscribedMessage(wrapThread(t), m as any));

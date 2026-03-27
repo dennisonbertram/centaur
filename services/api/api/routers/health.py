@@ -3,18 +3,42 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
+from api.db import check_schema_compatibility
 from api.deps import verify_operator_api_key
 from api.metrics import CONTENT_TYPE_LATEST, render_metrics
+from api.runtime_guardrails import check_runtime_credentials
 
 router = APIRouter()
 
 
 @router.get("/health")
-@router.get("/health/ready")
+@router.get("/healthz")
 async def health() -> dict:
     return {"status": "ok"}
+
+
+@router.get("/health/ready")
+@router.get("/readyz")
+async def readyz() -> Response:
+    from api.app import app
+
+    report = await check_schema_compatibility(app.state.db_pool)
+    credential_report = await check_runtime_credentials()
+    payload = {
+        "status": "ok",
+        "schema_compatibility": report,
+        "runtime_credentials": credential_report,
+    }
+    credentials_ok = (
+        not credential_report.get("enabled")
+        or credential_report.get("status") == "ok"
+    )
+    if report.get("compatible") and credentials_ok:
+        return JSONResponse(status_code=200, content=payload)
+    payload["status"] = "not_ready"
+    return JSONResponse(status_code=503, content=payload)
 
 
 @router.get("/metrics")
@@ -31,7 +55,10 @@ async def health_tools() -> dict[str, Any]:
 
     tool_manager = get_tool_manager()
     loaded = [
-        {"name": tool.name, "methods": sorted(method.method_name for method in tool.methods)}
+        {
+            "name": tool.name,
+            "methods": sorted(method.method_name for method in tool.methods),
+        }
         for tool in tool_manager.tools.values()
     ]
     failed = list(tool_manager.load_failures)

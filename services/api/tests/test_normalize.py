@@ -17,7 +17,12 @@ class TestAmpLike:
             "type": "user",
             "message": {
                 "content": [
-                    {"type": "tool_result", "tool_use_id": "t1", "content": "ok", "is_error": False},
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "t1",
+                        "content": "ok",
+                        "is_error": False,
+                    },
                 ]
             },
         }
@@ -34,10 +39,22 @@ class TestAmpLike:
         result = normalize_harness_event("amp", {"type": "error", "error": "oops"})
         assert result == [{"type": "error", "error": "oops"}]
 
+    def test_error_event_nested_message(self):
+        result = normalize_harness_event(
+            "amp",
+            {"type": "error", "error": {"message": "amp exited with code 1"}},
+        )
+        assert result == [{"type": "error", "error": "amp exited with code 1"}]
+
     def test_system_init(self):
-        result = normalize_harness_event("amp", {
-            "type": "system", "subtype": "init", "session_id": "T-abc",
-        })
+        result = normalize_harness_event(
+            "amp",
+            {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "T-abc",
+            },
+        )
         assert result == [{"type": "system", "subtype": "init", "session_id": "T-abc"}]
 
     def test_reasoning_passthrough(self):
@@ -47,8 +64,10 @@ class TestAmpLike:
 
     def test_subagent_normalize_status(self):
         evt = {
-            "type": "subagent", "status": "started",
-            "subagent_id": "sub1", "name": "Worker",
+            "type": "subagent",
+            "status": "started",
+            "subagent_id": "sub1",
+            "name": "Worker",
         }
         result = normalize_harness_event("amp", evt)
         assert len(result) == 1
@@ -66,42 +85,61 @@ class TestAmpLike:
 
 class TestCodex:
     def test_thread_started(self):
-        result = normalize_harness_event("codex", {
-            "type": "thread.started", "thread_id": "thread-1",
-        })
-        assert result == [{"type": "system", "subtype": "init", "session_id": "thread-1"}]
+        result = normalize_harness_event(
+            "codex",
+            {
+                "type": "thread.started",
+                "thread_id": "thread-1",
+            },
+        )
+        assert result == [
+            {"type": "system", "subtype": "init", "session_id": "thread-1"}
+        ]
 
     def test_item_completed_message(self):
-        result = normalize_harness_event("codex", {
-            "type": "item.completed",
-            "item": {"type": "agent_message", "text": "hello"},
-        })
+        result = normalize_harness_event(
+            "codex",
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "hello"},
+            },
+        )
         assert len(result) == 1
         assert result[0]["type"] == "assistant"
         assert result[0]["message"]["content"][0]["text"] == "hello"
 
     def test_turn_failed(self):
-        result = normalize_harness_event("codex", {
-            "type": "turn.failed",
-            "error": {"message": "boom"},
-        })
+        result = normalize_harness_event(
+            "codex",
+            {
+                "type": "turn.failed",
+                "error": {"message": "boom"},
+            },
+        )
         assert result == [{"type": "error", "error": "boom"}]
 
 
 class TestPiMono:
     def test_session(self):
-        result = normalize_harness_event("pi-mono", {
-            "type": "session", "id": "sess-1",
-        })
+        result = normalize_harness_event(
+            "pi-mono",
+            {
+                "type": "session",
+                "id": "sess-1",
+            },
+        )
         assert result == [{"type": "system", "subtype": "init", "session_id": "sess-1"}]
 
     def test_tool_execution_start(self):
-        result = normalize_harness_event("pi-mono", {
-            "type": "tool_execution_start",
-            "toolName": "Read",
-            "toolCallId": "tc1",
-            "args": {"path": "/foo"},
-        })
+        result = normalize_harness_event(
+            "pi-mono",
+            {
+                "type": "tool_execution_start",
+                "toolName": "Read",
+                "toolCallId": "tc1",
+                "args": {"path": "/foo"},
+            },
+        )
         assert len(result) == 1
         assert result[0]["type"] == "assistant"
         content = result[0]["message"]["content"]
@@ -109,12 +147,15 @@ class TestPiMono:
         assert content[0]["name"] == "Read"
 
     def test_tool_execution_end(self):
-        result = normalize_harness_event("pi-mono", {
-            "type": "tool_execution_end",
-            "toolCallId": "tc1",
-            "toolName": "Read",
-            "result": "file content",
-        })
+        result = normalize_harness_event(
+            "pi-mono",
+            {
+                "type": "tool_execution_end",
+                "toolCallId": "tc1",
+                "toolName": "Read",
+                "result": "file content",
+            },
+        )
         assert len(result) == 1
         assert result[0]["type"] == "tool"
         assert result[0]["content"][0]["tool_use_id"] == "tc1"
@@ -122,7 +163,9 @@ class TestPiMono:
 
 class TestAutoDetect:
     def test_detect_codex(self):
-        result = normalize_harness_event("", {"type": "item.started", "item": {"type": "error", "message": "x"}})
+        result = normalize_harness_event(
+            "", {"type": "item.started", "item": {"type": "error", "message": "x"}}
+        )
         assert result == [{"type": "error", "error": "x"}]
 
     def test_detect_pi(self):

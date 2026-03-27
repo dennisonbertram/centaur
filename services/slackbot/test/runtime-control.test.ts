@@ -1,0 +1,197 @@
+import { describe, expect, it, vi } from "vitest";
+
+import type { StreamChunk } from "chat";
+
+import { SlackBot, type BotMessage, type BotThread, type SlackAdapter } from "../src/lib/bot/bot";
+
+function createThread(id = "slack:C123:1700000000.000100") {
+  const postedMarkdown: string[] = [];
+  const streamedChunks: StreamChunk[] = [];
+
+  const thread: BotThread = {
+    id,
+    async subscribe() {},
+    async startTyping() {},
+    async post(content) {
+      if ("markdown" in content) {
+        postedMarkdown.push(content.markdown);
+      } else {
+        for await (const chunk of content) {
+          streamedChunks.push(chunk);
+        }
+      }
+      return {
+        id: `msg-${postedMarkdown.length + streamedChunks.length}`,
+        async edit(c: { markdown: string }) {
+          postedMarkdown.push(c.markdown);
+        },
+      };
+    },
+  };
+
+  return { thread, postedMarkdown, streamedChunks };
+}
+
+function userMessage(text: string, opts?: { id?: string; teamId?: string; isMention?: boolean }): BotMessage {
+  const ts = opts?.id || "1700000000.000100";
+  return {
+    id: ts,
+    text,
+    isMention: opts?.isMention,
+    raw: {
+      ts,
+      team_id: opts?.teamId || "T123",
+    },
+    author: {
+      isMe: false,
+      isBot: false,
+      userId: "U123",
+    },
+  };
+}
+
+function createImmediateStreamClient() {
+  return {
+    spawn: vi.fn(async () => ({ assignment_generation: 7 })),
+    message: vi.fn(async () => ({ ok: true, attachment_ids: [] })),
+    execute: vi.fn(async () => ({ execution_id: "exe-new" })),
+    streamEvents: vi.fn(() => (async function* () {
+      yield {
+        eventId: 1,
+        eventKind: "amp_raw_event",
+        data: {
+          type: "turn.done",
+          result: "done",
+        },
+      };
+    })()),
+    cancelExecution: vi.fn(async () => ({ ok: true })),
+    markFinalDelivered: vi.fn(async () => ({ ok: true })),
+    markFinalFailed: vi.fn(async () => ({ ok: true })),
+    claimFinalDeliveries: vi.fn(async () => ({ deliveries: [] })),
+    getExecution: vi.fn(async () => ({ status: "completed", result_text: "done" })),
+  };
+}
+
+function createSlackAdapter(overrides?: Partial<SlackAdapter>): SlackAdapter {
+  return {
+    fetchMessage: async () => null,
+    fetchMessages: async () => ({ messages: [] }),
+    postMessage: async () => ({ id: "msg-1" }),
+    setAssistantTitle: async () => {},
+    getInstallation: async () => null,
+    withBotToken: async (_token, fn) => await fn(),
+    ...overrides,
+  };
+}
+
+describe("SlackBot runtime control", () => {
+  const normalizedThreadKey = "C123:1700000000.000100";
+
+  it("uses stable Slack message IDs for history backfill and the current message", async () => {
+    const client = createImmediateStreamClient();
+    const slack = createSlackAdapter({
+      fetchMessages: async () => ({
+        messages: [
+          userMessage("prior context", { id: "1700000000.000001" }) as any,
+          userMessage("<@bot> please help", { id: "1700000000.000002" }) as any,
+        ],
+      }),
+    });
+    const bot = new SlackBot(client as any, "", slack);
+    const { thread } = createThread();
+
+    await bot.onNewMention(thread, userMessage("<@bot> please help", { id: "1700000000.000002" }));
+
+    expect(client.message).toHaveBeenCalledTimes(2);
+    expect(client.message.mock.calls[0][0].messageId).toBe("slack:1700000000.000001");
+    expect(client.message.mock.calls[1][0].messageId).toBe("slack:1700000000.000002");
+  });
+
+  it("cancels the previous execution before starting a new mention turn", async () => {
+    const client = createImmediateStreamClient();
+    const bot = new SlackBot(client as any);
+    const { thread } = createThread();
+    const oldAbortController = new AbortController();
+
+    (bot as any).inFlightExecutions.set(normalizedThreadKey, {
+      executionId: "exe-old",
+      abortController: oldAbortController,
+    });
+
+    await bot.onSubscribedMessage(thread, userMessage("follow-up", {
+      id: "1700000000.000003",
+      isMention: true,
+    }));
+
+    expect(oldAbortController.signal.aborted).toBe(true);
+    expect(client.cancelExecution).toHaveBeenCalledWith("exe-old");
+  });
+
+  it("claims only Slack final deliveries and posts completed results once", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-completed",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: { status: "completed", result_text: "final answer" },
+        },
+        {
+          execution_id: "exe-cancelled",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: { status: "cancelled", terminal_reason: "cancel_requested" },
+        },
+      ],
+    }));
+    const slack = createSlackAdapter({
+      postMessage: vi.fn(async () => ({ id: "msg-final" })),
+    });
+    const bot = new SlackBot(client as any, "", slack);
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    expect(client.claimFinalDeliveries).toHaveBeenCalledWith(expect.objectContaining({ platform: "slack" }));
+    expect(slack.postMessage).toHaveBeenCalledTimes(1);
+    expect(slack.postMessage).toHaveBeenCalledWith(
+      normalizedThreadKey,
+      { markdown: "final answer" },
+    );
+    expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-completed", expect.any(String));
+    expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-cancelled", expect.any(String));
+  });
+
+  it("defers outbox delivery while the same execution is still streaming locally", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-live",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: { status: "completed", result_text: "should wait" },
+        },
+      ],
+    }));
+    const slack = createSlackAdapter({
+      postMessage: vi.fn(async () => ({ id: "msg-final" })),
+    });
+    const bot = new SlackBot(client as any, "", slack);
+
+    (bot as any).inFlightExecutions.set(normalizedThreadKey, {
+      executionId: "exe-live",
+      abortController: new AbortController(),
+    });
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    expect(slack.postMessage).not.toHaveBeenCalled();
+    expect(client.markFinalFailed).toHaveBeenCalledWith(
+      "exe-live",
+      "live_stream_in_progress",
+      expect.objectContaining({ consumerId: expect.any(String) }),
+    );
+  });
+});

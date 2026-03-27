@@ -18,7 +18,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
-import pytest_asyncio
 
 from api.sandbox.harness_protocol import messages_to_content_blocks
 
@@ -164,10 +163,23 @@ SAMPLE_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100  # fake PNG bytes
 SAMPLE_PDF = b"%PDF-1.4 fake content for testing"
 
 
+async def _seed_assignment(db_pool, thread_key: str, generation: int = 1) -> None:
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, $2, $3, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        generation,
+        f"rt-{thread_key}-{generation}",
+    )
+
+
 @pytest.mark.asyncio
-async def test_attachment_roundtrip(client, api_key):
+async def test_attachment_roundtrip(client, db_pool, api_key):
     """POST message with base64 image → stored in attachments → downloadable."""
     thread_key = "test:att-roundtrip"
+    await _seed_assignment(db_pool, thread_key)
     b64_png = base64.b64encode(SAMPLE_PNG).decode()
 
     # 1. Buffer a message with an inline base64 image
@@ -175,12 +187,14 @@ async def test_attachment_roundtrip(client, api_key):
         "/agent/messages",
         json={
             "thread_key": thread_key,
+            "assignment_generation": 1,
             "messages": [{
                 "role": "user",
                 "parts": [
                     {"type": "text", "text": "what is in this image?"},
                     {
                         "type": "image",
+                        "source_path": "file:///tmp/image.png",
                         "source": {
                             "type": "base64",
                             "media_type": "image/png",
@@ -236,21 +250,24 @@ async def test_attachment_roundtrip(client, api_key):
 
 
 @pytest.mark.asyncio
-async def test_document_attachment(client, api_key):
+async def test_document_attachment(client, db_pool, api_key):
     """POST message with base64 document part → stored and downloadable."""
     thread_key = "test:att-doc"
+    await _seed_assignment(db_pool, thread_key)
     b64_pdf = base64.b64encode(SAMPLE_PDF).decode()
 
     resp = await client.post(
         "/agent/messages",
         json={
             "thread_key": thread_key,
+            "assignment_generation": 1,
             "messages": [{
                 "role": "user",
                 "parts": [
                     {"type": "text", "text": "summarize this PDF"},
                     {
                         "type": "document",
+                        "source_path": "file:///tmp/document.pdf",
                         "source": {
                             "type": "base64",
                             "media_type": "application/pdf",
@@ -280,14 +297,16 @@ async def test_document_attachment(client, api_key):
 
 
 @pytest.mark.asyncio
-async def test_text_only_message_no_attachments(client, api_key):
+async def test_text_only_message_no_attachments(client, db_pool, api_key):
     """Text-only messages pass through without creating attachments."""
     thread_key = "test:att-textonly"
+    await _seed_assignment(db_pool, thread_key)
 
     resp = await client.post(
         "/agent/messages",
         json={
             "thread_key": thread_key,
+            "assignment_generation": 1,
             "messages": [{
                 "role": "user",
                 "parts": [{"type": "text", "text": "just plain text"}],
@@ -305,9 +324,10 @@ async def test_text_only_message_no_attachments(client, api_key):
 
 
 @pytest.mark.asyncio
-async def test_mixed_attachments_and_text(client, api_key):
+async def test_mixed_attachments_and_text(client, db_pool, api_key):
     """Message with text + image + document → two attachments, text preserved."""
     thread_key = "test:att-mixed"
+    await _seed_assignment(db_pool, thread_key)
     b64_png = base64.b64encode(SAMPLE_PNG).decode()
     b64_pdf = base64.b64encode(SAMPLE_PDF).decode()
 
@@ -315,12 +335,21 @@ async def test_mixed_attachments_and_text(client, api_key):
         "/agent/messages",
         json={
             "thread_key": thread_key,
+            "assignment_generation": 1,
             "messages": [{
                 "role": "user",
                 "parts": [
                     {"type": "text", "text": "review both files"},
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_png}},
-                    {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64_pdf}},
+                    {
+                        "type": "image",
+                        "source_path": "file:///tmp/image.png",
+                        "source": {"type": "base64", "media_type": "image/png", "data": b64_png},
+                    },
+                    {
+                        "type": "document",
+                        "source_path": "file:///tmp/document.pdf",
+                        "source": {"type": "base64", "media_type": "application/pdf", "data": b64_pdf},
+                    },
                 ],
             }],
         },

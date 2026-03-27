@@ -25,12 +25,12 @@ class TestRuntimeStateNoBusy:
         assert not hasattr(rt, "busy"), "busy field should be removed from RuntimeState"
 
     def test_runtime_fields(self):
-        """RuntimeState should only have turn_counter, stream, last_result."""
+        """RuntimeState tracks separate stdout/stdin stream handles."""
         from api.sandbox.base import RuntimeState
 
         rt = RuntimeState()
         field_names = {f.name for f in rt.__dataclass_fields__.values()}
-        assert field_names == {"turn_counter", "stream", "last_result"}
+        assert field_names == {"turn_counter", "stdout_stream", "stdin_stream", "last_result"}
 
 
 # ── 2. inject_stdin never blocks on busy ─────────────────────────────────────

@@ -52,6 +52,11 @@ def _repo_host_dir() -> str:
     return os.getenv("REPO_HOST_DIR", os.path.join(_repos_host_dir(), "paradigmxyz", "centaur"))
 
 
+def _egress_network() -> str | None:
+    value = (os.getenv("AGENT_EGRESS_NETWORK") or "").strip()
+    return value or None
+
+
 _HARNESS_STUB_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AMP_API_KEY", "GITHUB_TOKEN")
 
 
@@ -72,7 +77,12 @@ def _build_harness_cmd(engine: str, model: str | None = None) -> list[str]:
     return ["sleep", "infinity"]
 
 
-def _container_env(thread_key: str, container_name: str) -> list[str]:
+def _container_env(
+    thread_key: str,
+    container_name: str,
+    *,
+    resume_thread_id: str | None = None,
+) -> list[str]:
     """Build env vars for sandbox containers."""
     local_dev = os.getenv("AGENT_LOCAL_DEV", "").lower() in ("1", "true")
 
@@ -82,7 +92,10 @@ def _container_env(thread_key: str, container_name: str) -> list[str]:
         f"CENTAUR_API_URL={os.getenv('AGENT_API_URL', 'http://api:8000')}",
         f"CENTAUR_API_KEY={api_key}",
         f"CENTAUR_THREAD_KEY={thread_key}",
+        "AMP_MODE=deep",
     ]
+    if resume_thread_id:
+        env.append(f"AMP_CONTINUE_THREAD_ID={resume_thread_id}")
 
     if local_dev:
         for key in _HARNESS_STUB_KEYS:
@@ -180,12 +193,17 @@ class DockerSandboxBackend(SandboxBackend):
         repo: str | None = None,
         warm: bool = False,
         model: str | None = None,
+        resume_thread_id: str | None = None,
     ) -> SandboxSession:
         client = self._get_client()
         repos_dir = os.path.abspath(_repos_host_dir())
 
         container_name = f"centaur-sandbox-{thread_key.replace(':', '-').replace('.', '-')[:40]}"
-        env = _container_env(thread_key, container_name)
+        env = _container_env(
+            thread_key,
+            container_name,
+            resume_thread_id=resume_thread_id,
+        )
         if persona:
             env.append(f"AGENT_PERSONA={persona}")
         if repo:
@@ -200,6 +218,7 @@ class DockerSandboxBackend(SandboxBackend):
 
         # Spawn Docker-in-Docker sidecar (docker:dind)
         network = os.getenv("AGENT_NETWORK", "centaur_agent_net")
+        egress_network = _egress_network()
         dind_container = await client.containers.create_or_replace(
             name=dind_name,
             config={
@@ -283,6 +302,11 @@ class DockerSandboxBackend(SandboxBackend):
             name=container_name,
             config=config,
         )
+
+        if egress_network and egress_network != network:
+            egress = await client.networks.get(egress_network)
+            await egress.connect({"Container": container.id})
+
         await container.start()
         container_id = container.id
 

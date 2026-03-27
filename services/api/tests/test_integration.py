@@ -17,6 +17,18 @@ from __future__ import annotations
 import pytest
 
 
+async def _seed_assignment(db_pool, thread_key: str, generation: int = 1) -> None:
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, $2, $3, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        generation,
+        f"rt-{thread_key}-{generation}",
+    )
+
+
 # ── Test 1: Message buffer endpoints ─────────────────────────────────────────
 
 
@@ -24,13 +36,16 @@ class TestPostMessages:
     """Tests for POST /agent/messages endpoint."""
 
     @pytest.mark.asyncio
-    async def test_post_single_message(self, client, api_key):
+    async def test_post_single_message(self, client, db_pool, api_key):
         """POST /agent/messages with a single message."""
+        thread_key = "test:msg-1"
+        await _seed_assignment(db_pool, thread_key)
         resp = await client.post(
             "/agent/messages",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
-                "thread_key": "test:msg-1",
+                "thread_key": thread_key,
+                "assignment_generation": 1,
                 "role": "user",
                 "parts": [{"type": "text", "text": "hello"}],
             },
@@ -41,13 +56,16 @@ class TestPostMessages:
         assert data["inserted"] == 1
 
     @pytest.mark.asyncio
-    async def test_post_batch_messages(self, client, api_key):
+    async def test_post_batch_messages(self, client, db_pool, api_key):
         """POST /agent/messages with multiple messages in batch."""
+        thread_key = "test:msg-batch-1"
+        await _seed_assignment(db_pool, thread_key)
         messages = [
             {
                 "role": "user",
                 "parts": [{"type": "text", "text": f"batch msg {i}"}],
                 "user_id": "U456",
+                "message_id": f"msg-batch-{i}",
             }
             for i in range(3)
         ]
@@ -55,7 +73,8 @@ class TestPostMessages:
             "/agent/messages",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
-                "thread_key": "test:msg-batch-1",
+                "thread_key": thread_key,
+                "assignment_generation": 1,
                 "messages": messages,
             },
         )
@@ -78,16 +97,19 @@ class TestPostMessages:
         assert data["has_more"] is False
 
     @pytest.mark.asyncio
-    async def test_get_messages_roundtrip(self, client, api_key):
+    async def test_get_messages_roundtrip(self, client, db_pool, api_key):
         """POST then GET returns the same message."""
         import json
 
         thread = "test:roundtrip-1"
+        await _seed_assignment(db_pool, thread)
         await client.post(
             "/agent/messages",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "thread_key": thread,
+                "assignment_generation": 1,
+                "message_id": "msg-roundtrip",
                 "role": "user",
                 "parts": [{"type": "text", "text": "roundtrip check"}],
                 "user_id": "U789",
@@ -110,21 +132,25 @@ class TestPostMessages:
         assert msgs[0]["user_id"] == "U789"
 
     @pytest.mark.asyncio
-    async def test_message_dedup(self, client, api_key):
+    async def test_message_dedup(self, client, db_pool, api_key):
         """Same slack_ts = same message ID = no duplicate insert."""
+        thread_key = "test:dedup-1"
+        await _seed_assignment(db_pool, thread_key)
         for _ in range(2):
             await client.post(
                 "/agent/messages",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json={
-                    "thread_key": "test:dedup-1",
+                    "thread_key": thread_key,
+                    "assignment_generation": 1,
+                    "message_id": "msg-dedup",
                     "parts": [{"type": "text", "text": "hello"}],
                     "metadata": {"slack_ts": "1234567890.123456"},
                 },
             )
         resp = await client.get(
             "/agent/messages",
-            params={"thread_key": "test:dedup-1"},
+            params={"thread_key": thread_key},
             headers={"Authorization": f"Bearer {api_key}"},
         )
         assert len(resp.json()["messages"]) == 1
@@ -142,24 +168,33 @@ class TestPostMessages:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_loopback_bypasses_auth(self, client):
+    async def test_loopback_bypasses_auth(self, client, db_pool):
         """ASGI transport (localhost) bypasses auth — verifies loopback trust."""
+        thread_key = "test:loopback-auth"
+        await _seed_assignment(db_pool, thread_key)
         resp = await client.post(
             "/agent/messages",
-            json={"thread_key": "test:loopback-auth", "parts": [{"type": "text", "text": "no key"}]},
+            json={
+                "thread_key": thread_key,
+                "assignment_generation": 1,
+                "parts": [{"type": "text", "text": "no key"}],
+            },
         )
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_get_messages_pagination(self, client, api_key):
+    async def test_get_messages_pagination(self, client, db_pool, api_key):
         """GET with limit returns paginated results."""
         thread = "test:pagination-1"
+        await _seed_assignment(db_pool, thread)
         for i in range(5):
             await client.post(
                 "/agent/messages",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json={
                     "thread_key": thread,
+                    "assignment_generation": 1,
+                    "message_id": f"msg-page-{i}",
                     "parts": [{"type": "text", "text": f"page msg {i}"}],
                     "metadata": {"slack_ts": f"1000000000.{i:06d}"},
                 },
@@ -309,8 +344,6 @@ class TestBuildHarnessCmd:
 
         cmd = _build_harness_cmd("amp", model="claude-sonnet-4-20250514")
         assert cmd[0] == "amp-wrapper"
-        assert "--model" in cmd
-        assert "claude-sonnet-4-20250514" in cmd
 
     def test_claude_code(self):
         from api.sandbox.docker import _build_harness_cmd
@@ -338,6 +371,25 @@ class TestBuildHarnessCmd:
 
         cmd = _build_harness_cmd("pi-mono")
         assert cmd == ["sleep", "infinity"]
+
+
+class TestSpawnAndMessageAlias:
+    @pytest.mark.asyncio
+    async def test_message_alias(self, client, db_pool, api_key):
+        thread_key = "test:message-alias-1"
+        await _seed_assignment(db_pool, thread_key)
+        resp = await client.post(
+            "/agent/message",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "thread_key": thread_key,
+                "assignment_generation": 1,
+                "role": "user",
+                "parts": [{"type": "text", "text": "hello alias"}],
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
 
 
 # ── Test 6: _build_session_context ───────────────────────────────────────────
@@ -394,14 +446,16 @@ class TestStatus:
         assert data["status"] == "not_found"
 
     @pytest.mark.asyncio
-    async def test_status_pending_messages_count(self, client, api_key):
+    async def test_status_pending_messages_count(self, client, db_pool, api_key):
         """Status includes pending_messages count."""
         thread = "test:status-pending-1"
+        await _seed_assignment(db_pool, thread)
         await client.post(
             "/agent/messages",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
                 "thread_key": thread,
+                "assignment_generation": 1,
                 "parts": [{"type": "text", "text": "pending msg"}],
             },
         )

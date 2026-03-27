@@ -78,6 +78,7 @@ services:
       - default
       - secrets_net
       - agent_net
+      - agent_egress
       - control_net
     volumes:
       - firewall-certs:/certs
@@ -128,11 +129,13 @@ services:
       SECRET_MANAGER_URL: http://firewall:8081
       SLACKBOT_URL: http://slackbot:3001
       CENTAUR_LOG_LEVEL: info
+      LOCAL_DEV_API_KEY: ${LOCAL_DEV_API_KEY:-}
       TOOL_DIRS: /app/tools:/app/tools-paradigm
       REPOS_HOST_DIR: ${HOME}/github
       REPO_HOST_DIR: ${PWD}
       FIREWALL_HOST: firewall
       AGENT_NETWORK: centaur_agent_net
+      AGENT_EGRESS_NETWORK: centaur_agent_egress
       FIREWALL_CERTS_VOLUME: centaur_firewall-certs
       DOCKER_HOST: tcp://docker-socket-proxy:2375
       HTTPS_PROXY: http://firewall:8080
@@ -343,6 +346,9 @@ networks:
     # for 1Password SDK calls. Only the secrets container uses this.
   agent_net:
     internal: true
+  agent_egress:
+    # Non-internal: gives spawned sandboxes DNS + direct egress for Amp's DTW
+    # WebSocket transport while keeping HTTP requests on the firewall proxy.
   backend_net:
     internal: true
   obs_net:

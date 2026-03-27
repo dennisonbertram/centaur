@@ -50,7 +50,8 @@ _DEFAULT_INJECTION_HOSTS = (
     "api.exa.ai,"
     "generativelanguage.googleapis.com,"
     "api.x.ai,"
-    "ampcode.com"
+    "ampcode.com,"
+    "*.ampworkers.com"
 )
 
 # Hosts that need POST/PUT/DELETE but don't get secret injection.
@@ -58,7 +59,8 @@ _DEFAULT_INJECTION_HOSTS = (
 _DEFAULT_UNRESTRICTED_METHOD_HOSTS = (
     "github.com,"
     "api.github.com,"
-    "ampcode.com"
+    "ampcode.com,"
+    "*.ampworkers.com"
 )
 SECRET_INJECTION_HOSTS: frozenset[str] = frozenset(
     h.strip().lower()
@@ -107,6 +109,8 @@ ALLOWED_OUTBOUND_HEADERS: frozenset[str] = frozenset({
     "x-stainless-lang", "x-stainless-runtime", "x-stainless-runtime-version",
     "x-stainless-package-version", "x-stainless-retry-count",
     "connection", "transfer-encoding", "te",
+    "upgrade", "origin", "sec-websocket-key", "sec-websocket-version",
+    "sec-websocket-protocol", "sec-websocket-extensions",
     "cache-control", "pragma", "if-none-match", "if-modified-since",
     "range", "cookie",
     "notion-version",
@@ -385,6 +389,10 @@ class CredentialInjector:
                 return True
         return False
 
+    def _host_in_patterns(self, host: str, patterns: frozenset[str]) -> bool:
+        """Return True when a host matches any configured exact or wildcard pattern."""
+        return any(self._host_matches_pattern(host, pattern) for pattern in patterns)
+
     def _get_allowed_keys_for_host(self, host: str) -> set[str] | None:
         """Look up allowed keys for a host. Returns None if host is not in the map."""
         with self._injection_map_lock:
@@ -591,7 +599,7 @@ class CredentialInjector:
         Trusted internal hosts (e.g. the API service) are exempt — sandboxes
         are allowed to reach them even though they resolve to private IPs.
         """
-        if host in TRUSTED_INTERNAL_HOSTS:
+        if self._host_in_patterns(host, TRUSTED_INTERNAL_HOSTS):
             return False
 
         if _is_private_ip(host):
@@ -746,7 +754,7 @@ class CredentialInjector:
             return
         host = flow.request.pretty_host.lower().rstrip(".")
         # Scan responses from injection hosts and any host in the injection map
-        if host not in SECRET_INJECTION_HOSTS and self._get_allowed_keys_for_host(host) is None:
+        if not self._host_in_patterns(host, SECRET_INJECTION_HOSTS) and self._get_allowed_keys_for_host(host) is None:
             return
         content_type = flow.response.headers.get("content-type", "").split(";")[0].strip()
         if content_type not in self._SCANNABLE_CONTENT_TYPES:
@@ -787,7 +795,7 @@ class CredentialInjector:
         if flow.request.method != "POST":
             return
         host = flow.request.pretty_host.lower().rstrip(".")
-        if host not in SECRET_INJECTION_HOSTS:
+        if not self._host_in_patterns(host, SECRET_INJECTION_HOSTS):
             return
         content_type = flow.request.headers.get("content-type", "").split(";")[0].strip()
         if content_type != "application/json":
@@ -875,7 +883,10 @@ class CredentialInjector:
         #    Skip if we just rewrote the request (it's now targeting an LLM host).
         #    Also allow hosts in the injection map (they're tool API hosts).
         host_in_injection_map = self._get_allowed_keys_for_host(host) is not None
-        if not rewritten and not host_in_injection_map and host not in SECRET_INJECTION_HOSTS and host not in UNRESTRICTED_METHOD_HOSTS and host not in TRUSTED_INTERNAL_HOSTS:
+        host_is_injection = self._host_in_patterns(host, SECRET_INJECTION_HOSTS)
+        host_is_unrestricted = self._host_in_patterns(host, UNRESTRICTED_METHOD_HOSTS)
+        host_is_trusted = self._host_in_patterns(host, TRUSTED_INTERNAL_HOSTS)
+        if not rewritten and not host_in_injection_map and not host_is_injection and not host_is_unrestricted and not host_is_trusted:
             method = flow.request.method.upper()
             if method not in SAFE_METHODS:
                 flow.response = http.Response.make(
@@ -933,7 +944,9 @@ class CredentialInjector:
         risk_score = 0
         if req.method.upper() not in SAFE_METHODS:
             risk_score += 1
-        if host in SECRET_INJECTION_HOSTS:
+        host_is_injection = self._host_in_patterns(host, SECRET_INJECTION_HOSTS)
+        host_is_unrestricted = self._host_in_patterns(host, UNRESTRICTED_METHOD_HOSTS)
+        if host_is_injection:
             risk_score += 2
         if req_bytes > 100_000:
             risk_score += 1
@@ -941,9 +954,9 @@ class CredentialInjector:
             risk_score += 3
 
         # Categorize
-        if host in SECRET_INJECTION_HOSTS:
+        if host_is_injection:
             category = "llm_api"
-        elif host in UNRESTRICTED_METHOD_HOSTS:
+        elif host_is_unrestricted:
             category = "github"
         else:
             category = "general"

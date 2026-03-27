@@ -1,35 +1,78 @@
-import type { CanonicalEvent } from "@centaur/harness-events";
 import { EventSourceParserStream, type EventSourceMessage } from "eventsource-parser/stream";
 import axios, { type AxiosInstance } from "axios";
 
 export type InputContentBlock =
   | { type: "text"; text: string }
-  | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
-  | { type: "document"; source: { type: "base64"; media_type: string; data: string } };
+  | {
+      type: "image";
+      source_path?: string;
+      source: { type: "base64"; media_type: string; data: string };
+    }
+  | {
+      type: "document";
+      source_path?: string;
+      source: { type: "base64"; media_type: string; data: string };
+    };
+
+export interface SpawnOptions {
+  threadKey: string;
+  spawnId?: string;
+  harness?: string;
+  engine?: string;
+  personaId?: string;
+  agentsMdOverride?: string;
+}
+
+export interface SpawnResult {
+  ok: boolean;
+  runtime_id: string;
+  thread_key: string;
+  assignment_state: string;
+  assignment_generation: number;
+  persona_id?: string | null;
+  prompt_ref?: string | null;
+  effective_agents_md_sha256?: string | null;
+}
 
 export interface MessageOptions {
   threadKey: string;
-  parts: InputContentBlock[];
+  assignmentGeneration: number;
+  messageId?: string;
+  role?: string;
+  event?: Record<string, unknown>;
+  parts?: InputContentBlock[];
   userId?: string;
   metadata?: Record<string, unknown>;
 }
 
 export interface ExecuteOptions {
   threadKey: string;
-  message: string;
+  assignmentGeneration: number;
+  executeId?: string;
   harness?: string;
   platform?: string;
   userId?: string;
-  signal?: AbortSignal;
+  metadata?: Record<string, unknown>;
+  delivery?: Record<string, unknown>;
 }
 
-/**
- * Centaur API client. Three-step protocol:
- *
- *   1. client.message()  — POST /agent/messages  (persist user message + attachments)
- *   2. client.connect()  — POST /agent/connect   (spawn + attach stdout → persistent SSE wire)
- *   3. client.execute()  — POST /agent/execute   (flush + write stdin → 200 OK)
- */
+export interface ExecutionAccepted {
+  ok: boolean;
+  execution_id: string;
+  execute_id: string;
+  assignment_generation: number;
+  status: string;
+  final_key: string;
+  delivery_token: string;
+  idempotent?: boolean;
+}
+
+export interface StreamEvent {
+  eventId: number;
+  eventKind: string;
+  data: Record<string, unknown>;
+}
+
 export class CentaurClient {
   readonly http: AxiosInstance;
   private log?: { info: Function; warn: Function; error: Function };
@@ -48,121 +91,163 @@ export class CentaurClient {
   }
 
   private get authHeader(): string {
-    return (this.http.defaults.headers["Authorization"] ?? this.http.defaults.headers.common?.["Authorization"]) as string;
+    return (this.http.defaults.headers["Authorization"] ??
+      this.http.defaults.headers.common?.["Authorization"]) as string;
   }
 
-  /** Buffer a user message into chat_messages. */
-  async message(opts: MessageOptions): Promise<void> {
-    await this.http.post("/agent/messages", {
+  async spawn(opts: SpawnOptions): Promise<SpawnResult> {
+    const { data } = await this.http.post("/agent/spawn", {
       thread_key: opts.threadKey,
-      role: "user",
-      parts: opts.parts,
+      spawn_id: opts.spawnId,
+      harness: opts.harness,
+      engine: opts.engine,
+      persona_id: opts.personaId,
+      agents_md_override: opts.agentsMdOverride,
+    });
+    return data as SpawnResult;
+  }
+
+  async message(opts: MessageOptions): Promise<{ ok: boolean; message_id: string; attachment_ids: string[] }> {
+    const body: Record<string, unknown> = {
+      thread_key: opts.threadKey,
+      assignment_generation: opts.assignmentGeneration,
+      message_id: opts.messageId,
+      metadata: opts.metadata,
+      user_id: opts.userId,
+    };
+
+    if (opts.event) {
+      body.event = opts.event;
+    } else {
+      body.role = opts.role ?? "user";
+      body.parts = opts.parts ?? [];
+    }
+
+    const { data } = await this.http.post("/agent/message", body);
+    return data as { ok: boolean; message_id: string; attachment_ids: string[] };
+  }
+
+  async execute(opts: ExecuteOptions): Promise<ExecutionAccepted> {
+    const { data } = await this.http.post("/agent/execute", {
+      thread_key: opts.threadKey,
+      assignment_generation: opts.assignmentGeneration,
+      execute_id: opts.executeId,
+      harness: opts.harness,
+      platform: opts.platform,
       user_id: opts.userId,
       metadata: opts.metadata,
+      delivery: opts.delivery,
     });
+    return data as ExecutionAccepted;
   }
 
-  /** Spawn/get sandbox and return persistent SSE stdout wire. */
-  async *connect(opts: {
+  async *streamEvents(opts: {
     threadKey: string;
-    harness?: string;
-    platform?: string;
+    afterEventId?: number;
+    executionId?: string;
+    pollMs?: number;
     signal?: AbortSignal;
-  }): AsyncGenerator<CanonicalEvent, void, undefined> {
-    const { threadKey, harness, platform, signal } = opts;
-    this.log?.info("sse_connect", { thread_key: threadKey, harness });
+  }): AsyncGenerator<StreamEvent, void, undefined> {
+    const params = new URLSearchParams();
+    if (opts.afterEventId !== undefined) params.set("after_event_id", String(opts.afterEventId));
+    if (opts.executionId) params.set("execution_id", opts.executionId);
+    if (opts.pollMs !== undefined) params.set("poll_ms", String(opts.pollMs));
 
-    const body: Record<string, unknown> = { thread_key: threadKey };
-    if (harness) body.harness = harness;
-    if (platform) body.platform = platform;
-
-    const res = await fetch(`${this.http.defaults.baseURL}/agent/connect`, {
-      method: "POST",
+    const url = `${this.http.defaults.baseURL}/agent/threads/${encodeURIComponent(opts.threadKey)}/events?${params.toString()}`;
+    const res = await fetch(url, {
+      method: "GET",
       headers: {
-        "Content-Type": "application/json",
         Authorization: this.authHeader,
-        "X-Trace-Id": threadKey,
+        "X-Trace-Id": opts.threadKey,
       },
-      body: JSON.stringify(body),
-      signal,
+      signal: opts.signal,
     });
 
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`/agent/connect failed (${res.status}): ${text.slice(0, 300)}`);
+      throw new Error(`/agent/threads/{thread}/events failed (${res.status}): ${text.slice(0, 300)}`);
     }
-
-    this.log?.info("sse_streaming", { thread_key: threadKey });
     if (!res.body) return;
+
     const stream = (res.body as ReadableStream<Uint8Array>)
       .pipeThrough(new TextDecoderStream() as unknown as TransformStream<Uint8Array, string>)
       .pipeThrough(new EventSourceParserStream());
+
     for await (const event of stream as unknown as AsyncIterable<EventSourceMessage>) {
-      if (event.data === "[DONE]") return;
-      try { yield JSON.parse(event.data) as CanonicalEvent; } catch {}
+      if (!event.data || event.data === "[DONE]") continue;
+      let parsed: Record<string, unknown> = { type: "unknown", raw: event.data };
+      try {
+        parsed = JSON.parse(event.data) as Record<string, unknown>;
+      } catch {
+        // keep raw fallback
+      }
+      yield {
+        eventId: Number(event.id || 0),
+        eventKind: event.event || "message",
+        data: parsed,
+      };
     }
   }
 
-  /** Flush pending messages + write to stdin. Returns immediately (no SSE). */
-  async execute(opts: ExecuteOptions): Promise<{ ok: boolean; injected: boolean; turn_id?: number }> {
-    const { threadKey, message, harness, platform, userId } = opts;
-    this.log?.info("execute_stdin", { thread_key: threadKey });
-
-    const body: Record<string, unknown> = {
-      thread_key: threadKey,
-      message,
-    };
-    if (harness) body.harness = harness;
-    if (platform) body.platform = platform;
-    if (userId) body.user_id = userId;
-
-    const { data } = await this.http.post("/agent/execute", body);
-    return data;
+  async getExecution(executionId: string) {
+    const { data } = await this.http.get(`/agent/executions/${encodeURIComponent(executionId)}`);
+    return data as Record<string, unknown>;
   }
 
-  /** Re-attach to a running container's stdout without sending a new turn. */
-  async *reconnect(opts: {
-    threadKey: string;
-    harness?: string;
-    skipDoneCount?: number;
-    signal?: AbortSignal;
-  }): AsyncGenerator<CanonicalEvent, void, undefined> {
-    const { threadKey, harness, skipDoneCount = 0, signal } = opts;
-    this.log?.info("sse_reconnect", { thread_key: threadKey });
+  async listExecutions(threadKey: string, limit = 20) {
+    const { data } = await this.http.get(
+      `/agent/threads/${encodeURIComponent(threadKey)}/executions`,
+      { params: { limit } },
+    );
+    return data as { thread_key: string; executions: Array<Record<string, unknown>> };
+  }
 
-    const body: Record<string, unknown> = {
-      thread_key: threadKey,
-      skip_done_count: skipDoneCount,
-    };
-    if (harness) body.harness = harness;
+  async cancelExecution(executionId: string) {
+    const { data } = await this.http.post(`/agent/executions/${encodeURIComponent(executionId)}/cancel`);
+    return data as Record<string, unknown>;
+  }
 
-    const res = await fetch(`${this.http.defaults.baseURL}/agent/reconnect`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: this.authHeader,
-        "X-Trace-Id": threadKey,
+  async releaseThread(threadKey: string, opts?: { releaseId?: string; cancelInflight?: boolean }) {
+    const { data } = await this.http.post(
+      `/agent/threads/${encodeURIComponent(threadKey)}/release`,
+      {
+        release_id: opts?.releaseId,
+        cancel_inflight: opts?.cancelInflight ?? false,
       },
-      body: JSON.stringify(body),
-      signal,
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => "");
-      throw new Error(`/agent/reconnect failed (${res.status}): ${text.slice(0, 300)}`);
-    }
-
-    if (!res.body) return;
-    const stream = (res.body as ReadableStream<Uint8Array>)
-      .pipeThrough(new TextDecoderStream() as unknown as TransformStream<Uint8Array, string>)
-      .pipeThrough(new EventSourceParserStream());
-    for await (const event of stream as unknown as AsyncIterable<EventSourceMessage>) {
-      if (event.data === "[DONE]") return;
-      try { yield JSON.parse(event.data) as CanonicalEvent; } catch {}
-    }
+    );
+    return data as Record<string, unknown>;
   }
 
-  /** Check session status (used for recovery on expired streams). */
+  async claimFinalDeliveries(opts: { consumerId: string; limit?: number; leaseSeconds?: number; platform?: string }) {
+    const { data } = await this.http.post("/agent/final-deliveries/claim", {
+      consumer_id: opts.consumerId,
+      limit: opts.limit ?? 1,
+      lease_seconds: opts.leaseSeconds ?? 60,
+      platform: opts.platform,
+    });
+    return data as { deliveries: Array<Record<string, unknown>> };
+  }
+
+  async markFinalDelivered(executionId: string, consumerId?: string) {
+    const { data } = await this.http.post(
+      `/agent/final-deliveries/${encodeURIComponent(executionId)}/delivered`,
+      { consumer_id: consumerId },
+    );
+    return data as Record<string, unknown>;
+  }
+
+  async markFinalFailed(executionId: string, error: string, opts?: { consumerId?: string; retryAfterSeconds?: number }) {
+    const { data } = await this.http.post(
+      `/agent/final-deliveries/${encodeURIComponent(executionId)}/failed`,
+      {
+        consumer_id: opts?.consumerId,
+        error,
+        retry_after_seconds: opts?.retryAfterSeconds ?? 15,
+      },
+    );
+    return data as Record<string, unknown>;
+  }
+
   async getStatus(threadKey: string) {
     const { data } = await this.http.get("/agent/status", { params: { key: threadKey } });
     return data as Record<string, unknown>;

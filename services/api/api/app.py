@@ -15,6 +15,7 @@ import structlog.contextvars
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.api_keys import bootstrap_service_api_keys
 from api.config import settings
 from api.db import close_pool, create_pool
 from api.logging_config import configure_structlog
@@ -23,6 +24,8 @@ from api.routers import admin, attachments as attachments_mod, deprecated, healt
 from api.routers import agent as agent_router_mod
 from api.tool_manager import ToolManager, load_plugins_config
 from api.agent import reconcile_tick
+from api.runtime_guardrails import assert_runtime_credentials_ready
+from api.runtime_control import start_execution_worker, stop_execution_worker
 from api.warm_pool import start_replenish_loop, stop_replenish_loop
 
 configure_structlog()
@@ -91,6 +94,15 @@ async def _reconcile_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db_pool = await create_pool(settings.database_url)
+    await bootstrap_service_api_keys(app.state.db_pool)
+    await assert_runtime_credentials_ready()
+    worker_enabled = os.getenv("EXECUTION_WORKER_ENABLED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    if worker_enabled:
+        await start_execution_worker(app.state.db_pool)
     await _push_injection_map()
     watcher_task = asyncio.create_task(_watch_tools(tool_manager))
     reconcile_task = asyncio.create_task(_reconcile_loop())
@@ -99,6 +111,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await stop_replenish_loop()
+        if worker_enabled:
+            await stop_execution_worker()
         reconcile_task.cancel()
         watcher_task.cancel()
         with suppress(asyncio.CancelledError):
@@ -138,7 +152,12 @@ async def instrument_requests(request, call_next):
         thread_key = trace_id
         structlog.contextvars.bind_contextvars(thread_key=thread_key)
 
-    if request.method == "POST" and request.url.path in ("/agent/execute", "/agent/connect", "/agent/reconnect"):
+    if request.method == "POST" and request.url.path in (
+        "/agent/execute",
+        "/agent/spawn",
+        "/agent/message",
+        "/agent/messages",
+    ):
         try:
             body_bytes = await request.body()
             body_json = json.loads(body_bytes)

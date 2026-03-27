@@ -102,6 +102,8 @@ def _setup_env(pg, run_migrations):
     """Set env vars before any app code is imported."""
     os.environ["DATABASE_URL"] = pg
     os.environ["API_SECRET_KEY"] = "test-secret-key"
+    os.environ["EXECUTION_WORKER_ENABLED"] = "0"
+    os.environ["RUNTIME_CREDENTIAL_GUARD_ENABLED"] = "0"
 
 
 @pytest.fixture(scope="session")
@@ -134,5 +136,5 @@ async def db_pool(app):
     """Yield the live asyncpg pool from the running app."""
     from asgi_lifespan import LifespanManager
 
-    async with LifespanManager(app) as manager:
-        yield manager.app.state.db_pool
+    async with LifespanManager(app):
+        yield app.state.db_pool

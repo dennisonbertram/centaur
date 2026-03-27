@@ -8,6 +8,19 @@ pure — no I/O, no globals, no imports from other api modules.
 from __future__ import annotations
 
 
+def _extract_error_message(event: dict) -> str:
+    """Extract a human-readable error message from mixed event payload shapes."""
+    err = event.get("error")
+    if isinstance(err, str):
+        return err
+    if isinstance(err, dict):
+        msg = err.get("message")
+        if isinstance(msg, str):
+            return msg
+    msg = event.get("message")
+    return msg if isinstance(msg, str) else ""
+
+
 def is_turn_done(engine: str, event: dict) -> bool:
     """Return True when *event* signals the end of a main-agent turn.
 
@@ -15,8 +28,15 @@ def is_turn_done(engine: str, event: dict) -> bool:
     top-level agent's end-of-turn matters.
     """
     t = event.get("type", "")
-    # Wrapper-emitted crash events terminate the turn for all engines
+    # Wrapper-emitted crash events usually terminate the turn for all engines.
+    # Transient amp-wrapper restart notices are non-terminal.
     if t == "error":
+        # amp-wrapper emits non-terminal restart notices like
+        # "amp exited with code 1, restarting (1/5)". These should not close
+        # the turn or clear durable in-flight state.
+        error_msg = _extract_error_message(event).lower()
+        if "restarting (" in error_msg and "giving up" not in error_msg:
+            return False
         return True
     if engine in ("amp", "claude-code"):
         if t == "result":
@@ -26,6 +46,12 @@ def is_turn_done(engine: str, event: dict) -> bool:
             if event.get("parent_tool_use_id") is not None:
                 return False
             msg = event.get("message", {})
+            content = msg.get("content", [])
+            # Amp can emit an assistant event containing only tool_use blocks
+            # before the tool_result/final assistant text arrives. Those events
+            # must not terminate the durable turn even when stop_reason=end_turn.
+            if any(block.get("type") == "tool_use" for block in content if isinstance(block, dict)):
+                return False
             return msg.get("stop_reason") == "end_turn"
         return False
     if engine == "codex":
@@ -38,7 +64,10 @@ def extract_result(engine: str, event: dict) -> str | None:
     t = event.get("type", "")
     if engine in ("amp", "claude-code"):
         if t == "result":
-            return event.get("result", "")
+            result = event.get("result")
+            if isinstance(result, str) and result:
+                return result
+            return _extract_error_message(event)
         if t == "assistant":
             msg = event.get("message", {})
             content = msg.get("content", [])
@@ -104,30 +133,36 @@ def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
             ptype = part.get("type")
             if role == "assistant":
                 if ptype == "text":
-                    blocks.append({
-                        "type": "text",
-                        "text": f"[Your previous response]: {part['text']}",
-                    })
+                    blocks.append(
+                        {
+                            "type": "text",
+                            "text": f"[Your previous response]: {part['text']}",
+                        }
+                    )
                 else:
                     blocks.append(part)
             elif ptype == "attachment_ref":
                 att_id = part["id"]
                 name = part.get("name", "attachment")
                 mime = part.get("mime_type", "")
-                blocks.append({
-                    "type": "text",
-                    "text": (
-                        f"User attached file: {name} ({mime}). "
-                        f"Download with: curl -sS -H \"Authorization: Bearer "
-                        f"$(cat /home/agent/.api_key)\" "
-                        f"\"$CENTAUR_API_URL/agent/attachments/{att_id}/download\" -o \"{name}\""
-                    ),
-                })
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"User attached file: {name} ({mime}). "
+                            f'Download with: curl -sS -H "Authorization: Bearer '
+                            f'$(cat /home/agent/.api_key)" '
+                            f'"$CENTAUR_API_URL/agent/attachments/{att_id}/download" -o "{name}"'
+                        ),
+                    }
+                )
             elif user_id and not attributed and ptype == "text":
-                blocks.append({
-                    "type": "text",
-                    "text": f"<@{user_id}>: {part['text']}",
-                })
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": f"<@{user_id}>: {part['text']}",
+                    }
+                )
                 attributed = True
             else:
                 blocks.append(part)

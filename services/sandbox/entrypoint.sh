@@ -5,7 +5,12 @@ HOME_DIR="$(eval echo ~)"
 
 # ── Write harness configs (no MCP — adds ~10s startup overhead) ───────────────
 cat > "$HOME_DIR/.config/amp/settings.json" <<EOF
-{"amp.experimental.compaction":95}
+{
+  "amp.experimental.compaction": 95,
+  "amp.experimental.modes": ["deep"],
+  "amp.agent.deepReasoningEffort": "xhigh",
+  "amp.proxy": "http://firewall:8080"
+}
 EOF
 
 # ── Pi-mono settings ─────────────────────────────────────────────────────────

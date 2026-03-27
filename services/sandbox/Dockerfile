@@ -48,12 +48,26 @@ WORKDIR /home/agent
 
 ENV PATH="/home/agent/.cargo/bin:/home/agent/.local/bin:/home/agent/.foundry/bin:${PATH}"
 
+ARG AMP_CLI_VERSION=0.0.1774529752-g94f44d
+
 # ── Agent-scoped toolchains ─────────────────────────────────────────────────
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 RUN curl -L https://foundry.paradigm.xyz | bash \
     && /home/agent/.foundry/bin/foundryup
-RUN curl -fsSL https://ampcode.com/install.sh | bash
+RUN set -eux; \
+    amp_platform="$(case "$(dpkg --print-architecture)" in \
+      amd64) echo linux-x64 ;; \
+      arm64) echo linux-arm64 ;; \
+      *) echo unsupported-architecture >&2; exit 1 ;; \
+    esac)"; \
+    mkdir -p "$HOME/.amp/bin" "$HOME/.local/bin"; \
+    curl -fsSL "https://static.ampcode.com/cli/${AMP_CLI_VERSION}/${amp_platform}-amp.sha256" -o /tmp/amp.sha256; \
+    curl -fsSL "https://static.ampcode.com/cli/${AMP_CLI_VERSION}/amp-${amp_platform}" -o "$HOME/.amp/bin/amp"; \
+    echo "$(cat /tmp/amp.sha256)  $HOME/.amp/bin/amp" | sha256sum -c -; \
+    chmod +x "$HOME/.amp/bin/amp"; \
+    ln -sf "$HOME/.amp/bin/amp" "$HOME/.local/bin/amp"; \
+    rm -f /tmp/amp.sha256
 
 # ── agent-browser (Chromium + system deps — heavy, keep isolated) ────────────
 # Chrome for Testing doesn't provide Linux ARM64 builds; fall back to system chromium

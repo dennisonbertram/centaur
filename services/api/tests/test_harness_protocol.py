@@ -22,6 +22,16 @@ class TestIsTurnDone:
         }
         assert is_turn_done("amp", event) is True
 
+    def test_amp_assistant_tool_use_end_turn_not_done(self):
+        event = {
+            "type": "assistant",
+            "message": {
+                "stop_reason": "end_turn",
+                "content": [{"type": "tool_use", "id": "toolu_123"}],
+            },
+        }
+        assert is_turn_done("amp", event) is False
+
     def test_amp_assistant_not_end_turn(self):
         event = {
             "type": "assistant",
@@ -49,6 +59,20 @@ class TestIsTurnDone:
 
     def test_amp_other_event(self):
         assert is_turn_done("amp", {"type": "system"}) is False
+
+    def test_amp_wrapper_restart_error_not_done(self):
+        event = {
+            "type": "error",
+            "error": {"message": "amp exited with code 1, restarting (1/5)"},
+        }
+        assert is_turn_done("amp", event) is False
+
+    def test_amp_wrapper_give_up_error_done(self):
+        event = {
+            "type": "error",
+            "error": {"message": "amp crashed 6 times, giving up"},
+        }
+        assert is_turn_done("amp", event) is True
 
     def test_claude_code_result_event(self):
         assert is_turn_done("claude-code", {"type": "result"}) is True
@@ -78,6 +102,18 @@ class TestExtractResult:
 
     def test_amp_result_event(self):
         assert extract_result("amp", {"type": "result", "result": "hello"}) == "hello"
+
+    def test_amp_error_result_uses_error_message(self):
+        event = {
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "error": "Timed out while reconnecting. Please retry after reconnecting.",
+        }
+        assert (
+            extract_result("amp", event)
+            == "Timed out while reconnecting. Please retry after reconnecting."
+        )
 
     def test_amp_assistant_text(self):
         event = {

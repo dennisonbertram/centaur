@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
 import time
 from dataclasses import dataclass, field
 from threading import Lock
 
 import asyncpg
+import httpx
 import structlog
 
 log = structlog.get_logger()
@@ -28,6 +30,34 @@ class APIKeyInfo:
     source: str = "db"  # "db" | "root" | "sandbox" | "localhost"
 
 
+@dataclass(frozen=True)
+class ServiceAPIKeySpec:
+    """Static service key configuration bootstrapped into Postgres on startup."""
+
+    env_var: str
+    name: str
+    scopes: tuple[str, ...]
+
+
+_SERVICE_API_KEYS: tuple[ServiceAPIKeySpec, ...] = (
+    ServiceAPIKeySpec(
+        env_var="SLACKBOT_API_KEY",
+        name="service:slackbot",
+        scopes=("agent",),
+    ),
+    ServiceAPIKeySpec(
+        env_var="WEB_API_KEY",
+        name="service:web",
+        scopes=("agent", "tools:paradigmdb"),
+    ),
+    ServiceAPIKeySpec(
+        env_var="LOCAL_DEV_API_KEY",
+        name="service:local-dev",
+        scopes=("admin", "agent", "threads", "tools:*"),
+    ),
+)
+
+
 def generate_key() -> tuple[str, str, str]:
     """Generate a new API key. Returns (plaintext_key, key_prefix, key_hash)."""
     raw = secrets.token_urlsafe(_KEY_BYTES)
@@ -40,6 +70,19 @@ def generate_key() -> tuple[str, str, str]:
 def hash_key(key: str) -> str:
     """Hash a plaintext key for comparison."""
     return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _normalize_scopes(scopes: list[str] | tuple[str, ...]) -> list[str]:
+    """Deduplicate scopes while preserving declaration order."""
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for scope in scopes:
+        cleaned = scope.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +153,7 @@ async def create_key(
 ) -> tuple[str, APIKeyInfo]:
     """Create a new API key. Returns (plaintext_key, info)."""
     plaintext, prefix, key_hash = generate_key()
+    normalized_scopes = _normalize_scopes(scopes)
     row = await pool.fetchrow(
         "INSERT INTO api_keys (name, key_prefix, key_hash, scopes, created_by) "
         "VALUES ($1, $2, $3, $4, $5) "
@@ -117,14 +161,14 @@ async def create_key(
         name,
         prefix,
         key_hash,
-        scopes,
+        normalized_scopes,
         created_by,
     )
     info = APIKeyInfo(
         id=str(row["id"]),
         name=name,
         key_prefix=prefix,
-        scopes=scopes,
+        scopes=normalized_scopes,
         created_by=created_by,
     )
     # Invalidate cache
@@ -132,6 +176,119 @@ async def create_key(
         _cache.expires_at = 0.0
     log.info("api_key_created", name=name, prefix=prefix, scopes=scopes)
     return plaintext, info
+
+
+async def ensure_static_key(
+    pool: asyncpg.Pool,
+    plaintext_key: str,
+    name: str,
+    scopes: list[str] | tuple[str, ...],
+    *,
+    created_by: str = "service-bootstrap",
+) -> APIKeyInfo:
+    """Ensure a known plaintext service key exists as an active DB-backed key."""
+    token = plaintext_key.strip()
+    if not token:
+        raise ValueError("plaintext_key must be non-empty")
+
+    prefix = token[:8]
+    key_hash = hash_key(token)
+    normalized_scopes = _normalize_scopes(scopes)
+    row = await pool.fetchrow(
+        "INSERT INTO api_keys (name, key_prefix, key_hash, scopes, created_by, revoked_at) "
+        "VALUES ($1, $2, $3, $4, $5, NULL) "
+        "ON CONFLICT (key_hash) DO UPDATE SET "
+        "  name = EXCLUDED.name, "
+        "  key_prefix = EXCLUDED.key_prefix, "
+        "  scopes = EXCLUDED.scopes, "
+        "  created_by = EXCLUDED.created_by, "
+        "  revoked_at = NULL "
+        "RETURNING id, name, key_prefix, scopes, created_by",
+        name,
+        prefix,
+        key_hash,
+        normalized_scopes,
+        created_by,
+    )
+    with _cache.lock:
+        _cache.expires_at = 0.0
+
+    info = APIKeyInfo(
+        id=str(row["id"]),
+        name=row["name"],
+        key_prefix=row["key_prefix"],
+        scopes=list(row["scopes"]),
+        created_by=row["created_by"],
+    )
+    log.info(
+        "api_key_bootstrapped",
+        name=info.name,
+        prefix=info.key_prefix,
+        scopes=info.scopes,
+        created_by=info.created_by,
+    )
+    return info
+
+
+async def _fetch_secret_value(secret_manager_url: str, key: str) -> str | None:
+    """Fetch a secret value from the local secret manager."""
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        response = await client.get(f"{secret_manager_url.rstrip('/')}/secrets/{key}")
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        payload = response.json()
+
+    value = payload.get("value")
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+async def bootstrap_service_api_keys(
+    pool: asyncpg.Pool,
+    *,
+    secret_manager_url: str | None = None,
+) -> list[APIKeyInfo]:
+    """Seed long-lived service keys from env or the secret manager into Postgres."""
+    resolved_secret_manager_url = (
+        secret_manager_url.strip()
+        if secret_manager_url is not None
+        else os.environ.get("SECRET_MANAGER_URL", "").strip()
+    )
+
+    bootstrapped: list[APIKeyInfo] = []
+    for spec in _SERVICE_API_KEYS:
+        token = os.environ.get(spec.env_var, "").strip()
+        if not token and resolved_secret_manager_url:
+            try:
+                token = (await _fetch_secret_value(resolved_secret_manager_url, spec.env_var)) or ""
+            except Exception as exc:
+                log.warning(
+                    "service_api_key_secret_fetch_failed",
+                    env_var=spec.env_var,
+                    error=str(exc),
+                )
+                continue
+        if not token:
+            continue
+        info = await ensure_static_key(
+            pool,
+            token,
+            spec.name,
+            spec.scopes,
+            created_by="service-bootstrap",
+        )
+        bootstrapped.append(info)
+
+    if bootstrapped:
+        log.info(
+            "service_api_keys_bootstrapped",
+            count=len(bootstrapped),
+            names=[info.name for info in bootstrapped],
+        )
+    return bootstrapped
 
 
 async def revoke_key(pool: asyncpg.Pool, key_id: str) -> bool:
