@@ -156,7 +156,7 @@ describe("SlackBot runtime control", () => {
     expect(client.claimFinalDeliveries).toHaveBeenCalledWith(expect.objectContaining({ platform: "slack" }));
     expect(slack.postMessage).toHaveBeenCalledTimes(1);
     expect(slack.postMessage).toHaveBeenCalledWith(
-      normalizedThreadKey,
+      `slack:${normalizedThreadKey}`,
       { markdown: "final answer" },
     );
     expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-completed", expect.any(String));

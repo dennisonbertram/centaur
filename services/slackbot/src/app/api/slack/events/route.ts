@@ -1,7 +1,7 @@
 import { after } from "next/server";
 import { NextRequest, NextResponse } from "next/server";
 import { log } from "@/lib/logger";
-import { getBot, getSlackBootstrapState } from "@/lib/bot/setup";
+import { ensureBotReady, getSlackBootstrapState } from "@/lib/bot/setup";
 
 export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
@@ -16,7 +16,17 @@ export async function POST(request: NextRequest) {
 
   log.info("webhook_received", { request_id: requestId, retry_num: retryNum });
 
-  const bot = getBot();
+  let bot;
+  try {
+    bot = await ensureBotReady();
+  } catch (error) {
+    log.error("slack_webhook_init_failed", {
+      request_id: requestId,
+      retry_num: retryNum,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return NextResponse.json({ error: "slack webhook unavailable" }, { status: 503 });
+  }
   const handler = bot.webhooks.slack;
   if (!handler) {
     const bootstrap = getSlackBootstrapState();

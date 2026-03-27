@@ -136,6 +136,10 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
 }
 
+function slackAdapterThreadId(threadKey: string): string {
+  return threadKey.startsWith("slack:") ? threadKey : `slack:${threadKey}`;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────
 
 export interface BotThread {
@@ -709,7 +713,7 @@ export class SlackBot {
     try {
       await this.withSlackDeliveryContext(delivery, async () => {
         for (const chunk of splitSlackMessage(markdown)) {
-          await this.slack!.postMessage(threadKey, { markdown: chunk });
+          await this.slack!.postMessage(slackAdapterThreadId(threadKey), { markdown: chunk });
         }
       });
       await this.ackFinalDelivery(executionId);

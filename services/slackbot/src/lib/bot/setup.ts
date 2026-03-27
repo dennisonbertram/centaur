@@ -2,11 +2,12 @@ import { Chat, type StreamChunk } from "chat";
 import { createSlackAdapter, type SlackAdapter } from "@chat-adapter/slack";
 import { createPostgresState } from "@chat-adapter/state-pg";
 import { Pool } from "pg";
+import { log } from "@/lib/logger";
 import { SlackBot, type SlackAdapter as BotSlackAdapter, type BotThread } from "./bot";
 
 const hasSlackCreds = Boolean(process.env.SLACK_BOT_TOKEN && process.env.SLACK_SIGNING_SECRET);
 
-let _instance: { chat: Chat; bot: SlackBot } | null = null;
+let _instance: { chat: Chat; bot: SlackBot; ready: Promise<void> } | null = null;
 
 function wrapAdapter(adapter: SlackAdapter): BotSlackAdapter {
   return {
@@ -63,16 +64,30 @@ function create() {
 
   const slack = hasSlackCreds ? chat.getAdapter("slack") as SlackAdapter : undefined;
   const bot = SlackBot.createFromEnv(slack ? wrapAdapter(slack) : undefined);
-  bot.startFinalDeliveryWorker();
+  const ready = (async () => {
+    await chat.initialize();
+    bot.startFinalDeliveryWorker();
+  })();
+  void ready.catch((error) => {
+    log.error("slackbot_initialize_failed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 
   chat.onNewMention((t, m) => bot.onNewMention(wrapThread(t), m as any));
   chat.onSubscribedMessage((t, m) => bot.onSubscribedMessage(wrapThread(t), m as any));
 
-  return { chat, bot };
+  return { chat, bot, ready };
 }
 
 export function getBot() {
   if (!_instance) _instance = create();
+  return _instance.chat;
+}
+
+export async function ensureBotReady() {
+  if (!_instance) _instance = create();
+  await _instance.ready;
   return _instance.chat;
 }
 
