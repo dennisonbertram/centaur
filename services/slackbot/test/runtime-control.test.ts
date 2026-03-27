@@ -188,10 +188,7 @@ describe("SlackBot runtime control", () => {
     await (bot as any).drainFinalDeliveriesOnce();
 
     expect(slack.postMessage).not.toHaveBeenCalled();
-    expect(client.markFinalFailed).toHaveBeenCalledWith(
-      "exe-live",
-      "live_stream_in_progress",
-      expect.objectContaining({ consumerId: expect.any(String) }),
-    );
+    expect(client.markFinalFailed).not.toHaveBeenCalled();
+    expect(client.markFinalDelivered).not.toHaveBeenCalled();
   });
 });

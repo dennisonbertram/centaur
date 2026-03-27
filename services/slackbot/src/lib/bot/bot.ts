@@ -694,7 +694,8 @@ export class SlackBot {
         execution_id: executionId,
         thread_key: threadKey,
       });
-      await this.failFinalDelivery(executionId, "live_stream_in_progress");
+      // Keep the claimed lease intact so the live stream can ack the same
+      // outbox row on completion instead of racing a retry into a duplicate post.
       return;
     }
 
