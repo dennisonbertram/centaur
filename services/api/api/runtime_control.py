@@ -27,6 +27,7 @@ from api.sandbox.registry import get_backend
 log = structlog.get_logger()
 
 EXECUTION_SILENCE_TIMEOUT_S = int(os.getenv("EXECUTION_SILENCE_TIMEOUT_S", "600"))
+EXECUTION_TOOL_SILENCE_TIMEOUT_S = int(os.getenv("EXECUTION_TOOL_SILENCE_TIMEOUT_S", "1800"))
 EXECUTION_HARD_TIMEOUT_S = int(os.getenv("EXECUTION_HARD_TIMEOUT_S", "3600"))
 EXECUTION_WATCHDOG_POLL_S = float(os.getenv("EXECUTION_WATCHDOG_POLL_S", "1.0"))
 EXECUTION_RECONCILE_INTERVAL_S = float(os.getenv("EXECUTION_RECONCILE_INTERVAL_S", "0.5"))
@@ -108,6 +109,13 @@ def event_role(event: dict[str, Any]) -> str:
         if isinstance(role, str) and role:
             return role
     return "user"
+
+
+def _event_silence_timeout_s(event: dict[str, Any]) -> float:
+    parts = flatten_event_parts(event)
+    if any(part.get("type") == "tool_use" for part in parts):
+        return float(max(EXECUTION_TOOL_SILENCE_TIMEOUT_S, EXECUTION_SILENCE_TIMEOUT_S))
+    return float(EXECUTION_SILENCE_TIMEOUT_S)
 
 
 def _attachment_name_from_source_path(source_path: str | None, attachment_id: str) -> str:
@@ -1118,20 +1126,28 @@ async def _mark_execution_terminal(
     )
 
 
-async def _touch_execution_progress(pool, execution_id: str) -> dt.datetime:
+async def _touch_execution_progress(
+    pool,
+    execution_id: str,
+    *,
+    timeout_s: float | None = None,
+) -> dt.datetime:
+    silence_timeout_s = float(
+        EXECUTION_SILENCE_TIMEOUT_S if timeout_s is None else timeout_s
+    )
     row = await pool.fetchrow(
         "UPDATE agent_execution_requests SET last_progress_at = NOW(), "
         "silence_deadline_at = NOW() + make_interval(secs => $1::double precision), "
         "worker_lease_expires_at = NOW() + make_interval(secs => $2::double precision), "
         "updated_at = NOW() WHERE execution_id = $3 RETURNING silence_deadline_at",
-        float(EXECUTION_SILENCE_TIMEOUT_S),
+        silence_timeout_s,
         float(EXECUTION_WORKER_LEASE_S),
         execution_id,
     )
     if row and row["silence_deadline_at"]:
         return row["silence_deadline_at"]
     return dt.datetime.now(dt.timezone.utc) + dt.timedelta(
-        seconds=EXECUTION_SILENCE_TIMEOUT_S
+        seconds=silence_timeout_s
     )
 
 
@@ -1437,7 +1453,11 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
                 event_kind="amp_raw_event",
                 event_json=payload,
             )
-            silence_deadline = await _touch_execution_progress(pool, execution_id)
+            silence_deadline = await _touch_execution_progress(
+                pool,
+                execution_id,
+                timeout_s=_event_silence_timeout_s(payload),
+            )
 
             status_row = await pool.fetchrow(
                 "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
