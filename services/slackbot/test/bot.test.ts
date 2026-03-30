@@ -466,7 +466,58 @@ describe("simulated stream deaths", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 5. consumeWire reconnect on graceful EOF (API restart mid-turn)
+// 5. execute streaming bootstrap
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe("execute streams structured progress immediately", () => {
+  it("starts the Slack stream on the first task chunk, not the first text chunk", async () => {
+    const mockClient = {
+      execute: vi.fn().mockResolvedValue({ execution_id: "exe-structured-first" }),
+    };
+
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const bot = new SlackBot(mockClient as any);
+
+    const streamedChunks = [
+      { type: "task_update", id: "read-1", title: "Read - /tmp/input.txt", status: "in_progress" },
+      { type: "plan_update", title: "Read - /tmp/input.txt" },
+      { type: "markdown_text", text: "Final answer." },
+    ];
+
+    vi.spyOn(bot as any, "streamExecution").mockImplementation(async function* () {
+      for (const chunk of streamedChunks) {
+        yield chunk;
+      }
+    });
+    vi.spyOn(bot as any, "ackFinalDelivery").mockResolvedValue(undefined);
+    vi.spyOn(bot as any, "setAssistantTitle").mockResolvedValue(undefined);
+
+    const postedChunks: unknown[] = [];
+    const thread = {
+      id: "C123456:1770000000.000100",
+      post: vi.fn(async (content: AsyncIterable<unknown>) => {
+        for await (const chunk of content) {
+          postedChunks.push(chunk);
+        }
+        return { id: "m-1", edit: async () => {} };
+      }),
+    };
+
+    await (bot as any).execute(thread, thread.id, {
+      assignmentGeneration: 7,
+      userId: "U123456",
+      teamId: "T123456",
+    });
+
+    expect(mockClient.execute).toHaveBeenCalledOnce();
+    expect(thread.post).toHaveBeenCalledOnce();
+    expect(thread.post).toHaveBeenCalledWith(expect.anything(), { taskDisplayMode: "plan" });
+    expect(postedChunks).toEqual(streamedChunks);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 6. consumeWire reconnect on graceful EOF (API restart mid-turn)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe("consumeWire reconnects on graceful EOF without turn.done", () => {
@@ -578,7 +629,7 @@ describe("consumeWire reconnects on graceful EOF without turn.done", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// 6. splitSlackMessage
+// 7. splitSlackMessage
 // ═══════════════════════════════════════════════════════════════════════════════
 
 describe("splitSlackMessage", () => {

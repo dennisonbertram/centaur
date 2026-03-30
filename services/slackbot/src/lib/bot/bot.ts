@@ -366,21 +366,19 @@ export class SlackBot {
       try {
         const stream = this.streamExecution(threadKey, executionId, tracker, t0, ac.signal);
         const iter = stream[Symbol.asyncIterator]();
-        let firstVisible: StreamChunk | undefined;
+        let firstChunk: StreamChunk | undefined;
 
         while (!ac.signal.aborted) {
           const next = await iter.next();
           if (next.done) break;
-          if (next.value.type === "markdown_text") {
-            firstVisible = next.value;
-            break;
-          }
+          firstChunk = next.value;
+          break;
         }
 
-        if (firstVisible) {
+        if (firstChunk) {
           sentMessage = await thread.post(
             (async function* () {
-              yield firstVisible;
+              yield firstChunk;
               while (true) {
                 const next = await iter.next();
                 if (next.done) return;
