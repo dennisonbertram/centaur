@@ -512,7 +512,10 @@ describe("execute streams structured progress immediately", () => {
     expect(mockClient.execute).toHaveBeenCalledOnce();
     expect(thread.post).toHaveBeenCalledOnce();
     expect(thread.post).toHaveBeenCalledWith(expect.anything(), { taskDisplayMode: "plan" });
-    expect(postedChunks).toEqual(streamedChunks);
+    expect(postedChunks).toEqual([
+      { type: "markdown_text", text: "\u200b" },
+      ...streamedChunks,
+    ]);
   });
 });
 
@@ -625,6 +628,45 @@ describe("consumeWire reconnects on graceful EOF without turn.done", () => {
     const markdownChunks = chunks.filter((c) => c.type === "markdown_text");
     expect(markdownChunks.length).toBeGreaterThan(0);
     expect(markdownChunks[markdownChunks.length - 1].text).toContain("no output");
+  });
+
+  it("emits an invisible markdown keepalive before structured progress", async () => {
+    vi.useFakeTimers();
+    try {
+      const mockClient = {
+        streamEvents: () => (async function* () {
+          await new Promise(() => {});
+        })(),
+        markFinalDelivered: async () => ({ ok: true }),
+      };
+
+      const { SlackBot } = await import("../src/lib/bot/bot");
+      const bot = new SlackBot(mockClient as any);
+      const abortController = new AbortController();
+      const streamGen = (bot as any).consumeExecutionEvents(
+        "test:keepalive",
+        "exe-keepalive",
+        new ProgressTracker(),
+        abortController.signal,
+      );
+
+      const firstChunkPromise = streamGen.next();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(await firstChunkPromise).toEqual({
+        done: false,
+        value: { type: "markdown_text", text: "\u200b" },
+      });
+
+      expect(await streamGen.next()).toEqual({
+        done: false,
+        value: { type: "plan_update", title: "Still working…" },
+      });
+
+      abortController.abort();
+      expect(await streamGen.next()).toEqual({ done: true, value: undefined });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

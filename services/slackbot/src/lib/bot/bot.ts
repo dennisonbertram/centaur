@@ -24,6 +24,7 @@ const PROMPT_FLAG_ALIASES = new Map<string, string>([
   ["claude", "claude-code"],
   ["pi", "pi-mono"],
 ]);
+const STREAM_BOOTSTRAP_TEXT = "\u200b";
 
 /**
  * Split text into chunks that fit within Slack's message limit.
@@ -378,6 +379,11 @@ export class SlackBot {
         if (firstChunk) {
           sentMessage = await thread.post(
             (async function* () {
+              if (firstChunk.type !== "markdown_text") {
+                // Slack's structured streaming chunks can be rejected if they arrive
+                // before any markdown delta has established the stream state.
+                yield { type: "markdown_text", text: STREAM_BOOTSTRAP_TEXT };
+              }
               yield firstChunk;
               while (true) {
                 const next = await iter.next();
@@ -596,6 +602,9 @@ export class SlackBot {
           }
 
           if (raced.kind === "keepalive") {
+            // Invisible markdown keepalive prevents Slack from expiring the stream
+            // on long-running turns even when there is no user-visible text yet.
+            yield { type: "markdown_text", text: STREAM_BOOTSTRAP_TEXT };
             yield { type: "plan_update", title: "Still working…" };
             continue;
           }
