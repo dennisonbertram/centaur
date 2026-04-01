@@ -77,68 +77,117 @@ Generate a policy briefing memo before Hill meetings.
 - "Briefing memo for [Name]"
 - "Policy briefer for [Name]"
 - "Meeting brief for [Name]"
+- "Write a Hill memo for [Name]"
+- "Prepare a one-pager for my meeting with [Name]"
 
 **Input:** Member/staffer name, meeting context, date
 
 **Steps:**
-1. Look up member profile via web search and LegiStorm:
-   ```bash
-   # LegiStorm member profile, committee assignments, staff
-   call legistorm get_members '{"updated_from":"2025-01-01","updated_to":"2026-12-31","state_id":"[XX]"}'
-   ```
-2. Search internal sources for prior Paradigm interactions:
+1. Read the Policy Explainer Index first and pull any recent `#gigabrain-feed` intel relevant to the meeting topic.
+2. Search internal sources for prior Paradigm interactions or policy context:
    ```bash
    call slack search_messages '{"query":"from:#policy [member_name]"}'
    call slack search_messages '{"query":"in:#gigabrain-feed [member_name]"}'
    call gsuite gmail_search '{"query":"[member_name]"}'
    call paradigmdb notes_search '{"query":"[member_name]"}'
    ```
-3. Find relevant pending legislation:
+3. Look up the member profile via web search and LegiStorm:
+   ```bash
+   # LegiStorm member profile, committee assignments, staff
+   call legistorm get_members '{"updated_from":"2025-01-01","updated_to":"2026-12-31","state_id":"[XX]"}'
+   ```
+4. Find relevant pending legislation:
    ```bash
    call congress bills '{"congress":119}'
    call congress bill '{"congress":119,"type":"s","number":123}'
    ```
-4. Check FEC for campaign contribution context:
+5. Check FEC for campaign contribution context:
    ```bash
    call openfec candidates '{"name":"[member_name]"}'
    call openfec contributions '{"contributor_name":"[member_name]"}'
    ```
-5. Cross-reference with paradigmdb for portfolio company relevance:
+6. Cross-reference with paradigmdb for portfolio company relevance:
    ```bash
    call paradigmdb db_query '{"query":"SELECT * FROM \"Organization\" WHERE name ILIKE '\''%relevant_company%'\'';"}'
    ```
-6. Generate structured briefer (see template below)
+7. Generate the briefer using the format and style rules below.
+
+**Audience**
+- Write for a Paradigm executive with deep fluency in crypto, DeFi, and relevant legislation.
+- Do not explain crypto concepts, market structure basics, or Paradigm's positions from first principles.
+
+**Tone & Voice**
+- Write in a direct, declarative briefing memo style.
+- Keep the prose punchy and synthesized, like a well-prepared staff briefing for a senior executive.
+- State facts as facts. Do not narrate sourcing with phrases like "According to his official bio," "per public disclosures," or "research shows."
+- Use present tense for current roles and positions and past tense for historical facts.
+- Avoid filler transitions like "it is worth noting," "additionally," or "it should be mentioned."
+
+**Handling Gaps**
+- Do not narrate the absence of research.
+- Never write "I could not find."
+- If a directly relevant category has no public record, make a short editorial statement and move on, for example: "No public stances on prediction markets."
+- If a section has no meaningful available information, include the header and a single brief editorial sentence rather than omitting the section.
+
+**Uncertain Or Unverified Claims**
+- One soft hedge per claim is acceptable when needed, for example: "reportedly," "said to," or "believed to."
+- Do not stack hedges or over-qualify.
+
+**Structure Rules**
+- Use exactly these sections in this order and do not add, rename, or reorder them:
+  1. `Landscape Summary`
+  2. `Biography`
+  3. `Crypto Knowledge`
+  4. `Stance on Prediction Markets`
+  5. `Stance on AI`
+  6. `Stance on Defense Tech`
+  7. `Goals`
+- Do not generate a `Specific Topics To Address` section.
+- `Landscape Summary` and `Biography` should be short prose sections.
+- `Crypto Knowledge`, `Stance on Prediction Markets`, `Stance on AI`, and `Stance on Defense Tech` should use full-sentence bullets.
+- `Goals` should remain concise bullets.
+
+**Landscape Summary Rules**
+- Open with committee assignments and relevant subcommittees.
+- Then define the member's core policy identity.
+- Then provide the strategic read on where Paradigm's issues fit for that member.
+- Do not open with a negative, a gap, or a statement that the member is not important on crypto.
+- If crypto is not central to the member, frame it as focus, not absence, for example: "Digital assets are not a primary focus" or "He has not engaged on crypto legislation."
+- Do not use internal strategy language such as "persuasion pitch," "productive lane," or "wrong lane."
+- State conclusions as intelligence, not as meeting tactics.
+
+**Paradigm Perspective**
+- Layer in Paradigm's views where relevant, especially in `Landscape Summary`, the stance sections, and `Goals`.
+- For prediction markets, treat the issue as federally regulated market infrastructure under CFTC jurisdiction, not as a gambling-side issue.
+
+**Style Reference**
+- Default to a specific, clean, no-throat-clearing style, for example: "McCormick first ran for the U.S. Senate in 2022, narrowly losing the Pennsylvania Republican primary to Mehmet Oz by a margin of 0.1 percent."
+- Use the format and section guidance in this template when in doubt: `https://docs.google.com/document/d/1jAEVUbvZHZZ09D6LBxU5jbyIx4e-YuXyDfLT-BL5Vpc/edit?usp=sharing`
 
 **Briefer Template:**
 ```
-# Policy Briefing Memo: [Name, Title]
-Date: [DATE] | Location: [LOCATION]
-
-## Executive Summary
-[2-3 sentence overview: who we're meeting, why it matters, and our primary objective.]
-
-## Background
-Write 1-2 paragraphs in full sentences covering: their current role and title, committee assignments, party and state, what they are currently prioritizing, key legislation they sponsor or co-sponsor, and any prior Paradigm interactions or touchpoints.
+## Landscape Summary
+Write 1-2 short paragraphs that open with committee assignments and relevant subcommittees, then define the member's core policy identity, then explain where Paradigm's issues fit for that member.
 
 ## Biography
-Write 1-2 paragraphs in full sentences covering: key career milestones (Hill tenure, private sector, executive branch experience), education and alma mater, notable past and present committee or subcommittee positions, leadership roles, and relevant personal context such as state/district dynamics, known interests, or relationship dynamics.
+Write 1-2 short paragraphs covering: key career milestones, prior offices, education, leadership roles, and any state or political identity that helps explain how they think.
 
 ## Crypto Knowledge
-Write 1-2 paragraphs in full sentences covering: their overall familiarity level with crypto and digital assets, notable public statements or positions on crypto, DeFi, or stablecoins, relevant votes on crypto or fintech legislation, and the sophistication level of key staffers covering crypto and tech policy.
+Use full-sentence bullets covering: familiarity with crypto and digital assets, notable public statements, legislative engagement, whether crypto is a core issue or a competitiveness issue for them, and any relevant staff sophistication.
 
 ## Stance on Prediction Markets
-Write 5-7 sentences covering: (1) the member's general opinion of prediction markets (public statements, letters signed, bills sponsored or co-sponsored); (2) relevant current events such as prediction market bills introduced, CFTC rulemakings, or court cases (e.g., Kalshi litigation); (3) whether those current events are likely to shift the member's position; and (4) any constituent, state, or district considerations that could influence their stance — including state gambling revenue, tribal gaming interests, state gambling laws, DGE/gaming commission enforcement actions, and the competitive dynamics between CFTC-regulated event contracts and state-licensed sportsbooks. Frame the analysis around Paradigm's position that prediction markets and all event contracts (including sports betting) should be regulated by the CFTC under exclusive federal jurisdiction.
+Use full-sentence bullets covering: public record if any, likely entry point, relevant current events, and how the member is likely to see the issue. Frame this around Paradigm's position that prediction markets and all event contracts should be regulated by the CFTC under exclusive federal jurisdiction.
+
+## Stance on AI
+Use full-sentence bullets covering: philosophy of regulation, innovation posture, national-security framing, and whether the member prefers congressional action versus agency action.
+
+## Stance on Defense Tech
+Use full-sentence bullets covering: defense-industrial priorities, acquisition reform views, state or district defense ties, and how the member thinks about innovation, deterrence, and competition.
 
 ## Goals
 - **Primary Ask:** [What we want from this meeting]
 - **Secondary Objectives:** [Relationship-building goals, intel to gather, positions to reinforce]
 - **Success Criteria:** [How we'll know the meeting went well]
-
-## Specific Topics To Address
-1. [Topic 1 — context, our position, and suggested framing]
-2. [Topic 2 — context, our position, and suggested framing]
-3. [Topic 3 — context, our position, and suggested framing]
-[Add as many as needed based on the meeting agenda and current legislative landscape]
 ```
 
 ### 2. Staffer Tracking
