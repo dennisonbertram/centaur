@@ -114,13 +114,18 @@ def parse_harness_from_message(text: str) -> tuple[str | None, str, bool]:
 
 class ExecuteRequest(BaseModel):
     thread_key: str
-    assignment_generation: int
+    assignment_generation: int | None = None
     execute_id: str | None = None
     harness: str | None = None
     delivery: dict[str, Any] | None = None
     platform: str | None = None
     user_id: str | None = None
     metadata: dict[str, Any] | None = None
+    # Convenience: if message is set and assignment_generation is omitted,
+    # the server auto-orchestrates spawn → message → execute.
+    message: str | None = None
+    engine: str | None = None
+    persona_id: str | None = None
 
 
 class SpawnRequest(BaseModel):
@@ -175,6 +180,22 @@ def _json_error(code: str, message: str, status: int) -> JSONResponse:
 async def execute(request: Request):
     body = ExecuteRequest.model_validate(await request.json())
     pool = request.app.state.db_pool
+
+    # Auto-orchestrate spawn → message → execute when assignment_generation
+    # is omitted.  This is the sub-agent fire-and-forget convenience path:
+    #   POST /agent/execute {"thread_key":"task:…","message":"…","harness":"invest"}
+    if body.assignment_generation is None:
+        if not body.message:
+            return _json_error(
+                "MISSING_FIELD",
+                "assignment_generation is required when message is not provided",
+                422,
+            )
+        try:
+            return await _auto_execute(pool, body)
+        except ControlPlaneError as exc:
+            return _json_error(exc.code, exc.message, exc.status_code)
+
     execute_id = body.execute_id or f"exec-{uuid.uuid4().hex[:16]}"
     delivery = body.delivery or {
         "channel": "slack",
@@ -197,6 +218,69 @@ async def execute(request: Request):
         )
     except ControlPlaneError as exc:
         return _json_error(exc.code, exc.message, exc.status_code)
+
+    return JSONResponse(status_code=202, content=result)
+
+
+async def _auto_execute(pool, body: ExecuteRequest) -> JSONResponse:
+    """Server-side spawn → message → execute for sub-agent convenience.
+
+    Callers can fire a single POST /agent/execute with {thread_key, message,
+    harness} and get back an execution handle without manually threading
+    assignment_generation through three separate calls.
+    """
+    nonce = f"auto-{uuid.uuid4().hex[:12]}"
+
+    # 1. Spawn
+    spawn_result = await spawn_assignment(
+        pool,
+        thread_key=body.thread_key,
+        spawn_id=f"{nonce}:spawn",
+        harness=body.harness,
+        engine=body.engine,
+        persona_id=body.persona_id,
+        agents_md_override=None,
+    )
+    assignment_generation = int(spawn_result["assignment_generation"])
+
+    # 2. Message
+    message_event = {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": body.message}],
+        },
+    }
+    metadata = body.metadata or {}
+    if body.user_id:
+        metadata = {**metadata, "user_id": body.user_id}
+
+    await append_message(
+        pool,
+        thread_key=body.thread_key,
+        assignment_generation=assignment_generation,
+        message_id=f"{nonce}:message",
+        event=message_event,
+        metadata=metadata,
+    )
+
+    # 3. Execute
+    execute_id = body.execute_id or f"exec-{nonce}"
+    delivery = body.delivery or {
+        "channel": "dev",
+        "platform": body.platform or "dev",
+        "recipient_user_id": body.user_id,
+    }
+
+    result = await enqueue_execution(
+        pool,
+        thread_key=body.thread_key,
+        assignment_generation=assignment_generation,
+        execute_id=execute_id,
+        harness=body.harness,
+        delivery=delivery,
+        metadata=metadata,
+    )
 
     return JSONResponse(status_code=202, content=result)
 

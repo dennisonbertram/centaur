@@ -151,7 +151,8 @@
 |Never guess at method names or call multiple methods that might do the same thing — discover first, then call the right one.
 
 [Cross-persona dispatch — delegate tasks to specialist agents]
-|You can spawn other personas (eng, legal, invest, events) as sub-agents:
+|You can spawn other personas (eng, legal, invest, events) as sub-agents.
+|ALWAYS use `call agent execute` — NEVER build raw curl commands to /agent/* endpoints.
 |
 |  # Fire a legal review (runs in parallel, doesn't block you)
 |  call agent execute '{"thread_key":"task:legal-review-123","message":"Review this SAFE for risks","harness":"legal"}'
