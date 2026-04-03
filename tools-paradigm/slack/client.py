@@ -34,6 +34,10 @@ class SlackClient:
         self._client = WebClient(token=token)
         self._user_cache: dict[str, str] = {}
 
+    def __getattr__(self, name: str):
+        """Proxy raw Slack SDK methods when the higher-level wrapper does not define them."""
+        return getattr(self._client, name)
+
 
 
     def _retry_on_ratelimit(self, func, *args, max_retries: int = 3, **kwargs):
@@ -1078,6 +1082,25 @@ def _client() -> SlackClient:
 def get_slack_client() -> SlackClient:
     """Get a cached Slack client instance for CLI compatibility."""
     return _client()
+
+
+def _retry_on_ratelimit(func, *args, **kwargs):
+    return _client()._retry_on_ratelimit(func, *args, **kwargs)
+
+
+def get_user_cache(client: SlackClient | None = None) -> dict[str, str]:
+    slack_client = client or _client()
+    return slack_client._get_user_cache()
+
+
+def list_bot_channels(*args, **kwargs):
+    return _client().list_bot_channels(*args, **kwargs)
+
+
+def resolve_mentions(text: str, client: SlackClient | None = None, user_cache: dict[str, str] | None = None) -> str:
+    slack_client = client or _client()
+    resolved_user_cache = user_cache or slack_client._get_user_cache()
+    return slack_client._resolve_mentions(text, resolved_user_cache)
 
 
 def search_messages(*args, **kwargs):

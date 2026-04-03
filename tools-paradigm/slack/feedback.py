@@ -5,8 +5,12 @@ and generates actionable improvements for SYSTEM_AGENTS.md and CLIs.
 """
 
 import json
+import os
 import re
 import sqlite3
+import urllib.error
+import urllib.request
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -88,6 +92,145 @@ class FeedbackItem:
     updated_at: str
 
 
+@dataclass
+class SaveFeedbackResult:
+    """Result for save_feedback_item."""
+
+    item_id: int
+    inserted: bool
+
+
+class CentaurAgentClient:
+    """Minimal client for starting a background improvement agent run."""
+
+    def __init__(self, base_url: str | None = None, api_key: str | None = None):
+        self.base_url = (base_url or os.environ.get("CENTAUR_API_URL") or "http://api:8000").rstrip("/")
+        self.api_key = api_key or os.environ.get("CENTAUR_API_KEY")
+        if not self.api_key:
+            raise RuntimeError("CENTAUR_API_KEY not set")
+
+    def _request_json(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Accept": "application/json",
+        }
+        data: bytes | None = None
+        if payload is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(payload).encode("utf-8")
+
+        request = urllib.request.Request(
+            f"{self.base_url}{path}",
+            data=data,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                raw = response.read().decode("utf-8")
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as exc:
+            raw = exc.read().decode("utf-8", errors="replace")
+            detail = raw
+            try:
+                body = json.loads(raw)
+                detail = body.get("message") or body.get("detail") or raw
+            except json.JSONDecodeError:
+                pass
+            raise RuntimeError(f"Centaur API error {exc.code} on {path}: {detail}") from exc
+
+    def start_improvement_run(
+        self,
+        prompt: str,
+        *,
+        harness: str = "amp",
+        persona_id: str = "eng",
+        thread_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Spawn, message, and execute a background improvement agent run."""
+        thread_key = thread_key or f"feedback-improvement:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}:{uuid.uuid4().hex[:8]}"
+        spawn = self._request_json(
+            "POST",
+            "/agent/spawn",
+            {
+                "thread_key": thread_key,
+                "harness": harness,
+                "persona_id": persona_id,
+            },
+        )
+        assignment_generation = spawn["assignment_generation"]
+
+        self._request_json(
+            "POST",
+            "/agent/message",
+            {
+                "thread_key": thread_key,
+                "assignment_generation": assignment_generation,
+                "role": "user",
+                "parts": [{"type": "text", "text": prompt}],
+                "metadata": {"source": "slack-feedback-loop"},
+            },
+        )
+
+        execute = self._request_json(
+            "POST",
+            "/agent/execute",
+            {
+                "thread_key": thread_key,
+                "assignment_generation": assignment_generation,
+                "execute_id": f"feedback-improvement-{uuid.uuid4().hex[:12]}",
+                "harness": harness,
+                "delivery": {"platform": "dev"},
+                "metadata": {"source": "slack-feedback-loop"},
+            },
+        )
+
+        return {
+            "thread_key": thread_key,
+            "assignment_generation": assignment_generation,
+            "execution_id": execute["execution_id"],
+            "status": execute.get("status"),
+        }
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _row_to_feedback_item(row: sqlite3.Row) -> FeedbackItem:
+    return FeedbackItem(
+        id=row["id"],
+        slack_channel=row["slack_channel"],
+        slack_thread_ts=row["slack_thread_ts"],
+        permalink=row["permalink"],
+        amp_thread_id=row["amp_thread_id"],
+        category=row["category"],
+        severity=row["severity"],
+        summary=row["summary"],
+        cli_involved=row["cli_involved"],
+        evidence=json.loads(row["evidence"]),
+        reporter_user=row["reporter_user"],
+        status=row["status"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _severity_filter_clause(min_severity: str | None) -> tuple[str, list[str]]:
+    severity_order = {"low": 0, "medium": 1, "high": 2}
+    if not min_severity or min_severity not in severity_order:
+        return "", []
+
+    min_val = severity_order[min_severity]
+    valid = [s for s, v in severity_order.items() if v >= min_val]
+    return f" AND severity IN ({','.join('?' * len(valid))})", valid
+
+
 def init_db() -> sqlite3.Connection:
     """Initialize the feedback database."""
     FEEDBACK_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -124,6 +267,11 @@ def init_db() -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_feedback_category ON feedback_items(category);
         CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback_items(created_at);
     """)
+    _ensure_column(conn, "feedback_items", "agent_thread_key", "TEXT")
+    _ensure_column(conn, "feedback_items", "agent_execution_id", "TEXT")
+    _ensure_column(conn, "feedback_items", "dispatch_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "feedback_items", "last_dispatched_at", "TEXT")
+    _ensure_column(conn, "feedback_items", "last_dispatch_error", "TEXT")
     conn.commit()
     return conn
 
@@ -302,8 +450,9 @@ def fetch_threads_since(
     client: WebClient,
     channel_id: str,
     since_ts: str | None = None,
-    limit: int = 200,
+    limit: int | None = 200,
     bot_user_id: str | None = None,
+    latest_ts: str | None = None,
 ) -> list[dict]:
     """Fetch threads from a channel since a timestamp, with full replies."""
     threads = []
@@ -313,15 +462,21 @@ def fetch_threads_since(
     if not since_ts:
         since_ts = str((datetime.now(timezone.utc) - timedelta(days=7)).timestamp())
 
-    while len(threads) < limit:
+    while limit is None or len(threads) < limit:
+        page_limit = 100 if limit is None else min(limit - len(threads), 100)
+        history_kwargs: dict[str, Any] = {
+            "channel": channel_id,
+            "oldest": since_ts,
+            "inclusive": False,
+            "limit": page_limit,
+            "cursor": cursor,
+        }
+        if latest_ts is not None:
+            history_kwargs["latest"] = latest_ts
         try:
             response = _retry_on_ratelimit(
                 client.conversations_history,
-                channel=channel_id,
-                oldest=since_ts,
-                inclusive=False,
-                limit=min(limit - len(threads), 100),
-                cursor=cursor,
+                **history_kwargs,
             )
         except SlackApiError as e:
             raise RuntimeError(f"Slack API error: {e.response['error']}")
@@ -381,12 +536,16 @@ def fetch_threads_since(
     return threads
 
 
-def save_feedback_item(conn: sqlite3.Connection, item: FeedbackItem) -> int:
+def save_feedback_item(conn: sqlite3.Connection, item: FeedbackItem) -> SaveFeedbackResult:
     """Save or update a feedback item."""
     now = datetime.now(timezone.utc).isoformat()
     dedupe_key = f"{item.category}:{item.cli_involved or 'none'}:{item.summary[:50]}"
+    existing_row = conn.execute(
+        "SELECT id FROM feedback_items WHERE slack_channel = ? AND slack_thread_ts = ?",
+        (item.slack_channel, item.slack_thread_ts),
+    ).fetchone()
 
-    cursor = conn.execute(
+    conn.execute(
         """INSERT INTO feedback_items
            (slack_channel, slack_thread_ts, permalink, amp_thread_id, category, severity,
             summary, cli_involved, evidence, reporter_user, status, dedupe_key, created_at, updated_at)
@@ -420,20 +579,28 @@ def save_feedback_item(conn: sqlite3.Connection, item: FeedbackItem) -> int:
         ),
     )
     conn.commit()
-    return cursor.lastrowid or 0
+    row = conn.execute(
+        "SELECT id FROM feedback_items WHERE slack_channel = ? AND slack_thread_ts = ?",
+        (item.slack_channel, item.slack_thread_ts),
+    ).fetchone()
+    return SaveFeedbackResult(item_id=row["id"], inserted=existing_row is None)
 
 
 def collect_feedback(
     channels: list[str] | None = None,
-    limit_per_channel: int = 200,
+    limit_per_channel: int | None = 200,
     since_days: int | None = None,
+    latest_ts: str | None = None,
+    update_checkpoint: bool = True,
 ) -> dict[str, Any]:
     """Collect feedback from specified channels.
 
     Args:
         channels: Channel names to scan. Defaults to ["test-bot"].
-        limit_per_channel: Max threads to process per channel.
+        limit_per_channel: Max threads to process per channel. None means no limit.
         since_days: Override checkpoint, scan last N days.
+        latest_ts: Optional exclusive upper bound timestamp for history fetch.
+        update_checkpoint: Whether to move the ingestion checkpoint forward.
 
     Returns:
         Stats about collection run.
@@ -458,6 +625,7 @@ def collect_feedback(
         "channels_scanned": 0,
         "threads_analyzed": 0,
         "feedback_items_created": 0,
+        "feedback_items_updated": 0,
         "by_category": {},
         "by_severity": {},
     }
@@ -468,13 +636,20 @@ def collect_feedback(
             continue
 
         # Get checkpoint or use since_days
-        if since_days:
+        if since_days is not None:
             since_ts = str((datetime.now(timezone.utc) - timedelta(days=since_days)).timestamp())
         else:
             since_ts = get_last_processed_ts(conn, channel_id)
 
         # Fetch and analyze threads
-        threads = fetch_threads_since(client, channel_id, since_ts, limit_per_channel, bot_user_id)
+        threads = fetch_threads_since(
+            client,
+            channel_id,
+            since_ts,
+            limit_per_channel,
+            bot_user_id,
+            latest_ts=latest_ts,
+        )
 
         max_ts = since_ts or "0"
         for thread in threads:
@@ -540,14 +715,17 @@ def collect_feedback(
                 updated_at=datetime.now(timezone.utc).isoformat(),
             )
 
-            save_feedback_item(conn, item)
+            save_result = save_feedback_item(conn, item)
             stats["threads_analyzed"] += 1
-            stats["feedback_items_created"] += 1
+            if save_result.inserted:
+                stats["feedback_items_created"] += 1
+            else:
+                stats["feedback_items_updated"] += 1
             stats["by_category"][category] = stats["by_category"].get(category, 0) + 1
             stats["by_severity"][severity] = stats["by_severity"].get(severity, 0) + 1
 
         # Update checkpoint
-        if max_ts and max_ts != "0":
+        if update_checkpoint and max_ts and max_ts != "0":
             update_last_processed_ts(conn, channel_id, max_ts)
 
         stats["channels_scanned"] += 1
@@ -587,40 +765,184 @@ def get_feedback_digest(
         query += " AND category = ?"
         params.append(category)
 
-    severity_order = {"low": 0, "medium": 1, "high": 2}
-    if min_severity and min_severity in severity_order:
-        min_val = severity_order[min_severity]
-        valid = [s for s, v in severity_order.items() if v >= min_val]
-        query += f" AND severity IN ({','.join('?' * len(valid))})"
-        params.extend(valid)
+    severity_clause, severity_params = _severity_filter_clause(min_severity)
+    query += severity_clause
+    params.extend(severity_params)
 
     query += " ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at DESC"
 
     rows = conn.execute(query, params).fetchall()
     conn.close()
+    return [_row_to_feedback_item(row) for row in rows]
 
-    items = []
-    for row in rows:
-        items.append(
-            FeedbackItem(
-                id=row["id"],
-                slack_channel=row["slack_channel"],
-                slack_thread_ts=row["slack_thread_ts"],
-                permalink=row["permalink"],
-                amp_thread_id=row["amp_thread_id"],
-                category=row["category"],
-                severity=row["severity"],
-                summary=row["summary"],
-                cli_involved=row["cli_involved"],
-                evidence=json.loads(row["evidence"]),
-                reporter_user=row["reporter_user"],
-                status=row["status"],
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
+
+def get_actionable_feedback_items(
+    since_days: int = 7,
+    min_severity: str = "medium",
+    statuses: tuple[str, ...] = ("new", "triaged"),
+    limit: int | None = None,
+) -> list[FeedbackItem]:
+    """Return feedback items worth dispatching to the improvement agent."""
+    conn = init_db()
+    since_date = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+    placeholders = ",".join("?" * len(statuses))
+    query = (
+        "SELECT * FROM feedback_items WHERE created_at >= ? "
+        "AND category != 'success' "
+        f"AND status IN ({placeholders})"
+    )
+    params: list[Any] = [since_date, *statuses]
+    severity_clause, severity_params = _severity_filter_clause(min_severity)
+    query += severity_clause
+    params.extend(severity_params)
+    query += " ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, created_at DESC"
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
+
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [_row_to_feedback_item(row) for row in rows]
+
+
+def build_improvement_prompt(items: list[FeedbackItem], channels: list[str]) -> str:
+    """Build the prompt for a background engineering improvement run."""
+    feedback_payload = []
+    for item in items:
+        feedback_payload.append(
+            {
+                "id": item.id,
+                "channel": item.slack_channel,
+                "permalink": item.permalink,
+                "summary": item.summary,
+                "category": item.category,
+                "severity": item.severity,
+                "cli_involved": item.cli_involved,
+                "amp_thread_id": item.amp_thread_id,
+                "evidence": item.evidence,
+            }
         )
 
-    return items
+    prompt = [
+        "You are working on paradigmxyz/centaur.",
+        "Investigate and fix the highest-leverage issues surfaced by Slack feedback.",
+        "Use git-branch paradigmxyz/centaur before editing because the host mount is read-only.",
+        "Read the linked Slack permalinks and Amp threads when they are relevant, then make code changes in the repo.",
+        "Prefer the smallest fixes that materially improve agent behavior.",
+        "When done, open a PR with a concise summary of the fixes.",
+        "",
+        f"Channels scanned: {', '.join(channels)}",
+        f"Feedback item count in this batch: {len(items)}",
+        "",
+        "Structured feedback:",
+        json.dumps(feedback_payload, indent=2),
+    ]
+    return "\n".join(prompt)
+
+
+def mark_feedback_items_dispatched(
+    item_ids: list[int],
+    agent_thread_key: str,
+    agent_execution_id: str,
+    *,
+    dispatch_error: str | None = None,
+) -> None:
+    """Mark feedback items as dispatched to the background improvement agent."""
+    if not item_ids:
+        return
+
+    conn = init_db()
+    now = datetime.now(timezone.utc).isoformat()
+    placeholders = ",".join("?" * len(item_ids))
+    if dispatch_error:
+        conn.execute(
+            f"UPDATE feedback_items SET last_dispatch_error = ?, updated_at = ? WHERE id IN ({placeholders})",
+            [dispatch_error, now, *item_ids],
+        )
+    else:
+        conn.execute(
+            f"""
+            UPDATE feedback_items
+            SET status = 'in_progress',
+                agent_thread_key = ?,
+                agent_execution_id = ?,
+                dispatch_count = COALESCE(dispatch_count, 0) + 1,
+                last_dispatched_at = ?,
+                last_dispatch_error = NULL,
+                updated_at = ?
+            WHERE id IN ({placeholders})
+            """,
+            [agent_thread_key, agent_execution_id, now, now, *item_ids],
+        )
+    conn.commit()
+    conn.close()
+
+
+def run_improvement_cycle(
+    *,
+    channels: list[str],
+    since_days: int,
+    limit_per_channel: int | None,
+    max_items: int,
+    min_severity: str = "medium",
+    harness: str = "amp",
+    persona_id: str = "eng",
+    dry_run: bool = False,
+    agent_client: CentaurAgentClient | None = None,
+) -> dict[str, Any]:
+    """Run one full improvement cycle: collect, select, dispatch, and mark items."""
+    collect_stats = collect_feedback(
+        channels=channels,
+        limit_per_channel=limit_per_channel,
+        since_days=since_days,
+    )
+    items = get_actionable_feedback_items(
+        since_days=since_days,
+        min_severity=min_severity,
+        limit=max_items,
+    )
+    prompt = build_improvement_prompt(items, channels)
+    result: dict[str, Any] = {
+        "collect_stats": collect_stats,
+        "actionable_items": len(items),
+        "item_ids": [item.id for item in items if item.id is not None],
+        "prompt": prompt,
+        "dispatched": False,
+    }
+    if not items:
+        return result
+
+    if dry_run:
+        return result
+
+    agent_client = agent_client or CentaurAgentClient()
+    try:
+        run = agent_client.start_improvement_run(
+            prompt,
+            harness=harness,
+            persona_id=persona_id,
+        )
+    except Exception as exc:
+        mark_feedback_items_dispatched(result["item_ids"], "", "", dispatch_error=str(exc))
+        raise
+    result.update(run)
+    result["dispatched"] = True
+    mark_feedback_items_dispatched(result["item_ids"], run["thread_key"], run["execution_id"])
+    return result
+
+
+def backfill_feedback(
+    *,
+    channels: list[str],
+    since_days: int,
+    limit_per_channel: int | None,
+) -> dict[str, Any]:
+    """Run a historical backfill without the usual per-channel cap."""
+    return collect_feedback(
+        channels=channels,
+        limit_per_channel=limit_per_channel,
+        since_days=since_days,
+    )
 
 
 def format_digest_markdown(items: list[FeedbackItem]) -> str:
