@@ -42,6 +42,50 @@ def print_markdown_table(headers: list[str], rows: list[list[str]]) -> None:
         print("| " + " | ".join(str(cell) for cell in row) + " |")
 
 
+def extract_items(data: dict | list) -> list[dict]:
+    """Normalize LegiStorm responses into a list of row dicts."""
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    if isinstance(data, dict):
+        for key in ("data", "results", "items"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict)]
+    return []
+
+
+def member_fields(row: dict) -> tuple[str, str, str, str, str]:
+    """Extract display fields from a member row."""
+    member = row.get("member", row)
+    profile = member.get("profile", {}) if isinstance(member, dict) else {}
+    name = (
+        f"{profile.get('preferred_first_name') or profile.get('first_name') or member.get('first_name', '')} "
+        f"{profile.get('preferred_last_name') or profile.get('last_name') or member.get('last_name', '')}"
+    ).strip()
+
+    office = next((office for office in row.get("member_offices", []) if office.get("status") == "In Office"), {})
+    state = office.get("state_id") or row.get("state") or ""
+    party = office.get("party") or row.get("party") or profile.get("bio_details", {}).get("party_name") or ""
+    chamber = office.get("office_type_id") or row.get("chamber") or ""
+    member_id = member.get("member_id") or row.get("id") or ""
+    return str(member_id), name, state, party, chamber
+
+
+def staff_fields(row: dict) -> tuple[str, str, str, str]:
+    """Extract display fields from a staff row."""
+    staff = row.get("staff", row)
+    name = (
+        f"{staff.get('preferred_first_name') or staff.get('first_name', '')} "
+        f"{staff.get('preferred_last_name') or staff.get('last_name', '')}"
+    ).strip()
+    current_titles = [position.get("position_title", "") for position in row.get("positions", []) if position.get("is_current")]
+    title = " | ".join(title for title in current_titles if title) or row.get("title", "") or ""
+    emails = row.get("staff_emails", [])
+    email = emails[0].get("contact_string", "") if emails else row.get("email", "") or ""
+    staff_id = staff.get("id") or row.get("id") or ""
+    return str(staff_id), name, title, email
+
+
 @app.command()
 def members(
     updated_from: str = typer.Option(None, "--from", "-f", help="Updated from date (YYYY-MM-DD)"),
@@ -79,7 +123,7 @@ def members(
         print(json.dumps(data, indent=2))
         return
 
-    items = data.get("data", [])
+    items = extract_items(data)
     if not items:
         console.print("[yellow]No members found[/]")
         raise typer.Exit()
@@ -87,16 +131,7 @@ def members(
     if markdown:
         rows = []
         for m in items:
-            name = f"{m.get('first_name', '')} {m.get('last_name', '')}".strip()
-            rows.append(
-                [
-                    str(m.get("id", "")),
-                    name,
-                    m.get("state", "") or "",
-                    m.get("party", "") or "",
-                    m.get("chamber", "") or "",
-                ]
-            )
+            rows.append(list(member_fields(m)))
         print_markdown_table(["ID", "Name", "State", "Party", "Chamber"], rows)
         return
 
@@ -108,14 +143,7 @@ def members(
     table.add_column("Chamber", style="blue")
 
     for m in items:
-        name = f"{m.get('first_name', '')} {m.get('last_name', '')}".strip()
-        table.add_row(
-            str(m.get("id", "")),
-            name,
-            m.get("state", "") or "",
-            m.get("party", "") or "",
-            m.get("chamber", "") or "",
-        )
+        table.add_row(*member_fields(m))
 
     console.print(table)
 
@@ -157,7 +185,7 @@ def staff(
         print(json.dumps(data, indent=2))
         return
 
-    items = data.get("data", [])
+    items = extract_items(data)
     if not items:
         console.print("[yellow]No staff found[/]")
         raise typer.Exit()
@@ -165,13 +193,13 @@ def staff(
     if markdown:
         rows = []
         for s in items:
-            name = f"{s.get('first_name', '')} {s.get('last_name', '')}".strip()
+            staff_id_value, name, title, email = staff_fields(s)
             rows.append(
                 [
-                    str(s.get("id", "")),
+                    staff_id_value,
                     name,
-                    truncate(s.get("title", "") or "", 30),
-                    s.get("email", "") or "",
+                    truncate(title, 30),
+                    email,
                 ]
             )
         print_markdown_table(["ID", "Name", "Title", "Email"], rows)
@@ -184,13 +212,74 @@ def staff(
     table.add_column("Email", style="green")
 
     for s in items:
-        name = f"{s.get('first_name', '')} {s.get('last_name', '')}".strip()
-        table.add_row(
-            str(s.get("id", "")),
-            name,
-            truncate(s.get("title", "") or "", 30),
-            s.get("email", "") or "",
+        staff_id_value, name, title, email = staff_fields(s)
+        table.add_row(staff_id_value, name, truncate(title, 30), email)
+
+    console.print(table)
+
+
+@app.command("staff-portfolios")
+def staff_portfolios(
+    updated_from: str = typer.Option(None, "--from", "-f", help="Updated from date (YYYY-MM-DD)"),
+    updated_to: str = typer.Option(None, "--to", "-t", help="Updated to date (YYYY-MM-DD)"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max results (up to 1000)"),
+    page: int = typer.Option(1, "--page", "-p", help="Page number"),
+    staff_id: int = typer.Option(None, "--id", help="Specific staff ID"),
+    member_id: int = typer.Option(None, "--member-id", help="Staff for specific member"),
+    office_id: int = typer.Option(None, "--office-id", help="Staff for specific office"),
+    issue_endpoint: str = typer.Option(
+        None,
+        "--issue-endpoint",
+        help="Optional explicit issue endpoint override, e.g. /member/issue/list",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+):
+    """Get staff records enriched with explicit issue portfolios when available."""
+    client = get_client()
+
+    default_from, default_to = get_default_dates()
+    updated_from = updated_from or default_from
+    updated_to = updated_to or default_to
+
+    try:
+        data = client.get_staff_with_issue_portfolios(
+            updated_from=updated_from,
+            updated_to=updated_to,
+            limit=limit,
+            page=page,
+            staff_id=staff_id,
+            member_id=member_id,
+            office_id=office_id,
+            issue_endpoint=issue_endpoint,
         )
+    except RuntimeError as e:
+        console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
+
+    if json_output:
+        print(json.dumps(data, indent=2))
+        return
+
+    status = data.get("issue_portfolio_status", "unknown")
+    endpoint = data.get("issue_endpoint") or "none"
+    console.print(f"[bold]Issue portfolio status:[/] {status}")
+    console.print(f"[bold]Issue endpoint:[/] {endpoint}")
+
+    items = data.get("staff", [])
+    if not items:
+        console.print("[yellow]No staff found[/]")
+        raise typer.Exit()
+
+    table = Table(title="Congressional Staff Portfolios")
+    table.add_column("ID", style="dim")
+    table.add_column("Name", style="cyan")
+    table.add_column("Title", style="yellow", max_width=30)
+    table.add_column("Issues", style="green", max_width=40)
+
+    for row in items:
+        staff_id_value, name, title, _ = staff_fields(row)
+        issues = row.get("issues", [])
+        table.add_row(staff_id_value, name, truncate(title, 30), truncate(", ".join(issues), 40))
 
     console.print(table)
 
