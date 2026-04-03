@@ -236,6 +236,11 @@ class DockerSandboxBackend(SandboxBackend):
             },
         )
         await dind_container.start()
+        if egress_network and egress_network != network:
+            # DinD needs the same egress path as the sandbox so `docker pull`
+            # and `docker compose up` inside the sandbox can resolve and reach registries.
+            egress = await client.networks.get(egress_network)
+            await egress.connect({"Container": dind_container.id})
 
         # Point sandbox Docker CLI at the sidecar
         env.append(f"DOCKER_HOST=tcp://{dind_name}:2375")

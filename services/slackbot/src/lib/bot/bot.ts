@@ -65,6 +65,49 @@ function containsMarkdownTable(md: string): boolean {
   return ast.children.some((node) => isTableNode(node as Content));
 }
 
+function parseMarkdownTableRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.includes("|")) return null;
+  const inner = trimmed.replace(/^\|/, "").replace(/\|$/, "");
+  const cells = inner.split("|").map((cell) => cell.trim());
+  return cells.length >= 2 ? cells : null;
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const cells = parseMarkdownTableRow(line);
+  return Boolean(cells?.every((cell) => /^:?-{3,}:?$/.test(cell)));
+}
+
+function flattenMarkdownTables(markdown: string): string {
+  const lines = markdown.split("\n");
+  const output: string[] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const header = parseMarkdownTableRow(lines[i]);
+    if (!header || i + 1 >= lines.length || !isMarkdownTableSeparator(lines[i + 1])) {
+      output.push(lines[i]);
+      continue;
+    }
+
+    const rows: string[] = [];
+    i += 2;
+    while (i < lines.length) {
+      const cells = parseMarkdownTableRow(lines[i]);
+      if (!cells) break;
+      rows.push(`- ${header.map((label, idx) => `${label}: ${cells[idx] ?? ""}`).join("; ")}`);
+      i += 1;
+    }
+    output.push(...rows);
+    i -= 1;
+  }
+
+  return output.join("\n");
+}
+
+function isSlackInvalidBlocksError(message: string): boolean {
+  return message.includes("invalid_blocks");
+}
+
 type SlackRawMessage = {
   team_id?: string;
   team?: string;
@@ -821,16 +864,34 @@ export class SlackBot {
 
     const markdown = this.renderFinalDeliveryMarkdown(threadKey, finalPayload);
     try {
-      await this.withSlackDeliveryContext(delivery, async () => {
-        for (const chunk of splitSlackMessage(markdown)) {
-          await this.slack!.postMessage(slackAdapterThreadId(threadKey), { markdown: chunk });
-        }
-      });
+      await this.postSlackMarkdown(threadKey, delivery, markdown);
       await this.ackFinalDelivery(executionId, threadKey);
       await this.setAssistantTitle(threadKey, markdown);
       log.info("final_delivery_completed", { thread_key: threadKey, execution_id: executionId });
     } catch (err) {
-      const error = err instanceof Error ? err.message : String(err);
+      let error = err instanceof Error ? err.message : String(err);
+      if (isSlackInvalidBlocksError(error)) {
+        const fallbackMarkdown = flattenMarkdownTables(markdown);
+        if (fallbackMarkdown !== markdown) {
+          try {
+            log.warn("final_delivery_retry_plaintext", {
+              execution_id: executionId,
+              thread_key: threadKey,
+            });
+            await this.postSlackMarkdown(threadKey, delivery, fallbackMarkdown);
+            await this.ackFinalDelivery(executionId, threadKey);
+            await this.setAssistantTitle(threadKey, fallbackMarkdown);
+            log.info("final_delivery_completed", {
+              thread_key: threadKey,
+              execution_id: executionId,
+              downgraded_tables: true,
+            });
+            return;
+          } catch (fallbackErr) {
+            error = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+          }
+        }
+      }
       log.warn("final_delivery_post_failed", {
         execution_id: executionId,
         thread_key: threadKey,
@@ -874,6 +935,18 @@ export class SlackBot {
     }
 
     return errorText || "Agent completed with no output.";
+  }
+
+  private async postSlackMarkdown(
+    threadKey: string,
+    delivery: Record<string, unknown>,
+    markdown: string,
+  ): Promise<void> {
+    await this.withSlackDeliveryContext(delivery, async () => {
+      for (const chunk of splitSlackMessage(markdown)) {
+        await this.slack!.postMessage(slackAdapterThreadId(threadKey), { markdown: chunk });
+      }
+    });
   }
 
   private async withSlackDeliveryContext<T>(

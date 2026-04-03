@@ -294,4 +294,46 @@ describe("SlackBot runtime control", () => {
     expect(client.markFinalFailed).not.toHaveBeenCalled();
     expect(client.markFinalDelivered).not.toHaveBeenCalled();
   });
+
+  it("retries final delivery with flattened tables when Slack rejects blocks", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-table",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: {
+            status: "completed",
+            result_text: [
+              "Summary",
+              "",
+              "| Asset | Value |",
+              "| --- | --- |",
+              "| BTC | $1.00M |",
+            ].join("\n"),
+          },
+        },
+      ],
+    }));
+    const postMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("invalid_blocks"))
+      .mockResolvedValue({ id: "msg-safe" });
+    const slack = createSlackAdapter({ postMessage });
+    const bot = new SlackBot(client as any, "", slack);
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    expect(postMessage).toHaveBeenCalledTimes(2);
+    expect(postMessage.mock.calls[1][1]).toEqual({
+      markdown: [
+        "Summary",
+        "",
+        "- Asset: BTC; Value: $1.00M",
+      ].join("\n"),
+    });
+    expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-table", expect.any(String));
+    expect(client.markFinalFailed).not.toHaveBeenCalled();
+  });
 });

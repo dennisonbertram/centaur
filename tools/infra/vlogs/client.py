@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 _DURATION_RE = re.compile(r"^\d+[smhdw]$")
+_DURATION_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 
 class VictoriaLogsClient:
@@ -198,6 +199,46 @@ class VictoriaLogsClient:
             return {"start": start}
         return {}
 
+    @staticmethod
+    def _coerce_float(value: Any) -> float:
+        if isinstance(value, bool):
+            return float(value)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return 0.0
+        return 0.0
+
+    @classmethod
+    def _hits_step(cls, start: str) -> str:
+        """Choose a reasonable bucket size for `/select/logsql/hits`."""
+        if not start or not _DURATION_RE.match(start):
+            return "1h"
+        total_seconds = int(start[:-1]) * _DURATION_SECONDS[start[-1]]
+        if total_seconds <= 3600:
+            return "1m"
+        if total_seconds <= 6 * 3600:
+            return "5m"
+        if total_seconds <= 86400:
+            return "1h"
+        if total_seconds <= 7 * 86400:
+            return "1d"
+        return "1w"
+
+    @classmethod
+    def _hits_total(cls, payload: dict[str, Any]) -> int:
+        total = 0
+        for series in payload.get("hits", []):
+            if isinstance(series, dict) and "total" in series:
+                total += int(cls._coerce_float(series.get("total")))
+                continue
+            values = series.get("values", []) if isinstance(series, dict) else []
+            total += sum(int(cls._coerce_float(value)) for value in values)
+        return total
+
     # -- Convenience methods ---------------------------------------------------
 
     def thread_logs(
@@ -322,7 +363,7 @@ class VictoriaLogsClient:
         q = f"{self._time_prefix(start)}event:http_request AND duration_ms:>{threshold_ms}"
         results = self.query(q, limit=limit, **self._time_params(start))
         cleaned = [self._clean_entry(e) for e in results if "_note" not in e]
-        cleaned.sort(key=lambda e: int(e.get("duration_ms", 0)), reverse=True)
+        cleaned.sort(key=lambda e: self._coerce_float(e.get("duration_ms", 0)), reverse=True)
         return cleaned
 
     def tool_calls(
@@ -378,22 +419,20 @@ class VictoriaLogsClient:
         time_prefix = self._time_prefix(start)
         time_params = self._time_params(start)
 
-        svc_names = self.field_values("service", query=f"{time_prefix}*", **time_params)
+        svc_names = [
+            svc for svc in self.field_values("service", query=f"{time_prefix}*", **time_params) if svc.strip()
+        ]
         result: dict[str, dict[str, int]] = {}
+        step = self._hits_step(start)
         for svc in svc_names:
-            total = self.hits(
-                f'{time_prefix}_stream:{{service="{svc}"}}', **time_params
-            )
-            total_count = sum(
-                sum(b.get("values", [])) for b in total.get("hits", [])
-            )
+            total = self.hits(f'_stream:{{service="{svc}"}}', start=start or None, step=step)
+            total_count = self._hits_total(total)
             errors = self.hits(
-                f'{time_prefix}_stream:{{service="{svc}"}} AND level:error',
-                **time_params,
+                f'_stream:{{service="{svc}"}} AND level:error',
+                start=start or None,
+                step=step,
             )
-            error_count = sum(
-                sum(b.get("values", [])) for b in errors.get("hits", [])
-            )
+            error_count = self._hits_total(errors)
             result[svc] = {"total_count": total_count, "error_count": error_count}
         return result
 
@@ -436,7 +475,7 @@ class VictoriaLogsClient:
             tool = entry.get("tool_name", "unknown")
             method = entry.get("tool_method", "unknown")
             success = entry.get("success", "true") == "true"
-            duration = int(entry.get("duration_ms", 0))
+            duration = round(self._coerce_float(entry.get("duration_ms", 0)))
             thread = entry.get("thread_key", "")
             
             stats[tool]["calls"] += 1
