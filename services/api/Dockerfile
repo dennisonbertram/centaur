@@ -19,7 +19,7 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 WORKDIR /app
 
-# 1. Install core + tool dependencies (changes rarely)
+# 1. Install core deps (changes rarely — cached layer)
 COPY services/api/pyproject.toml ./
 COPY centaur_sdk/ centaur_sdk/
 RUN sed -i 's|path = "../../centaur_sdk"|path = "centaur_sdk"|' pyproject.toml \
@@ -27,6 +27,7 @@ RUN sed -i 's|path = "../../centaur_sdk"|path = "centaur_sdk"|' pyproject.toml \
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-install-project --no-dev
 
+# 2. Install tool deps from tools/**/pyproject.toml (changes rarely — cached layer)
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=tools,target=/tmp/tools \
     python -c "\
@@ -38,12 +39,12 @@ open('/tmp/pd.txt','w').write('\n'.join(sorted(deps)))" \
     && uv pip install -r /tmp/pd.txt --quiet \
     && rm /tmp/pd.txt
 
-# 2. Copy source (changes often — keep last for fast rebuilds)
+# 3. Copy source (changes often — keep last for fast rebuilds)
 COPY services/api/api/ api/
 COPY services/api/db/ db/
 COPY tools/ tools/
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-dev
+    uv sync --no-dev --inexact
 
 COPY services/api/bootstrap-secrets.sh /app/scripts/bootstrap-secrets.sh
 COPY services/api/entrypoint.sh /entrypoint.sh
