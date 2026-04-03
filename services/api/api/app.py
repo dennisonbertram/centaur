@@ -19,7 +19,7 @@ from api.api_keys import bootstrap_service_api_keys
 from api.config import settings
 from api.db import close_pool, create_pool
 from api.logging_config import configure_structlog
-from api.metrics import HTTP_REQUESTS_IN_PROGRESS, observe_http_request
+from api.vm_metrics import HTTP_REQUESTS_IN_PROGRESS, observe_http_request, start_push_loop, stop_push_loop
 from api.routers import admin, attachments as attachments_mod, deprecated, health, internal
 from api.routers import agent as agent_router_mod
 from api.tool_manager import ToolManager, load_plugins_config
@@ -103,6 +103,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     }
     if worker_enabled:
         await start_execution_worker(app.state.db_pool)
+    start_push_loop(app.state.db_pool)
     await _push_injection_map()
     watcher_task = asyncio.create_task(_watch_tools(tool_manager))
     reconcile_task = asyncio.create_task(_reconcile_loop())
@@ -110,6 +111,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await stop_push_loop()
         await stop_replenish_loop()
         if worker_enabled:
             await stop_execution_worker()

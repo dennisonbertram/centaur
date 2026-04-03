@@ -27,7 +27,7 @@ from fastapi.responses import PlainTextResponse
 from toon_format import encode as toon_encode
 
 from api.api_keys import check_scope
-from api.metrics import record_tool_call
+from api.vm_metrics import record_tool_call
 from api.deps import get_key_info, get_sandbox_claims, verify_api_key
 from centaur_sdk import ToolContext, reset_tool_context, set_tool_context
 

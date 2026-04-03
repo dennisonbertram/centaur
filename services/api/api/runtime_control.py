@@ -29,7 +29,7 @@ from api.observability import (
     project_execution_observations,
     summarize_message_parts,
 )
-from api.metrics import (
+from api.vm_metrics import (
     record_agent_execution,
     record_execution_claimed,
     record_execution_enqueued,

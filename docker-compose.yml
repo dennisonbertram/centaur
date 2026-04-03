@@ -276,11 +276,8 @@ services:
     command:
       - -storageDataPath=/victoria-metrics-data
       - -retentionPeriod=30d
-      - -promscrape.config=/etc/prometheus/prometheus.yml
-      - -promscrape.config.strictParse=false
       - -selfScrapeInterval=15s
     volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - vmdata:/victoria-metrics-data
     networks:
       - default

@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse, Response
 
 from api.db import check_schema_compatibility
 from api.deps import verify_operator_api_key
-from api.metrics import CONTENT_TYPE_LATEST, render_metrics
+from api.vm_metrics import render_metrics
 from api.runtime_guardrails import check_runtime_credentials
 
 router = APIRouter()
@@ -46,7 +46,7 @@ async def metrics() -> Response:
     from api.app import app
 
     payload = await render_metrics(app.state.db_pool)
-    return Response(content=payload, media_type=CONTENT_TYPE_LATEST)
+    return Response(content=payload, media_type="text/plain; charset=utf-8")
 
 
 @router.get("/health/tools", dependencies=[Depends(verify_operator_api_key)])
