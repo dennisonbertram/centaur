@@ -17,7 +17,7 @@
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "targets": [{ "expr": "agent_execution_requests{status=\"running\"}", "refId": "A" }],
+      "targets": [{ "expr": "last_over_time(agent_execution_requests{status=\"running\"}[5m])", "refId": "A" }],
       "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" },
       "fieldConfig": { "defaults": { "noValue": "0" } }
     },
@@ -27,7 +27,7 @@
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "targets": [{ "expr": "agent_execution_requests{status=\"queued\"}", "refId": "A" }],
+      "targets": [{ "expr": "last_over_time(agent_execution_requests{status=\"queued\"}[5m])", "refId": "A" }],
       "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" },
       "fieldConfig": { "defaults": { "noValue": "0", "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 3 }, { "color": "red", "value": 10 }] } } }
     },
@@ -37,7 +37,7 @@
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "targets": [{ "expr": "agent_sessions_active", "refId": "A" }],
+      "targets": [{ "expr": "last_over_time(agent_sessions_active[5m])", "refId": "A" }],
       "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" },
       "fieldConfig": { "defaults": { "noValue": "0" } }
     },
@@ -47,7 +47,7 @@
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "targets": [{ "expr": "agent_warm_pool_containers{state=\"available\"}", "refId": "A" }],
+      "targets": [{ "expr": "last_over_time(agent_warm_pool_containers{state=\"available\"}[5m])", "refId": "A" }],
       "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" },
       "fieldConfig": { "defaults": { "noValue": "0" } }
     },
@@ -57,7 +57,7 @@
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
       "datasource": { "type": "prometheus", "uid": "victoriametrics" },
-      "targets": [{ "expr": "sum(agent_final_delivery_outbox{state=~\"pending|sending|retry_wait\"})", "refId": "A" }],
+      "targets": [{ "expr": "sum(last_over_time(agent_final_delivery_outbox{state=~\"pending|sending|retry_wait\"}[5m]))", "refId": "A" }],
       "options": { "colorMode": "background", "graphMode": "none", "textMode": "value" },
       "fieldConfig": { "defaults": { "noValue": "0", "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }, { "color": "red", "value": 20 }] } } }
     },
