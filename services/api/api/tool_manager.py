@@ -14,6 +14,7 @@ import threading
 import time
 import tomllib
 import types
+import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, is_dataclass
 from enum import Enum
@@ -68,6 +69,65 @@ _MAX_INLINE_TOOL_BINARY_BYTES = max(
     1024, int(os.getenv("TOOL_BINARY_INLINE_MAX_BYTES", str(1 * 1024 * 1024)))
 )
 _TOOL_BINARY_PREVIEW_BYTES = max(128, int(os.getenv("TOOL_BINARY_PREVIEW_BYTES", str(32 * 1024))))
+
+# Threshold for extracting base64-encoded file data from tool results into
+# the attachments table.  Anything larger gets stored as an attachment and
+# replaced with a download URL so it doesn't bloat the agent context window.
+_ATTACHMENT_EXTRACT_MIN_BYTES = 64 * 1024  # 64 KB
+
+
+async def _extract_tool_attachment(
+    result: dict[str, Any],
+    *,
+    request: Request | None,
+    thread_key: str | None,
+    tool_name: str,
+) -> dict[str, Any]:
+    """If *result* contains a large base64 ``data`` field, store it as an
+    attachment and replace the field with a download URL.
+
+    Returns the (possibly modified) result dict.
+    """
+    data_b64 = result.get("data")
+    if not isinstance(data_b64, str) or len(data_b64) < _ATTACHMENT_EXTRACT_MIN_BYTES:
+        return result
+
+    # Heuristic: looks like base64 (only base64 chars, length divisible by 4)
+    if not re.fullmatch(r"[A-Za-z0-9+/=\n\r]+", data_b64[:256]):
+        return result
+
+    pool = getattr(getattr(request, "app", None), "state", None)
+    pool = getattr(pool, "db_pool", None) if pool else None
+    if pool is None:
+        return result
+
+    try:
+        raw_bytes = base64.b64decode(data_b64)
+    except Exception:
+        return result
+
+    att_id = f"att-{uuid.uuid4().hex[:16]}"
+    mime_type = result.get("mime_type", "application/octet-stream")
+    filename = result.get("filename") or f"{tool_name}_output"
+
+    await pool.execute(
+        "INSERT INTO attachments (id, thread_key, message_id, name, mime_type, data) "
+        "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
+        att_id, thread_key or "", None, filename, mime_type, raw_bytes,
+    )
+    log.info(
+        "tool_result_attachment_stored",
+        tool=tool_name,
+        attachment_id=att_id,
+        filename=filename,
+        mime_type=mime_type,
+        size=len(raw_bytes),
+    )
+
+    out = {k: v for k, v in result.items() if k != "data"}
+    out["attachment_id"] = att_id
+    out["download_url"] = f"/agent/attachments/{att_id}/download"
+    return out
 
 
 class ToolMethod:
@@ -801,6 +861,14 @@ class ToolManager:
             record_tool_call(tool_name, method_name, True, duration_ms / 1000)
             if isinstance(result, str):
                 return result
+            if isinstance(result, dict):
+                thread_key = sandbox_claims.get("thread_key") if sandbox_claims else None
+                result = await _extract_tool_attachment(
+                    result,
+                    request=request,
+                    thread_key=thread_key,
+                    tool_name=tool_name,
+                )
             return _to_toon(result)
         except (SystemExit, Exception) as e:
             duration_ms = round((time.monotonic() - t0) * 1000)

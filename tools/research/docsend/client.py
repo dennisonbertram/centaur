@@ -193,16 +193,14 @@ class DocsendClient:
                     if valid:
                         good = await _download_images(valid)
                     else:
-                        # Last resort: screenshots
-                        # Navigate back to page 1 first
-                        for _ in range(total):
-                            await page.keyboard.press("ArrowLeft")
-                            await asyncio.sleep(0.2)
-                        await asyncio.sleep(1)
-                        good = await _screenshot_slides(page, total)
+                        good = []
 
                 if not good:
-                    return _err("Failed to capture any slides", page_count=total)
+                    return _err(
+                        "Failed to extract slide images. The document may "
+                        "still be behind a verification wall.",
+                        page_count=total,
+                    )
 
                 # 8. Assemble PDF
                 buf = BytesIO()
@@ -508,29 +506,6 @@ async def _fetch_slide_urls(page, total: int) -> tuple[list[str | None], list[in
         if not slide_url:
             failed.append(i)
     return urls, failed
-
-
-async def _screenshot_slides(page, total: int) -> list[Image.Image]:
-    """Last resort: screenshot each slide."""
-    await page.evaluate("""() => {
-        document.querySelectorAll(
-            ".presentation-toolbar, #toolbar, .header-bar-container, "
-            + "#ccpa-iframe, .sidebar, .document-sidebar, "
-            + "[class*='cookie'], [class*='banner']"
-        ).forEach(el => el.style.display = "none");
-    }""")
-    await asyncio.sleep(0.5)
-
-    images: list[Image.Image] = []
-    for i in range(total):
-        await asyncio.sleep(1)
-        ss = await page.screenshot(full_page=False)
-        img = Image.open(BytesIO(ss)).convert("RGB")
-        images.append(img)
-        if i < total - 1:
-            await page.keyboard.press("ArrowRight")
-            await asyncio.sleep(0.5)
-    return images
 
 
 async def _download_images(urls: list[str]) -> list[Image.Image]:
