@@ -131,6 +131,13 @@ Generate a policy briefing memo before Hill meetings.
 - Use present tense for current roles and positions and past tense for historical facts.
 - Avoid filler transitions like "it is worth noting," "additionally," or "it should be mentioned."
 
+**Inclusion Standard**
+- Write an operator brief, not a comprehensive research memo.
+- Include only facts or judgments that help the meeting team understand how the member thinks or how to run the conversation.
+- Prefer tailored analysis over generic issue background. Cut any sentence that could appear unchanged in dozens of memos.
+- Do not pad thin sections with generic talking points or mini white papers on crypto, AI, defense tech, or prediction markets.
+- Do not include tactical sidebars such as fundraising context, access notes, or ally-labeling unless the user explicitly asks for them.
+
 **Handling Gaps**
 - Do not narrate the absence of research.
 - Never write "I could not find."
@@ -145,22 +152,22 @@ Generate a policy briefing memo before Hill meetings.
 - Use exactly these sections in this order and do not add, rename, or reorder them:
   1. `Landscape Summary`
   2. `Biography`
-  3. `Crypto Knowledge`
-  4. `Stance on Prediction Markets`
-  5. `Stance on AI`
+  3. `Goals`
+  4. `Crypto Knowledge`
+  5. `Stance on Prediction Markets`
   6. `Stance on Defense Tech`
-  7. `Goals`
-- Do not generate a `Specific Topics To Address` section.
+  7. `Stance on AI`
+- Do not generate a `Specific Topics to Address` section.
 - Do not generate a `Touchpoints` section.
 - Fold prior office touchpoint intel into `Landscape Summary` and the relevant stance sections instead.
 - `Landscape Summary` and `Biography` should be short prose sections.
-- `Crypto Knowledge`, `Stance on Prediction Markets`, `Stance on AI`, and `Stance on Defense Tech` should use full-sentence bullets.
-- `Goals` should remain concise bullets.
+- `Goals`, `Crypto Knowledge`, `Stance on Prediction Markets`, `Stance on Defense Tech`, and `Stance on AI` should use concise full-sentence bullets.
+- `Goals` should use plain bullets with no `Primary Ask`, `Secondary Objectives`, or `Success Criteria` labels.
 
 **Touchpoint Intel Rules**
 - Search `#gigabrain-feed` broadly for the office or member, not just `#touchpoint` posts. `#touchpoint` posts usually carry the highest weight, but other relevant posts in `#gigabrain-feed` can also inform the briefer.
 - Use the Google Sheet touchpoint log for recency and frequency. Use Slack posts for substance.
-- Inject substantive office intel directly into `Landscape Summary` and the relevant stance sections (`Crypto Knowledge`, `Stance on Prediction Markets`, `Stance on AI`, `Stance on Defense Tech`).
+- Inject substantive office intel directly into `Landscape Summary` and the relevant stance sections (`Crypto Knowledge`, `Stance on Prediction Markets`, `Stance on Defense Tech`, `Stance on AI`).
 - Present that intel as synthesized analysis, not attributed sourcing. Do not write phrases like "per my meeting with" or "in a recent touchpoint."
 - Lead with the most recent office intel unless an older signal is more probative.
 
@@ -172,6 +179,20 @@ Generate a policy briefing memo before Hill meetings.
 - If crypto is not central to the member, frame it as focus, not absence, for example: "Digital assets are not a primary focus" or "He has not engaged on crypto legislation."
 - Do not use internal strategy language such as "persuasion pitch," "productive lane," or "wrong lane."
 - State conclusions as intelligence, not as meeting tactics.
+
+**Biography Rules**
+- Keep `Biography` short and functional.
+- Use it to explain how the member thinks, not to inventory every prior job or credential.
+
+**Goals Rules**
+- Write short, plain-English bullets describing what we want to get done, what we want to learn, or what framing we want to land.
+- Keep the bullets specific to the member and the meeting.
+- Avoid generic relationship-building filler.
+
+**Stance Section Rules**
+- Each bullet should be member-specific and additive.
+- Do not turn these sections into generic explainers on the underlying issue.
+- If there is not enough tailored material for a full section, use one short editorial bullet rather than padding.
 
 **Paradigm Perspective**
 - Layer in Paradigm's views where relevant, especially in `Landscape Summary`, the stance sections, and `Goals`.
@@ -189,22 +210,22 @@ Write 1-2 short paragraphs that open with committee assignments and relevant sub
 ## Biography
 Write 1-2 short paragraphs in reverse chronological order, starting with the current or most recent role and ending with education/background. Cover: key career milestones, prior offices, education, leadership roles, and any state or political identity that helps explain how they think.
 
+## Goals
+- [Concrete meeting objective]
+- [Question to press or intel to gather]
+- [Paradigm framing to land]
+
 ## Crypto Knowledge
 Use full-sentence bullets covering: familiarity with crypto and digital assets, notable public statements, legislative engagement, whether crypto is a core issue or a competitiveness issue for them, and any relevant staff sophistication.
 
 ## Stance on Prediction Markets
 Use full-sentence bullets covering: public record if any, likely entry point, relevant current events, and how the member is likely to see the issue. Frame this around Paradigm's position that prediction markets and all event contracts should be regulated by the CFTC under exclusive federal jurisdiction.
 
-## Stance on AI
-Use full-sentence bullets covering: philosophy of regulation, innovation posture, national-security framing, and whether the member prefers congressional action versus agency action.
-
 ## Stance on Defense Tech
 Use full-sentence bullets covering: defense-industrial priorities, acquisition reform views, state or district defense ties, and how the member thinks about innovation, deterrence, and competition.
 
-## Goals
-- **Primary Ask:** [What we want from this meeting]
-- **Secondary Objectives:** [Relationship-building goals, intel to gather, positions to reinforce]
-- **Success Criteria:** [How we'll know the meeting went well]
+## Stance on AI
+Use full-sentence bullets covering: philosophy of regulation, innovation posture, national-security framing, and whether the member prefers congressional action versus agency action.
 ```
 
 ### 1a. `#touchpoint` Capture
