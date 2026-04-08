@@ -362,51 +362,68 @@ export class SlackBot {
     const threadKey = normalizeThreadKey(thread.id);
     await this.cancelInflightExecution(threadKey);
     const promptSelector = parsePromptSelectorFlag(text);
-    const state = await this.ensureAssignment(threadKey, promptSelector);
-    await this.client.message({
-      threadKey,
-      assignmentGeneration: state.assignmentGeneration,
-      messageId: delivery.messageId,
-      parts,
-      userId: delivery.userId,
+    const { channel, threadTs } = splitThreadKey(thread.id);
+    const accepted = await this.client.startWorkflowRun({
+      workflowName: "slack_thread_turn",
+      triggerKey: delivery.messageId ? `slack-thread-turn:${threadKey}:${delivery.messageId}` : undefined,
+      eagerStart: true,
+      input: {
+        thread_key: threadKey,
+        parts,
+        user_id: delivery.userId,
+        message_id: delivery.messageId,
+        prompt_selector: promptSelector,
+        delivery: {
+          channel,
+          thread_ts: threadTs,
+          platform: "slack",
+          recipient_user_id: delivery.userId,
+          recipient_team_id: delivery.teamId,
+        },
+      },
     });
-    log.info("message_buffered", {
-      thread_key: threadKey,
-      message_id: delivery.messageId,
-      assignment_generation: state.assignmentGeneration,
-      is_mention: true,
-    });
+    if (!accepted.execution_id) {
+      const errorText = typeof accepted.error_text === "string"
+        ? accepted.error_text.trim()
+        : "";
+      throw new Error(errorText || "workflow did not enqueue an execution");
+    }
     await this.execute(thread, threadKey, {
-      assignmentGeneration: state.assignmentGeneration,
+      executionId: accepted.execution_id,
       userId: delivery.userId,
       teamId: delivery.teamId,
     });
   }
 
-  private async execute(thread: BotThread, threadKey: string, opts: { assignmentGeneration: number; userId?: string; teamId?: string }) {
+  private async execute(thread: BotThread, threadKey: string, opts: { assignmentGeneration?: number; executionId?: string; userId?: string; teamId?: string }) {
     const ac = new AbortController();
 
     const tracker = new ProgressTracker();
     const t0 = Date.now();
-    let executionId = "";
+    let executionId = typeof opts.executionId === "string" ? opts.executionId : "";
     try {
-      const { channel, threadTs } = splitThreadKey(thread.id);
-      const executeId = `exec-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-      const accepted = await this.client.execute({
-        threadKey,
-        assignmentGeneration: opts.assignmentGeneration,
-        executeId,
-        platform: "slack",
-        userId: opts.userId,
-        delivery: {
-          channel,
-          thread_ts: threadTs,
+      if (!executionId) {
+        if (typeof opts.assignmentGeneration !== "number") {
+          throw new Error("missing assignmentGeneration for direct execute path");
+        }
+        const { channel, threadTs } = splitThreadKey(thread.id);
+        const executeId = `exec-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+        const accepted = await this.client.execute({
+          threadKey,
+          assignmentGeneration: opts.assignmentGeneration,
+          executeId,
           platform: "slack",
-          recipient_user_id: opts.userId,
-          recipient_team_id: opts.teamId,
-        },
-      });
-      executionId = accepted.execution_id;
+          userId: opts.userId,
+          delivery: {
+            channel,
+            thread_ts: threadTs,
+            platform: "slack",
+            recipient_user_id: opts.userId,
+            recipient_team_id: opts.teamId,
+          },
+        });
+        executionId = accepted.execution_id;
+      }
       this.inFlightExecutions.set(threadKey, {
         executionId,
         abortController: ac,
@@ -846,6 +863,18 @@ export class SlackBot {
         execution_id: executionId,
         thread_key: threadKey,
       });
+      try {
+        await this.client.renewFinalDeliveryLease(executionId, {
+          consumerId: this.deliveryConsumerId,
+          leaseSeconds: FINAL_DELIVERY_LEASE_SECONDS,
+        });
+      } catch (err) {
+        log.warn("final_delivery_defer_lease_refresh_failed", {
+          execution_id: executionId,
+          thread_key: threadKey,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       // Keep the claimed lease intact so the live stream can ack the same
       // outbox row on completion instead of racing a retry into a duplicate post.
       return;

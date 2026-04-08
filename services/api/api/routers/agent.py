@@ -904,8 +904,9 @@ async def claim_final_delivery(request: Request, body: ClaimFinalDeliveryRequest
     rows = await pool.fetch(
         "WITH candidates AS ("
         "  SELECT execution_id FROM agent_final_delivery_outbox "
-        "  WHERE state = 'pending' "
-        "    AND COALESCE(next_attempt_at, NOW()) <= NOW() "
+        "  WHERE ((state = 'pending' "
+        "          AND COALESCE(next_attempt_at, NOW()) <= NOW()) "
+        "         OR state = 'sending') "
         "    AND (lease_expires_at IS NULL OR lease_expires_at <= NOW()) "
         "    AND ($4::text IS NULL OR delivery->>'platform' = $4) "
         "  ORDER BY created_at ASC "
@@ -951,6 +952,39 @@ async def claim_final_delivery(request: Request, body: ClaimFinalDeliveryRequest
             platform=(delivery or {}).get("platform") if isinstance(delivery, dict) else None,
         )
     return {"deliveries": deliveries}
+
+
+class RenewFinalDeliveryLeaseRequest(BaseModel):
+    consumer_id: str
+    lease_seconds: int = 60
+
+
+@router.post(
+    "/final-deliveries/{execution_id}/heartbeat",
+    dependencies=[Depends(require_scope("agent:execute"))],
+)
+async def renew_final_delivery_lease(
+    request: Request,
+    execution_id: str,
+    body: RenewFinalDeliveryLeaseRequest,
+):
+    pool = request.app.state.db_pool
+    lease_seconds = max(15, min(body.lease_seconds, 600))
+    row = await pool.fetchrow(
+        "UPDATE agent_final_delivery_outbox "
+        "SET lease_expires_at = NOW() + make_interval(secs => $3), "
+        "    updated_at = NOW() "
+        "WHERE execution_id = $1 "
+        "  AND state = 'sending' "
+        "  AND lease_owner = $2 "
+        "RETURNING execution_id, thread_key",
+        execution_id,
+        body.consumer_id,
+        lease_seconds,
+    )
+    if not row:
+        raise HTTPException(status_code=409, detail="delivery not claimable")
+    return {"ok": True, "execution_id": execution_id}
 
 
 class MarkFinalDeliveredRequest(BaseModel):

@@ -30,11 +30,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # 2. Install tool deps from tools/**/pyproject.toml (changes rarely — cached layer)
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=tools,target=/tmp/tools \
+    --mount=type=bind,source=tools-paradigm,target=/tmp/tools-paradigm \
     python -c "\
 import tomllib, pathlib; \
 deps = set(); \
 [deps.update(tomllib.load(open(p,'rb')).get('project',{}).get('dependencies',[])) \
- for p in pathlib.Path('/tmp/tools').glob('**/pyproject.toml')]; \
+ for root in ('/tmp/tools','/tmp/tools-paradigm') \
+ for p in pathlib.Path(root).glob('**/pyproject.toml')]; \
 open('/tmp/pd.txt','w').write('\n'.join(sorted(deps)))" \
     && uv pip install -r /tmp/pd.txt --quiet \
     && rm /tmp/pd.txt
@@ -43,6 +45,7 @@ open('/tmp/pd.txt','w').write('\n'.join(sorted(deps)))" \
 COPY services/api/api/ api/
 COPY services/api/db/ db/
 COPY tools/ tools/
+COPY tools-paradigm/ tools-paradigm/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --inexact
 

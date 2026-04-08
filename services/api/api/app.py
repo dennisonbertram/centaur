@@ -22,10 +22,17 @@ from api.logging_config import configure_structlog
 from api.vm_metrics import HTTP_REQUESTS_IN_PROGRESS, observe_http_request, start_push_loop, stop_push_loop
 from api.routers import admin, attachments as attachments_mod, deprecated, health, internal
 from api.routers import agent as agent_router_mod
+from api.routers import workflows as workflow_router_mod
 from api.tool_manager import ToolManager, load_plugins_config
 from api.agent import reconcile_tick
 from api.runtime_guardrails import assert_runtime_credentials_ready
 from api.runtime_control import start_execution_worker, stop_execution_worker
+from api.workflow_engine import (
+    discover_workflow_handlers,
+    start_workflow_worker,
+    stop_workflow_worker,
+    sync_registered_workflow_schedules,
+)
 from api.warm_pool import start_replenish_loop, stop_replenish_loop
 
 configure_structlog()
@@ -96,24 +103,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.db_pool = await create_pool(settings.database_url)
     await bootstrap_service_api_keys(app.state.db_pool)
     await assert_runtime_credentials_ready()
-    worker_enabled = os.getenv("EXECUTION_WORKER_ENABLED", "1").strip().lower() not in {
+    execution_worker_enabled = os.getenv("EXECUTION_WORKER_ENABLED", "1").strip().lower() not in {
         "0",
         "false",
         "no",
     }
-    if worker_enabled:
+    workflow_worker_enabled = os.getenv("WORKFLOW_WORKER_ENABLED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    warm_pool_enabled = os.getenv("WARM_POOL_ENABLED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    discover_workflow_handlers()
+    await sync_registered_workflow_schedules(app.state.db_pool)
+    if execution_worker_enabled:
         await start_execution_worker(app.state.db_pool)
+    if workflow_worker_enabled:
+        await start_workflow_worker(app.state.db_pool)
     start_push_loop(app.state.db_pool)
     await _push_injection_map()
     watcher_task = asyncio.create_task(_watch_tools(tool_manager))
     reconcile_task = asyncio.create_task(_reconcile_loop())
-    await start_replenish_loop()
+    if warm_pool_enabled:
+        await start_replenish_loop()
     try:
         yield
     finally:
         await stop_push_loop()
-        await stop_replenish_loop()
-        if worker_enabled:
+        if warm_pool_enabled:
+            await stop_replenish_loop()
+        if workflow_worker_enabled:
+            await stop_workflow_worker()
+        if execution_worker_enabled:
             await stop_execution_worker()
         reconcile_task.cancel()
         watcher_task.cancel()
@@ -203,6 +228,7 @@ async def instrument_requests(request, call_next):
 
 app.include_router(health.router)
 app.include_router(agent_router_mod.router)
+app.include_router(workflow_router_mod.router)
 app.include_router(attachments_mod.router)
 app.include_router(admin.router)
 app.include_router(internal.router)

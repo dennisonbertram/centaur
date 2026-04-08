@@ -221,6 +221,8 @@ def _setup_env(pg, run_migrations):
     os.environ["DATABASE_URL"] = pg
     os.environ["API_SECRET_KEY"] = "test-secret-key"
     os.environ["EXECUTION_WORKER_ENABLED"] = "0"
+    os.environ["WORKFLOW_WORKER_ENABLED"] = "0"
+    os.environ["WARM_POOL_ENABLED"] = "0"
     os.environ["RUNTIME_CREDENTIAL_GUARD_ENABLED"] = "0"
 
 
@@ -233,14 +235,20 @@ def app(_setup_env):
 
 
 @pytest_asyncio.fixture
-async def client(app):
-    """Async httpx client with lifespan-managed app state (db_pool etc.)."""
+async def managed_app(app):
+    """Manage app lifespan once per test."""
     from asgi_lifespan import LifespanManager
 
-    async with LifespanManager(app) as manager:
-        transport = httpx.ASGITransport(app=manager.app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
-            yield c
+    async with LifespanManager(app):
+        yield app
+
+
+@pytest_asyncio.fixture
+async def client(managed_app):
+    """Async httpx client against the lifespan-managed app."""
+    transport = httpx.ASGITransport(app=managed_app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
 
 
 @pytest.fixture
@@ -250,9 +258,6 @@ def api_key():
 
 
 @pytest_asyncio.fixture
-async def db_pool(app):
+async def db_pool(managed_app):
     """Yield the live asyncpg pool from the running app."""
-    from asgi_lifespan import LifespanManager
-
-    async with LifespanManager(app):
-        yield app.state.db_pool
+    yield managed_app.state.db_pool

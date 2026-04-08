@@ -1,0 +1,1064 @@
+from __future__ import annotations
+
+import datetime as dt
+import json
+import os
+import uuid
+from unittest.mock import AsyncMock, patch
+
+import pytest
+import pytest_asyncio
+
+
+def _auth(api_key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _clear_workflow_tables(db_pool):
+    await db_pool.execute(
+        "TRUNCATE TABLE workflow_events, workflow_schedules, workflow_checkpoints, workflow_runs, "
+        "agent_execution_events, agent_execution_requests, agent_final_delivery_outbox CASCADE",
+    )
+    yield
+
+
+@pytest.mark.asyncio
+async def test_create_slack_thread_turn_workflow_eager_start(
+    client, db_pool, api_key: str,
+):
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    payload = {
+        "workflow_name": "slack_thread_turn",
+        "trigger_key": f"slack-turn:{uuid.uuid4().hex}",
+        "eager_start": True,
+        "input": {
+            "thread_key": thread_key,
+            "parts": [{"type": "text", "text": "hello from workflow"}],
+            "user_id": "U123",
+            "delivery": {
+                "platform": "slack",
+                "channel": "C-test",
+                "thread_ts": "1700000000.000100",
+            },
+        },
+    }
+
+    append_message_mock = AsyncMock(
+        return_value={"ok": True, "message_id": "wf-msg"},
+    )
+    enqueue_execution_mock = AsyncMock(
+        return_value={
+            "ok": True,
+            "execution_id": "exe-workflow-1",
+            "status": "queued",
+        },
+    )
+
+    with (
+        patch(
+            "api.workflow_engine.spawn_assignment",
+            new=AsyncMock(return_value={"assignment_generation": 7}),
+        ),
+        patch(
+            "api.workflow_engine.append_message",
+            new=append_message_mock,
+        ),
+        patch(
+            "api.workflow_engine.enqueue_execution",
+            new=enqueue_execution_mock,
+        ),
+    ):
+        response = await client.post(
+            "/workflows/runs", headers=_auth(api_key), json=payload,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["workflow_name"] == "slack_thread_turn"
+    assert body["status"] == "waiting"
+    assert body["execution_id"] == "exe-workflow-1"
+
+    run_row = await db_pool.fetchrow(
+        "SELECT workflow_name, status "
+        "FROM workflow_runs WHERE run_id = $1",
+        body["run_id"],
+    )
+    assert run_row is not None
+    assert run_row["workflow_name"] == "slack_thread_turn"
+    assert run_row["status"] == "waiting"
+
+    cp_row = await db_pool.fetchrow(
+        "SELECT checkpoint_name, execution_id "
+        "FROM workflow_checkpoints WHERE run_id = $1",
+        body["run_id"],
+    )
+    assert cp_row is not None
+    assert cp_row["execution_id"] == "exe-workflow-1"
+    assert append_message_mock.await_args.kwargs["metadata"]["user_id"] == "U123"
+    assert enqueue_execution_mock.await_args.kwargs["metadata"]["user_id"] == "U123"
+
+
+@pytest.mark.asyncio
+async def test_workflow_completes_when_execution_terminal(db_pool):
+    from api.workflow_engine import _run_handler
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+
+    # Insert a workflow run in "waiting" state
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "thread_key, status, input_json, worker_id"
+        ") VALUES ($1, 'slack_thread_turn', 'test-slack-thread-turn-v1', 'hash', $1, $2, 'running', "
+        "$3::jsonb, 'w1')",
+        run_id,
+        thread_key,
+        json.dumps({
+            "thread_key": thread_key,
+            "parts": [{"type": "text", "text": "hello"}],
+        }),
+    )
+
+    # Insert an existing checkpoint for the agent_turn step
+    await db_pool.execute(
+        "INSERT INTO workflow_checkpoints ("
+        "run_id, checkpoint_name, step_kind, state, execution_id"
+        ") VALUES ($1, 'agent_turn', 'agent_turn', $2::jsonb, $3)",
+        run_id,
+        json.dumps({
+            "execution_id": execution_id,
+            "status": "waiting",
+        }),
+        execution_id,
+    )
+
+    # Insert a completed execution
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, "
+        "request_hash, status, result_text, delivery, metadata"
+        ") VALUES ($1, $2, 1, 'exec-1', 'hash', 'completed', "
+        "'agent result text', '{}'::jsonb, '{}'::jsonb)",
+        execution_id,
+        thread_key,
+    )
+
+    # Simulate worker re-claiming and re-running the handler
+    run_row = {
+        "run_id": run_id,
+        "workflow_name": "slack_thread_turn",
+        "input_json": json.dumps({
+            "thread_key": thread_key,
+            "parts": [{"type": "text", "text": "hello"}],
+        }),
+        "status": "running",
+        "worker_id": "w1",
+    }
+    await _run_handler(db_pool, run_row)
+
+    # Verify the run completed
+    result_row = await db_pool.fetchrow(
+        "SELECT status, output_json FROM workflow_runs WHERE run_id = $1",
+        run_id,
+    )
+    assert result_row is not None
+    assert result_row["status"] == "completed"
+    output = result_row["output_json"]
+    if isinstance(output, str):
+        output = json.loads(output)
+    assert output["execution_id"] == execution_id
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_replay_skips_fn(db_pool):
+    """ctx.step() returns cached value without calling fn on replay."""
+    from api.workflow_engine import WorkflowContext
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+
+    # Pre-populate a checkpoint
+    await db_pool.execute(
+        "INSERT INTO workflow_checkpoints ("
+        "run_id, checkpoint_name, state"
+        ") VALUES ($1, 'fetch', $2::jsonb)",
+        run_id,
+        json.dumps({"data": 42}),
+    )
+
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={"fetch": {"data": 42}},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    call_count = 0
+
+    async def expensive_fn():
+        nonlocal call_count
+        call_count += 1
+        return {"data": 99}
+
+    result = await ctx.step("fetch", expensive_fn)
+    assert result == {"data": 42}
+    assert call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_replay_preserves_none_result(db_pool):
+    """A checkpointed None result is still treated as durable state."""
+    from api.workflow_engine import WorkflowContext
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO workflow_checkpoints (run_id, checkpoint_name, state) "
+        "VALUES ($1, 'noop', 'null'::jsonb)",
+        run_id,
+    )
+
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={"noop": None},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    call_count = 0
+
+    async def should_not_run():
+        nonlocal call_count
+        call_count += 1
+        return "unexpected"
+
+    result = await ctx.step("noop", should_not_run)
+    assert result is None
+    assert call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_eager_start_does_not_reexecute_existing_run(db_pool):
+    from api.runtime_control import request_hash
+    from api.workflow_engine import create_workflow_run
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    trigger_key = f"slack-turn:{uuid.uuid4().hex}"
+    run_input = {
+        "thread_key": thread_key,
+        "parts": [{"type": "text", "text": "hello from workflow"}],
+    }
+    existing_run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, trigger_key, root_run_id, thread_key, "
+        "status, input_json"
+        ") VALUES ($1, 'slack_thread_turn', 'test-slack-thread-turn-v1', $2, $3, $1, $4, 'waiting', $5::jsonb)",
+        existing_run_id,
+        request_hash({"workflow_name": "slack_thread_turn", "input": run_input}),
+        trigger_key,
+        thread_key,
+        json.dumps(run_input),
+    )
+
+    with patch("api.workflow_engine._execute_run", new=AsyncMock()) as execute_run:
+        result = await create_workflow_run(
+            db_pool,
+            workflow_name="slack_thread_turn",
+            run_input=run_input,
+            trigger_key=trigger_key,
+            eager_start=True,
+        )
+
+    assert result["run_id"] == existing_run_id
+    assert result["idempotent"] is True
+    execute_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_claim_run_requeues_expired_running_run(db_pool):
+    from api.workflow_engine import _claim_run
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id, worker_lease_expires_at"
+        ") VALUES ($1, 'multi_step_demo', 'test-multi-step-demo-v1', 'hash', $1, 'running', '{}'::jsonb, "
+        "'stale-worker', NOW() - INTERVAL '5 minutes')",
+        run_id,
+    )
+
+    claimed = await _claim_run(db_pool)
+
+    assert claimed is not None
+    assert claimed["run_id"] == run_id
+    assert claimed["worker_id"] != "stale-worker"
+
+    row = await db_pool.fetchrow(
+        "SELECT status, worker_id FROM workflow_runs WHERE run_id = $1",
+        run_id,
+    )
+    assert row is not None
+    assert row["status"] == "running"
+    assert row["worker_id"] == claimed["worker_id"]
+
+
+@pytest.mark.asyncio
+async def test_step_name_deduplication(db_pool):
+    """Loop step names auto-deduplicate: fetch, fetch#2, fetch#3."""
+    from api.workflow_engine import WorkflowContext
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    results = []
+    for i in range(3):
+        val = i
+        r = await ctx.step("fetch", lambda: {"i": val})
+        results.append(r)
+
+    # All three should have run and produced distinct checkpoints
+    rows = await db_pool.fetch(
+        "SELECT checkpoint_name FROM workflow_checkpoints "
+        "WHERE run_id = $1 ORDER BY checkpoint_name",
+        run_id,
+    )
+    names = [str(row["checkpoint_name"]) for row in rows]
+    assert "fetch" in names
+    assert "fetch#2" in names
+    assert "fetch#3" in names
+
+
+@pytest.mark.asyncio
+async def test_sleep_suspends_and_resumes(db_pool):
+    """ctx.sleep() raises SuspendWorkflow; on replay after wake time
+    it falls through."""
+    from api.workflow_engine import WorkflowContext, SuspendWorkflow
+    import datetime as _dt
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    # First call: should suspend
+    with pytest.raises(SuspendWorkflow):
+        await ctx.sleep("wait", _dt.timedelta(seconds=60))
+
+    # Verify checkpoint was written
+    cp = await db_pool.fetchrow(
+        "SELECT state FROM workflow_checkpoints "
+        "WHERE run_id = $1 AND checkpoint_name = 'wait'",
+        run_id,
+    )
+    assert cp is not None
+
+    # Replay with past wake time in checkpoint
+    past = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=1))
+    ctx2 = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={"wait": past.isoformat()},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    # Should NOT raise — wake time is in the past
+    await ctx2.sleep("wait", _dt.timedelta(seconds=60))
+
+
+@pytest.mark.asyncio
+async def test_notify_execution_terminal_wakes_run(db_pool):
+    from api.workflow_engine import notify_execution_terminal
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, available_at"
+        ") VALUES ($1, 'slack_thread_turn', 'test-slack-thread-turn-v1', 'hash', $1, 'waiting', "
+        "'{}'::jsonb, '2099-01-01T00:00:00Z')",
+        run_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO workflow_checkpoints ("
+        "run_id, checkpoint_name, step_kind, state, execution_id"
+        ") VALUES ($1, 'agent_turn', 'agent_turn', $2::jsonb, $3)",
+        run_id,
+        json.dumps({"execution_id": execution_id}),
+        execution_id,
+    )
+
+    woke = await notify_execution_terminal(db_pool, execution_id)
+    assert woke is True
+
+    row = await db_pool.fetchrow(
+        "SELECT available_at FROM workflow_runs WHERE run_id = $1",
+        run_id,
+    )
+    # available_at should now be in the past (set to NOW())
+    assert row["available_at"] <= dt.datetime.now(dt.timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_cancel_workflow_run_cancels_linked_execution(db_pool):
+    from api.workflow_engine import cancel_workflow_run
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json"
+        ") VALUES ($1, 'slack_thread_turn', 'test-slack-thread-turn-v1', 'hash', $1, 'waiting', "
+        "'{}'::jsonb)",
+        run_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO workflow_checkpoints ("
+        "run_id, checkpoint_name, step_kind, state, execution_id"
+        ") VALUES ($1, 'agent_turn', 'agent_turn', $2::jsonb, $3)",
+        run_id,
+        json.dumps({"execution_id": execution_id}),
+        execution_id,
+    )
+
+    cancel_execution_mock = AsyncMock(return_value={"ok": True, "status": "cancelled"})
+    with patch("api.workflow_engine.cancel_execution", new=cancel_execution_mock):
+        result = await cancel_workflow_run(db_pool, run_id)
+
+    assert result is not None
+    assert result["status"] == "cancelled"
+    cancel_execution_mock.assert_awaited_once_with(db_pool, execution_id)
+
+
+@pytest.mark.asyncio
+async def test_tick_workflow_schedules_is_idempotent(db_pool):
+    from api.workflow_engine import _tick_workflow_schedules
+
+    now = dt.datetime(2026, 3, 31, 14, 45, tzinfo=dt.timezone.utc)
+    next_run_at = now
+    await db_pool.execute(
+        "INSERT INTO workflow_schedules ("
+        "schedule_id, workflow_name, schedule_kind, schedule_expr, "
+        "timezone, catchup_policy, input_json, enabled, next_run_at"
+        ") VALUES ($1, 'slack_thread_turn', 'cron', '45 14 * * *', "
+        "'UTC', 'skip', $2::jsonb, TRUE, $3)",
+        "sched-test",
+        json.dumps({
+            "thread_key": f"slack:C-test:{uuid.uuid4().hex}",
+            "parts": [{"type": "text", "text": "scheduled hello"}],
+        }),
+        next_run_at,
+    )
+
+    created_first = await _tick_workflow_schedules(db_pool, now=now)
+    created_second = await _tick_workflow_schedules(db_pool, now=now)
+
+    assert created_first == 1
+    assert created_second == 0
+
+    runs = await db_pool.fetch(
+        "SELECT workflow_name, trigger_key FROM workflow_runs "
+        "WHERE trigger_key = $1",
+        f"schedule:sched-test:{int(next_run_at.timestamp())}",
+    )
+    assert len(runs) == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_registered_workflow_schedules_disables_removed_rows(
+    db_pool,
+    monkeypatch,
+):
+    from api.workflow_engine import sync_registered_workflow_schedules
+
+    for key in list(os.environ):
+        if key.startswith("PARADIGM_PULSE_"):
+            monkeypatch.delenv(key, raising=False)
+
+    await db_pool.execute(
+        "INSERT INTO workflow_schedules ("
+        "schedule_id, workflow_name, schedule_kind, schedule_expr, "
+        "timezone, catchup_policy, input_json, enabled, next_run_at"
+        ") VALUES ($1, 'paradigm_pulse_daily', 'cron', '45 7 * * *', "
+        "'America/Los_Angeles', 'skip', '{}'::jsonb, TRUE, NOW())",
+        "paradigm_pulse_daily",
+    )
+
+    await sync_registered_workflow_schedules(db_pool)
+
+    enabled = await db_pool.fetchval(
+        "SELECT enabled FROM workflow_schedules WHERE schedule_id = $1",
+        "paradigm_pulse_daily",
+    )
+    assert enabled is False
+
+
+@pytest.mark.asyncio
+async def test_handler_discovery(db_pool):
+    from api.workflow_engine import (
+        discover_workflow_handlers,
+        get_workflow_handler,
+    )
+
+    discovered = discover_workflow_handlers()
+    assert "agent_turn" in discovered
+    assert "slack_thread_turn" in discovered
+    assert "paradigm_pulse_daily" in discovered
+
+    registered = get_workflow_handler("slack_thread_turn")
+    assert registered is not None
+    assert callable(registered.handler)
+    assert registered.input_cls is not None
+
+    unknown = get_workflow_handler("nonexistent_workflow")
+    assert unknown is None
+
+
+@pytest.mark.asyncio
+async def test_child_workflow_lineage_and_waiting_state(db_pool):
+    from api.workflow_engine import (
+        _RegisteredHandler,
+        _WORKFLOW_HANDLERS,
+        _claim_run,
+        _run_handler,
+        create_workflow_run,
+        get_workflow_run,
+        list_workflow_runs,
+    )
+
+    async def child_handler(inp, ctx):
+        return {"value": inp["value"], "thread": inp.get("thread_key")}
+
+    async def parent_handler(inp, ctx):
+        child = await ctx.run_workflow(
+            "child-review",
+            workflow_name="test_child_workflow",
+            run_input={"value": inp["value"]},
+        )
+        return {
+            "child_run_id": child["run_id"],
+            "child_status": child["status"],
+            "child_output": child["output_json"],
+        }
+
+    with patch.dict(
+        _WORKFLOW_HANDLERS,
+        {
+            "test_parent_workflow": _RegisteredHandler(
+                handler=parent_handler,
+                input_cls=None,
+                source_path="tests:test_parent_workflow",
+                version="test-parent-v1",
+            ),
+            "test_child_workflow": _RegisteredHandler(
+                handler=child_handler,
+                input_cls=None,
+                source_path="tests:test_child_workflow",
+                version="test-child-v1",
+            ),
+        },
+        clear=False,
+    ):
+        parent = await create_workflow_run(
+            db_pool,
+            workflow_name="test_parent_workflow",
+            run_input={"value": 7},
+            trigger_key=None,
+            eager_start=False,
+        )
+
+        first = await _claim_run(db_pool)
+        assert first is not None
+        assert first["run_id"] == parent["run_id"]
+        await _run_handler(db_pool, first)
+
+        waiting_parent = await get_workflow_run(db_pool, parent["run_id"])
+        assert waiting_parent is not None
+        assert waiting_parent["status"] == "waiting"
+        assert waiting_parent["workflow_version"] == "test-parent-v1"
+        assert waiting_parent["root_run_id"] == parent["run_id"]
+        assert waiting_parent["child_runs_count"] == 1
+        assert waiting_parent["latest_step_kind"] == "child_workflow_wait"
+        assert waiting_parent["waiting_on"] is not None
+        assert waiting_parent["waiting_on"]["type"] == "workflow"
+        assert waiting_parent["waiting_on"]["workflow_name"] == "test_child_workflow"
+        assert waiting_parent["waiting_on"]["deadline"] is None
+
+        children = await list_workflow_runs(
+            db_pool,
+            parent_run_id=parent["run_id"],
+        )
+        assert len(children["items"]) == 1
+        child = children["items"][0]
+        assert child["parent_run_id"] == parent["run_id"]
+        assert child["root_run_id"] == parent["run_id"]
+        assert child["workflow_version"] == "test-child-v1"
+
+        second = await _claim_run(db_pool)
+        assert second is not None
+        assert second["run_id"] == child["run_id"]
+        await _run_handler(db_pool, second)
+
+        third = await _claim_run(db_pool)
+        assert third is not None
+        assert third["run_id"] == parent["run_id"]
+        await _run_handler(db_pool, third)
+
+        completed_parent = await get_workflow_run(db_pool, parent["run_id"])
+        assert completed_parent is not None
+        assert completed_parent["status"] == "completed"
+        assert completed_parent["waiting_on"] is None
+        assert completed_parent["output_json"] == {
+            "child_run_id": child["run_id"],
+            "child_status": "completed",
+            "child_output": {"value": 7, "thread": None},
+        }
+
+
+@pytest.mark.asyncio
+async def test_step_retry_with_backoff(db_pool):
+    """ctx.step() retries on failure with configured policy."""
+    from api.workflow_engine import RetryPolicy, WorkflowContext
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    call_count = 0
+
+    async def flaky_fn():
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            raise RuntimeError("transient failure")
+        return {"ok": True}
+
+    result = await ctx.step(
+        "flaky",
+        flaky_fn,
+        retry=RetryPolicy(limit=4, delay=dt.timedelta(milliseconds=1)),
+    )
+    assert result == {"ok": True}
+    assert call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_step_non_retryable_error_skips_retries(db_pool):
+    """NonRetryableError propagates immediately without retrying."""
+    from api.workflow_engine import NonRetryableError, RetryPolicy, WorkflowContext
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    call_count = 0
+
+    async def permanent_failure():
+        nonlocal call_count
+        call_count += 1
+        raise NonRetryableError("bad input")
+
+    with pytest.raises(NonRetryableError, match="bad input"):
+        await ctx.step(
+            "permanent",
+            permanent_failure,
+            retry=RetryPolicy(limit=5),
+        )
+    assert call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_step_timeout(db_pool):
+    """ctx.step() raises TimeoutError when fn exceeds timeout."""
+    from api.workflow_engine import WorkflowContext
+    import asyncio as _asyncio
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    async def slow_fn():
+        await _asyncio.sleep(10)
+        return {"done": True}
+
+    with pytest.raises(TimeoutError):
+        await ctx.step(
+            "slow",
+            slow_fn,
+            timeout=dt.timedelta(milliseconds=50),
+        )
+
+
+@pytest.mark.asyncio
+async def test_sleep_until(db_pool):
+    """ctx.sleep_until() falls through when wake time is in the past."""
+    from api.workflow_engine import WorkflowContext, SuspendWorkflow
+    import datetime as _dt
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    # Future time → should suspend
+    future = _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)
+    with pytest.raises(SuspendWorkflow):
+        await ctx.sleep_until("wait_future", future)
+
+    # Past time in checkpoint → should fall through
+    past = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=1)
+    ctx2 = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={"wait_past": past.isoformat()},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    await ctx2.sleep_until("wait_past", past)
+
+
+@pytest.mark.asyncio
+async def test_replay_safe_logging(db_pool):
+    """ctx.log() is suppressed during replay, active after first cache miss."""
+    from api.workflow_engine import WorkflowContext
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+
+    # Fresh context (no checkpoints) → _in_replay is False → log emits
+    ctx_fresh = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    assert ctx_fresh._in_replay is False
+
+    # Context with checkpoints → _in_replay is True → log suppressed
+    ctx_replay = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={"step1": {"cached": True}},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    assert ctx_replay._in_replay is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_and_send_event(db_pool):
+    """wait_for_event suspends, send_workflow_event wakes and delivers."""
+    from api.workflow_engine import (
+        SuspendWorkflow,
+        WorkflowContext,
+        send_workflow_event,
+    )
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    # First call: event doesn't exist yet → should suspend
+    with pytest.raises(SuspendWorkflow):
+        await ctx.wait_for_event(
+            "approval",
+            event_type="deploy.approval",
+            correlation_id="deploy-123",
+        )
+
+    # Verify wait marker checkpoint was written
+    cp = await db_pool.fetchrow(
+        "SELECT state, step_kind FROM workflow_checkpoints "
+        "WHERE run_id = $1 AND checkpoint_name = 'approval'",
+        run_id,
+    )
+    assert cp is not None
+    assert cp["step_kind"] == "event_wait"
+    state = json.loads(cp["state"]) if isinstance(cp["state"], str) else cp["state"]
+    assert state["_waiting"] is True
+
+    # Mark run as waiting so send_workflow_event can find it
+    await db_pool.execute(
+        "UPDATE workflow_runs SET status = 'waiting' WHERE run_id = $1",
+        run_id,
+    )
+
+    # Send the event
+    result = await send_workflow_event(
+        db_pool,
+        event_type="deploy.approval",
+        correlation_id="deploy-123",
+        payload={"approved": True, "by": "alice"},
+    )
+    assert result["ok"] is True
+    assert result["runs_woken"] == 1
+
+    # Now replay: ctx should find the event and return it
+    checkpoints = {"approval": state}  # still the wait marker
+    ctx2 = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints=checkpoints,
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    payload = await ctx2.wait_for_event(
+        "approval",
+        event_type="deploy.approval",
+        correlation_id="deploy-123",
+    )
+    assert payload["approved"] is True
+    assert payload["by"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_timeout(db_pool):
+    """wait_for_event raises TimeoutError when deadline passes."""
+    from api.workflow_engine import WorkflowContext
+    import datetime as _dt
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+
+    # Simulate a wait marker with a deadline that already passed
+    past_deadline = (
+        _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(hours=1)
+    ).isoformat()
+    checkpoints = {
+        "approval": {
+            "_waiting": True,
+            "event_type": "deploy.approval",
+            "correlation_id": "deploy-456",
+            "deadline": past_deadline,
+        },
+    }
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints=checkpoints,
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    with pytest.raises(TimeoutError):
+        await ctx.wait_for_event(
+            "approval",
+            event_type="deploy.approval",
+            correlation_id="deploy-456",
+        )
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_returns_payload_after_deadline_if_event_exists(db_pool):
+    from api.workflow_engine import WorkflowContext
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO workflow_events (event_type, correlation_id, payload) "
+        "VALUES ('deploy.approval', 'deploy-789', $1::jsonb)",
+        json.dumps({"approved": True, "by": "alice"}),
+    )
+
+    past_deadline = (
+        dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=1)
+    ).isoformat()
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={
+            "approval": {
+                "_waiting": True,
+                "event_type": "deploy.approval",
+                "correlation_id": "deploy-789",
+                "deadline": past_deadline,
+            },
+        },
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    payload = await ctx.wait_for_event(
+        "approval",
+        event_type="deploy.approval",
+        correlation_id="deploy-789",
+    )
+
+    assert payload == {"approved": True, "by": "alice"}
+
+
+@pytest.mark.asyncio
+async def test_wait_for_workflow_returns_completed_child_after_deadline(db_pool):
+    from api.workflow_engine import WorkflowContext
+
+    parent_run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    child_run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'test_parent', 'test-v1', 'hash-parent', $1, 'running', '{}'::jsonb, 'w1')",
+        parent_run_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, output_json, completed_at"
+        ") VALUES ($1, 'test_child', 'test-v1', 'hash-child', $1, 'completed', '{}'::jsonb, $2::jsonb, NOW())",
+        child_run_id,
+        json.dumps({"ok": True}),
+    )
+
+    past_deadline = (
+        dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=1)
+    ).isoformat()
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=parent_run_id,
+        checkpoints={
+            "child.wait": {
+                "_waiting": True,
+                "child_run_id": child_run_id,
+                "workflow_name": "test_child",
+                "deadline": past_deadline,
+            },
+        },
+        lease_s=30.0,
+        worker_id="w1",
+    )
+
+    child = await ctx.wait_for_workflow("child.wait", run_id=child_run_id)
+
+    assert child["run_id"] == child_run_id
+    assert child["status"] == "completed"
+    assert child["output_json"] == {"ok": True}

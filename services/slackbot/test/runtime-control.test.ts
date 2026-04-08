@@ -63,6 +63,7 @@ function createImmediateStreamClient(): any {
   return {
     spawn: vi.fn(async () => ({ assignment_generation: 7 })),
     message: vi.fn(async () => ({ ok: true, attachment_ids: [] })),
+    startWorkflowRun: vi.fn(async () => ({ execution_id: "exe-new", status: "waiting" })),
     execute: vi.fn(async () => ({ execution_id: "exe-new" })),
     streamEvents: vi.fn(() => (async function* () {
       yield {
@@ -77,6 +78,7 @@ function createImmediateStreamClient(): any {
     cancelExecution: vi.fn(async () => ({ ok: true })),
     markFinalDelivered: vi.fn(async () => ({ ok: true })),
     markFinalFailed: vi.fn(async () => ({ ok: true })),
+    renewFinalDeliveryLease: vi.fn(async () => ({ ok: true })),
     claimFinalDeliveries: vi.fn(async () => ({ deliveries: [] })),
     getExecution: vi.fn(async () => ({ status: "completed", result_text: "done" })),
   };
@@ -112,9 +114,12 @@ describe("SlackBot runtime control", () => {
 
     await bot.onNewMention(thread, userMessage("<@bot> please help", { id: "1700000000.000002" }));
 
-    expect(client.message).toHaveBeenCalledTimes(2);
+    expect(client.message).toHaveBeenCalledTimes(1);
     expect(client.message.mock.calls[0][0].messageId).toBe("slack:1700000000.000001");
-    expect(client.message.mock.calls[1][0].messageId).toBe("slack:1700000000.000002");
+    expect(client.startWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(client.startWorkflowRun.mock.calls[0][0].triggerKey).toBe(
+      `slack-thread-turn:${normalizedThreadKey}:slack:1700000000.000002`,
+    );
   });
 
   it("cancels the previous execution before starting a new mention turn", async () => {
@@ -142,6 +147,7 @@ describe("SlackBot runtime control", () => {
     const client = {
       spawn: vi.fn(async () => ({ assignment_generation: 7 })),
       message: vi.fn(async () => ({ ok: true, attachment_ids: [] })),
+      startWorkflowRun: vi.fn(async () => ({ execution_id: `exe-${nextExecution++}`, status: "waiting" })),
       execute: vi.fn(async () => ({ execution_id: `exe-${nextExecution++}` })),
       streamEvents: vi.fn(({ executionId, signal }: { executionId: string; signal?: AbortSignal }) => {
         if (executionId === "exe-1") {
@@ -293,6 +299,13 @@ describe("SlackBot runtime control", () => {
     expect(slack.postMessage).not.toHaveBeenCalled();
     expect(client.markFinalFailed).not.toHaveBeenCalled();
     expect(client.markFinalDelivered).not.toHaveBeenCalled();
+    expect(client.renewFinalDeliveryLease).toHaveBeenCalledWith(
+      "exe-live",
+      expect.objectContaining({
+        consumerId: expect.any(String),
+        leaseSeconds: 90,
+      }),
+    );
   });
 
   it("retries final delivery with flattened tables when Slack rejects blocks", async () => {

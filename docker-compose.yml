@@ -312,10 +312,9 @@ services:
     restart: unless-stopped
 
   fluentbit:
-    image: fluent/fluent-bit:latest
+    build:
+      context: services/fluentbit
     volumes:
-      - ./services/fluentbit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
-      - ./services/fluentbit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
     depends_on:

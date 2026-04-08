@@ -374,6 +374,43 @@ EXECUTION_BY_USER_TOTAL = Counter(
     "Executions by user, harness, and terminal status.",
     ["user_id", "harness", "status"],
 )
+WORKFLOW_RUNS_TOTAL = Counter(
+    "workflow_runs_total",
+    "Total workflow runs by name and terminal status.",
+    ["workflow_name", "status"],
+)
+WORKFLOW_RUN_DURATION_SECONDS = Histogram(
+    "workflow_run_duration_seconds",
+    "Workflow run duration in seconds (queued to completed).",
+    ["workflow_name", "status"],
+    buckets=[1, 5, 10, 30, 60, 120, 300, 600, 1800, 3600],
+)
+WORKFLOW_RUNS_ENQUEUED_TOTAL = Counter(
+    "workflow_runs_enqueued_total",
+    "Total workflow runs enqueued.",
+    ["workflow_name"],
+)
+WORKFLOW_RUNS_CLAIMED_TOTAL = Counter(
+    "workflow_runs_claimed_total",
+    "Total workflow runs claimed by a worker.",
+    ["workflow_name"],
+)
+WORKFLOW_RUN_QUEUE_DELAY_SECONDS = Histogram(
+    "workflow_run_queue_delay_seconds",
+    "Time from enqueue to claim in seconds.",
+    ["workflow_name"],
+    buckets=[0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, 60],
+)
+WORKFLOW_EVENTS_TOTAL = Counter(
+    "workflow_events_total",
+    "Total workflow events sent.",
+    ["event_type"],
+)
+WORKFLOW_RUNS_GAUGE = Gauge(
+    "workflow_runs",
+    "Current workflow runs by status.",
+    ["status"],
+)
 
 # ---------------------------------------------------------------------------
 # Helper functions (same public interface as the old metrics.py)
@@ -448,6 +485,26 @@ def record_execution_by_user(user_id: str, harness: str, status: str) -> None:
     EXECUTION_BY_USER_TOTAL.labels(user_id=user_id, harness=harness, status=status).inc()
 
 
+def record_workflow_run_terminal(workflow_name: str, status: str, duration_s: float) -> None:
+    WORKFLOW_RUNS_TOTAL.labels(workflow_name=workflow_name, status=status).inc()
+    WORKFLOW_RUN_DURATION_SECONDS.labels(workflow_name=workflow_name, status=status).observe(
+        duration_s
+    )
+
+
+def record_workflow_run_enqueued(workflow_name: str) -> None:
+    WORKFLOW_RUNS_ENQUEUED_TOTAL.labels(workflow_name=workflow_name).inc()
+
+
+def record_workflow_run_claimed(workflow_name: str, queue_delay_s: float) -> None:
+    WORKFLOW_RUNS_CLAIMED_TOTAL.labels(workflow_name=workflow_name).inc()
+    WORKFLOW_RUN_QUEUE_DELAY_SECONDS.labels(workflow_name=workflow_name).observe(queue_delay_s)
+
+
+def record_workflow_event_sent(event_type: str) -> None:
+    WORKFLOW_EVENTS_TOTAL.labels(event_type=event_type).inc()
+
+
 def record_usage_observation(
     harness: str,
     model: str | None,
@@ -504,6 +561,15 @@ async def refresh_runtime_metrics(pool: Pool) -> None:
     )
     for row in rows:
         FINAL_DELIVERY_OUTBOX_GAUGE.labels(state=row["state"]).set(row["cnt"])
+
+    WORKFLOW_RUNS_GAUGE.clear_children()
+    rows = await pool.fetch(
+        "SELECT status, COUNT(*) AS cnt FROM workflow_runs "
+        "WHERE status IN ('queued', 'running', 'sleeping', 'waiting') "
+        "GROUP BY status"
+    )
+    for row in rows:
+        WORKFLOW_RUNS_GAUGE.labels(status=row["status"]).set(row["cnt"])
 
 
 # ---------------------------------------------------------------------------

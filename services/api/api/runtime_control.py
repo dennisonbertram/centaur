@@ -1264,6 +1264,17 @@ async def _mark_execution_terminal(
         terminal_reason=terminal_reason,
     )
 
+    try:
+        from api.workflow_engine import notify_execution_terminal
+        await notify_execution_terminal(pool, execution_id)
+    except Exception:
+        log.warning(
+            "workflow_terminal_notify_failed",
+            execution_id=execution_id,
+            thread_key=thread_key,
+            exc_info=True,
+        )
+
 
 async def _touch_execution_progress(
     pool,

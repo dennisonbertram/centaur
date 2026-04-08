@@ -67,6 +67,36 @@ export interface ExecutionAccepted {
   idempotent?: boolean;
 }
 
+export interface WorkflowRunOptions {
+  workflowName: string;
+  triggerKey?: string;
+  input?: Record<string, unknown>;
+  eagerStart?: boolean;
+}
+
+export interface WorkflowRunAccepted {
+  ok: boolean;
+  run_id: string;
+  workflow_name: string;
+  workflow_version?: string;
+  workflow_source_path?: string | null;
+  parent_run_id?: string | null;
+  root_run_id?: string | null;
+  status: string;
+  thread_key?: string | null;
+  execution_id?: string | null;
+  output_json?: Record<string, unknown> | null;
+  error_text?: string | null;
+  latest_checkpoint_name?: string | null;
+  latest_step_kind?: string | null;
+  waiting_on?: Record<string, unknown> | null;
+  child_runs_count?: number;
+  created_at?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  idempotent?: boolean;
+}
+
 export interface StreamEvent {
   eventId: number;
   eventKind: string;
@@ -139,6 +169,65 @@ export class CentaurClient {
       delivery: opts.delivery,
     });
     return data as ExecutionAccepted;
+  }
+
+  async startWorkflowRun(opts: WorkflowRunOptions): Promise<WorkflowRunAccepted> {
+    const { data } = await this.http.post("/workflows/runs", {
+      workflow_name: opts.workflowName,
+      trigger_key: opts.triggerKey,
+      input: opts.input ?? {},
+      eager_start: opts.eagerStart ?? false,
+    });
+    return data as WorkflowRunAccepted;
+  }
+
+  async getWorkflowRun(runId: string): Promise<WorkflowRunAccepted> {
+    const { data } = await this.http.get(`/workflows/runs/${encodeURIComponent(runId)}`);
+    return data as WorkflowRunAccepted;
+  }
+
+  async listWorkflowRuns(opts?: {
+    workflowName?: string;
+    threadKey?: string;
+    status?: string;
+    parentRunId?: string;
+    limit?: number;
+  }): Promise<{ ok: boolean; items: WorkflowRunAccepted[] }> {
+    const { data } = await this.http.get("/workflows/runs", {
+      params: {
+        workflow_name: opts?.workflowName,
+        thread_key: opts?.threadKey,
+        status: opts?.status,
+        parent_run_id: opts?.parentRunId,
+        limit: opts?.limit,
+      },
+    });
+    return data as { ok: boolean; items: WorkflowRunAccepted[] };
+  }
+
+  async getWorkflowChildren(runId: string, limit = 200): Promise<{ ok: boolean; items: WorkflowRunAccepted[] }> {
+    const { data } = await this.http.get(`/workflows/runs/${encodeURIComponent(runId)}/children`, {
+      params: { limit },
+    });
+    return data as { ok: boolean; items: WorkflowRunAccepted[] };
+  }
+
+  async cancelWorkflowRun(runId: string): Promise<WorkflowRunAccepted> {
+    const { data } = await this.http.post(`/workflows/runs/${encodeURIComponent(runId)}/cancel`);
+    return data as WorkflowRunAccepted;
+  }
+
+  async sendWorkflowEvent(opts: {
+    eventType: string;
+    correlationId: string;
+    payload?: Record<string, unknown>;
+  }): Promise<Record<string, unknown>> {
+    const { data } = await this.http.post("/workflows/events", {
+      event_type: opts.eventType,
+      correlation_id: opts.correlationId,
+      payload: opts.payload ?? {},
+    });
+    return data as Record<string, unknown>;
   }
 
   async *streamEvents(opts: {
@@ -226,6 +315,17 @@ export class CentaurClient {
       platform: opts.platform,
     });
     return data as { deliveries: Array<Record<string, unknown>> };
+  }
+
+  async renewFinalDeliveryLease(executionId: string, opts: { consumerId: string; leaseSeconds?: number }) {
+    const { data } = await this.http.post(
+      `/agent/final-deliveries/${encodeURIComponent(executionId)}/heartbeat`,
+      {
+        consumer_id: opts.consumerId,
+        lease_seconds: opts.leaseSeconds ?? 60,
+      },
+    );
+    return data as Record<string, unknown>;
   }
 
   async markFinalDelivered(executionId: string, consumerId?: string) {
