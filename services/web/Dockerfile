@@ -1,4 +1,4 @@
-FROM node:22-slim AS base
+FROM node:22-slim@sha256:f3a68cf41a855d227d1b0ab832bed9749469ef38cf4f58182fb8c893bc462383 AS base
 
 RUN corepack enable pnpm
 
@@ -9,7 +9,7 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml* ./
 COPY packages/ packages/
 COPY services/web/package.json services/web/
 COPY services/web/patches/ services/web/patches/
-RUN cd services/web && pnpm install --frozen-lockfile 2>/dev/null || pnpm install
+RUN cd services/web && pnpm install --frozen-lockfile
 
 # Copy source and build
 FROM base AS builder
@@ -17,7 +17,7 @@ COPY services/web/ services/web/
 RUN cd services/web && pnpm build
 
 # Production
-FROM node:22-slim AS runner
+FROM node:22-slim@sha256:f3a68cf41a855d227d1b0ab832bed9749469ef38cf4f58182fb8c893bc462383 AS runner
 RUN apt-get update && apt-get install -y --no-install-recommends curl jq && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
