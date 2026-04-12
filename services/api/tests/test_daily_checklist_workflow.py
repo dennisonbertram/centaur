@@ -4,7 +4,9 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 
 from workflows.daily_checklist_digest import (
+    Input,
     _extract_dated_sections,
+    _manual_slack_target,
     _select_previous_section,
     _start_of_week_utc,
 )
@@ -70,3 +72,15 @@ def test_start_of_week_uses_local_monday_boundary() -> None:
 
     assert week_start == dt.date(2026, 4, 6)
     assert week_start_utc == dt.datetime(2026, 4, 6, 4, 0, tzinfo=dt.timezone.utc)
+
+
+def test_manual_slack_target_prefers_explicit_slack_fields() -> None:
+    channel, thread_ts = _manual_slack_target(
+        Input(
+            slack_channel="asher-daily-checklist",
+            slack_thread_ts="1776028628.021259",
+        )
+    )
+
+    assert channel == "asher-daily-checklist"
+    assert thread_ts == "1776028628.021259"

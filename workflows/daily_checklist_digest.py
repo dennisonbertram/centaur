@@ -33,6 +33,8 @@ class Input:
     document_url: str = ""
     doc_tab_id: str = ""
     doc_tab_title: str = "Daily Standup"
+    slack_channel: str = ""
+    slack_thread_ts: str = ""
     slack_user_id: str = ""
     slack_user_name: str = ""
     slack_search_terms: list[str] = field(default_factory=list)
@@ -282,6 +284,15 @@ def _truncate_utterances(utterances: list[str], limit: int = 6) -> list[str]:
     return trimmed
 
 
+def _manual_slack_target(inp: Input) -> tuple[str, str | None]:
+    channel = inp.slack_channel.strip()
+    if not channel:
+        return "", None
+
+    thread_ts = inp.slack_thread_ts.strip() or None
+    return channel, thread_ts
+
+
 async def _collect_previous_day_section(
     ctx: WorkflowContext,
     inp: Input,
@@ -505,12 +516,22 @@ async def _run_iteration(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         slack_threads=slack_threads,
     )
     result = await ctx.agent_turn(prompt)
+    result_text = ""
+    if isinstance(result, dict):
+        result_text = str(result.get("result_text") or "").strip()
+
+    slack_channel, slack_thread_ts = _manual_slack_target(inp)
+    if result_text and slack_channel:
+        await ctx.post_to_slack(slack_channel, result_text, thread_ts=slack_thread_ts)
+
     return {
         "ran_at": now_local.isoformat(),
         "granola_week_start": granola_week_start.isoformat(),
         "previous_day_section": previous_day_section,
         "granola_items": granola_items,
         "slack_threads": slack_threads,
+        "slack_posted_to": slack_channel or None,
+        "slack_thread_ts": slack_thread_ts,
         "result": result,
     }
 
