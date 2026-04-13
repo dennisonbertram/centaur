@@ -70,17 +70,10 @@ Centaur's entire security-critical core is **~5,400 lines of Python**: the [API]
               └────────────────┘     └─────────┬──────────┘
                                                │ tool calls + HTTPS proxy
                                                v
-                                      ┌────────────────────┐
-                                      │ firewall           │
-                                      │ mitmproxy          │
-                                      └─────────┬──────────┘
-                                                │
-                         ┌──────────────────────┴──────────────────────┐
-                         v                                             v
-                ┌────────────────────┐                       external LLMs
-                │ secrets (:8100)    │                       + external APIs
-                │ 1Password / env    │
-                └────────────────────┘
+              ┌────────────────┐     ┌────────────────────┐
+              │ secrets        │────>│ firewall           │────> external LLMs
+              │ 1Password/env  │     │ mitmproxy          │      + external APIs
+              └────────────────┘     └────────────────────┘
 
         Observability: api / slackbot / firewall / fluentbit ->
                        VictoriaLogs + VictoriaMetrics -> Grafana
