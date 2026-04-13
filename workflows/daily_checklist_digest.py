@@ -293,13 +293,70 @@ def _manual_slack_target(inp: Input) -> tuple[str, str | None]:
     return channel, thread_ts
 
 
+def _iteration_prefix(iteration: int) -> str:
+    return f"iteration_{iteration}"
+
+
+async def _call_tool_step(
+    ctx: WorkflowContext,
+    step_name: str,
+    tool: str,
+    method: str,
+    **kwargs: Any,
+) -> Any:
+    from api.app import get_tool_manager
+
+    async def _call() -> Any:
+        tm = get_tool_manager()
+        raw = await tm.call_tool(tool, method, kwargs or {})
+        try:
+            return json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            return {"raw": raw}
+
+    return await ctx.step(step_name, _call, step_kind="tool_call")
+
+
+async def _post_to_slack_step(
+    ctx: WorkflowContext,
+    step_name: str,
+    channel: str,
+    text: str,
+    *,
+    thread_ts: str | None = None,
+) -> dict[str, Any]:
+    from api.app import get_tool_manager
+
+    async def _post() -> dict[str, Any]:
+        tm = get_tool_manager()
+        args: dict[str, Any] = {
+            "channel": channel,
+            "text": text,
+            "no_attribution": True,
+        }
+        if thread_ts:
+            args["thread_ts"] = thread_ts
+        raw = await tm.call_tool("slack", "send_message", args)
+        try:
+            return json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            return {"raw": raw}
+
+    return await ctx.step(step_name, _post, step_kind="slack_post")
+
+
 async def _collect_previous_day_section(
     ctx: WorkflowContext,
     inp: Input,
     *,
+    step_prefix: str,
     today_local: dt.date,
 ) -> dict[str, Any]:
-    document = await ctx.tools.gsuite.docs_get(
+    document = await _call_tool_step(
+        ctx,
+        f"{step_prefix}.gsuite_docs_get",
+        "gsuite",
+        "docs_get",
         document_id=_resolve_document_id(inp),
         include_tabs=True,
     )
@@ -319,13 +376,18 @@ async def _collect_granola_items(
     ctx: WorkflowContext,
     inp: Input,
     *,
+    step_prefix: str,
     updated_after: dt.datetime,
 ) -> list[dict[str, Any]]:
     owner_email = inp.granola_owner_email.strip().lower()
     if not owner_email:
         return []
 
-    notes = await ctx.tools.granola.list_all_notes(
+    notes = await _call_tool_step(
+        ctx,
+        f"{step_prefix}.granola_list_all_notes",
+        "granola",
+        "list_all_notes",
         limit=100,
         updated_after=updated_after.isoformat(),
     )
@@ -339,11 +401,17 @@ async def _collect_granola_items(
     ]
 
     collected: list[dict[str, Any]] = []
-    for note in matching_notes[: inp.max_granola_notes]:
+    for note_index, note in enumerate(matching_notes[: inp.max_granola_notes], start=1):
         note_id = str(note.get("id") or "").strip()
         if not note_id:
             continue
-        transcript = await ctx.tools.granola.get_transcript(note_id=note_id)
+        transcript = await _call_tool_step(
+            ctx,
+            f"{step_prefix}.granola_get_transcript_{note_index}",
+            "granola",
+            "get_transcript",
+            note_id=note_id,
+        )
         if not isinstance(transcript, list):
             continue
 
@@ -373,12 +441,17 @@ async def _collect_slack_threads(
     ctx: WorkflowContext,
     inp: Input,
     *,
+    step_prefix: str,
     previous_day: dt.date,
 ) -> list[dict[str, Any]]:
     aggregated: dict[str, dict[str, Any]] = {}
 
-    for term in _unique_search_terms(inp):
-        results = await ctx.tools.slack.search_messages(
+    for term_index, term in enumerate(_unique_search_terms(inp), start=1):
+        results = await _call_tool_step(
+            ctx,
+            f"{step_prefix}.slack_search_messages_{term_index}",
+            "slack",
+            "search_messages",
             query=_slack_query_for_term(term, previous_day),
             max_results=max(inp.max_slack_threads, 1),
             messages_per_channel=100,
@@ -418,7 +491,11 @@ async def _collect_slack_threads(
             }
 
             if channel_id and thread_ts and int(entry["reply_count"] or 0) > 0:
-                replies = await ctx.tools.slack.get_thread_replies(
+                replies = await _call_tool_step(
+                    ctx,
+                    f"{step_prefix}.slack_get_thread_replies_{len(aggregated) + 1}",
+                    "slack",
+                    "get_thread_replies",
                     channel_id=channel_id,
                     thread_ts=thread_ts,
                     limit=max(inp.max_thread_replies, 1),
@@ -486,25 +563,29 @@ def _build_prompt(
     )
 
 
-async def _run_iteration(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
+async def _run_iteration(inp: Input, ctx: WorkflowContext, *, iteration: int) -> dict[str, Any]:
     timezone = ZoneInfo(inp.timezone)
     now_local = dt.datetime.now(dt.timezone.utc).astimezone(timezone)
     previous_day, previous_day_start_utc = _start_of_previous_day_utc(now_local)
     granola_week_start, granola_week_start_utc = _start_of_week_utc(now_local)
+    step_prefix = _iteration_prefix(iteration)
 
     previous_day_section = await _collect_previous_day_section(
         ctx,
         inp,
+        step_prefix=step_prefix,
         today_local=now_local.date(),
     )
     granola_items = await _collect_granola_items(
         ctx,
         inp,
+        step_prefix=step_prefix,
         updated_after=granola_week_start_utc,
     )
     slack_threads = await _collect_slack_threads(
         ctx,
         inp,
+        step_prefix=step_prefix,
         previous_day=previous_day,
     )
     prompt = _build_prompt(
@@ -515,14 +596,20 @@ async def _run_iteration(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         granola_items=granola_items,
         slack_threads=slack_threads,
     )
-    result = await ctx.agent_turn(prompt)
+    result = await ctx.run_agent(f"{step_prefix}.agent_turn", text=prompt)
     result_text = ""
     if isinstance(result, dict):
         result_text = str(result.get("result_text") or "").strip()
 
     slack_channel, slack_thread_ts = _manual_slack_target(inp)
     if result_text and slack_channel:
-        await ctx.post_to_slack(slack_channel, result_text, thread_ts=slack_thread_ts)
+        await _post_to_slack_step(
+            ctx,
+            f"{step_prefix}.post_slack",
+            slack_channel,
+            result_text,
+            thread_ts=slack_thread_ts,
+        )
 
     return {
         "ran_at": now_local.isoformat(),
@@ -556,21 +643,22 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
 
     if inp.send_immediately:
         iteration += 1
-        last_result = await _run_iteration(inp, ctx)
+        last_result = await _run_iteration(inp, ctx, iteration=iteration)
         if inp.max_iterations > 0 and iteration >= inp.max_iterations:
             return {"status": "done", "iterations": iteration, "last_result": last_result}
 
     while True:
         now_local = dt.datetime.now(dt.timezone.utc).astimezone(ZoneInfo(inp.timezone))
+        next_iteration = iteration + 1
         await ctx.sleep(
-            "wait_until_next_run",
+            f"wait_until_next_run_{next_iteration}",
             _next_run_delta(
                 now_local,
                 run_hour=max(0, min(inp.run_hour, 23)),
                 run_minute=max(0, min(inp.run_minute, 59)),
             ),
         )
-        iteration += 1
-        last_result = await _run_iteration(inp, ctx)
+        iteration = next_iteration
+        last_result = await _run_iteration(inp, ctx, iteration=iteration)
         if inp.max_iterations > 0 and iteration >= inp.max_iterations:
             return {"status": "done", "iterations": iteration, "last_result": last_result}

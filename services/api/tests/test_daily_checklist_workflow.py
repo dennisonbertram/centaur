@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from workflows.daily_checklist_digest import (
     Input,
     _extract_dated_sections,
+    _iteration_prefix,
     _manual_slack_target,
     _select_previous_section,
     _start_of_week_utc,
@@ -84,3 +85,8 @@ def test_manual_slack_target_prefers_explicit_slack_fields() -> None:
 
     assert channel == "asher-daily-checklist"
     assert thread_ts == "1776028628.021259"
+
+
+def test_iteration_prefix_changes_per_run_cycle() -> None:
+    assert _iteration_prefix(1) == "iteration_1"
+    assert _iteration_prefix(2) == "iteration_2"
