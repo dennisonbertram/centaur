@@ -22,21 +22,29 @@
 
 ## What's Centaur?
 
-Centaur is infrastructure for teams that want to deploy AI agents to their organization — in Slack, on the web, or via API — with shared tools, durable multi-step workflows, and security that doesn't require trusting the agent with your keys.
+Most teams using AI agents hit the same wall: one engineer gets a great setup, but nobody else can replicate it. Everyone configures their own tools, manages their own keys, and builds their own workflows from scratch. There's no shared infrastructure, no compounding, and no way to trust the agent with real credentials.
 
-1. **Collaboration-first**: Deploy an agent your whole team can talk to. Users interact via [Slack](services/slackbot/) or the [REST API](AGENTS.md#service-interface-contracts) directly. Each conversation gets its own isolated sandbox, but tools, workflows, and knowledge are shared across the organization. Add a new tool or workflow and everyone has access immediately — no per-user setup.
+Centaur fixes this. Deploy an AI agent that your whole team can talk to — in Slack or via API — with shared tools, durable multi-step workflows, and security that doesn't require trusting the agent with your keys. One person builds a workflow, and the entire team has access immediately.
 
-2. **Durable workflows**: Compose multi-step agent pipelines that survive crashes and span hours or days. [Checkpoint/replay](AGENTS.md#durable-workflows) means you can `sleep` for five minutes between polling iterations, `wait_for_event` from an external webhook, or chain parent→child agent turns — all with exactly-once step execution. Cron schedules, external events, and child workflows are built in. Just drop a Python file in [`workflows/`](workflows/).
+### One person's breakthrough becomes everyone's baseline
 
-3. **Defense in depth**: Each conversation runs in an isolated Docker container on an internal-only network. A [MITM proxy](services/firewall/) injects credentials at the network boundary — the agent never holds them directly. The firewall enforces per-host credential scoping, HTTP method restrictions, SSRF protection, rate limiting, response scanning for leaked secrets, and structured audit logging. A compromised container can still make authenticated requests through the proxy, but it can't extract credentials, reach internal services, or operate undetected.
+Someone writes a 20-line Python file that checks CI every 5 minutes and posts results to Slack. They drop it in [`workflows/`](workflows/). Now every team has that capability — no setup, no configuration, no asking an engineer. The same applies to [tool plugins](tools/): add a new API integration, and every agent conversation can use it instantly. Over 60 tools ship out of the box, all hot-reloadable with zero downtime.
 
-4. **Harness-agnostic**: Not locked to a single AI runtime. Run [Amp](https://ampcode.com), Claude Code, Codex, or any CLI-based agent inside the sandbox. The sandbox image ships with Node.js, Rust, Python, and git — agents can `git clone`, `cargo build`, and run tests in a real Linux environment.
+### Agents that work while you don't
 
-5. **Extensible by design**: Convention-based Python [tool plugins](tools/) (60+) and [durable workflow plugins](workflows/) are auto-discovered and hot-reloaded — no core code changes to extend the system. The [`centaur_sdk`](centaur_sdk/) is a standalone pip-installable package for building tools outside the repo. Private extensions via submodule + docker-compose override — no fork required.
+Most agent runtimes handle a single request-response turn. Centaur's [durable workflow engine](AGENTS.md#durable-workflows) lets agents run for hours or days — sleeping between polling iterations, waiting for external webhooks, chaining parent→child agent turns — all with exactly-once step execution backed by Postgres. Cron schedules are built in. A daily digest, a recurring monitor, a multi-step approval pipeline — these are just Python functions that checkpoint and resume.
 
-6. **Observable by default**: Every service writes structured JSON to stdout. [Fluent Bit](services/fluentbit/) auto-discovers all containers (including ephemeral agent sandboxes) and ships logs to [VictoriaLogs](https://docs.victoriametrics.com/victorialogs/). Metrics push to [VictoriaMetrics](https://docs.victoriametrics.com/). The [firewall](services/firewall/) emits audit events for every outbound request. Query everything in [Grafana](services/grafana/) or via [LogsQL](https://docs.victoriametrics.com/victorialogs/logsql/) CLI.
+### The agent never sees your secrets
 
-Centaur's entire security-critical core is **~5,400 lines of Python**: the [API](services/api/) (3,900), [firewall](services/firewall/) (1,000), and [secrets manager](services/secrets/) (470). That's what runs your agents, guards your keys, and enforces isolation. Everything else — 60+ [tool plugins](tools/), [durable workflows](AGENTS.md#durable-workflows), a [Slack interface](services/slackbot/), infra config — is a leaf-node integration that doesn't touch auth, secrets, or sandbox boundaries.
+Each conversation runs in an isolated Docker container on an internal-only network. A [MITM proxy](services/firewall/) injects real credentials at the network boundary — the agent never holds them directly. It can make authenticated API calls through the proxy, but it can't extract keys, reach internal services, or operate undetected. Every outbound request is audit-logged. Response bodies are scanned for leaked secrets and redacted in real-time.
+
+### Bring any agent runtime
+
+Not locked to a single AI harness. Run [Amp](https://ampcode.com), Claude Code, Codex, or any CLI-based agent inside the sandbox. The container ships with Node.js, Rust, Python, and git — agents can `git clone`, `cargo build`, and run tests in a real Linux environment.
+
+### Small, auditable core
+
+Centaur's entire security-critical core is **~5,400 lines of Python**: the [API](services/api/) (3,900), [firewall](services/firewall/) (1,000), and [secrets manager](services/secrets/) (470). That's what runs your agents, guards your keys, and enforces isolation. Everything else — 60+ [tool plugins](tools/), [durable workflows](AGENTS.md#durable-workflows), a [Slack interface](services/slackbot/), observability — is a leaf-node integration that doesn't touch auth, secrets, or sandbox boundaries.
 
 ## Architecture
 
