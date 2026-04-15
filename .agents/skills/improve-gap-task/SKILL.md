@@ -1,0 +1,199 @@
+---
+name: improve-gap-task
+description: "Researches, plans, implements, validates, and opens a focused PR for one selected self-improvement gap. Use when executing one chosen backlog item from the nightly self-improvement workflow."
+---
+
+# Improve Gap Task
+
+Execute one focused self-improvement fix from research through PR creation.
+
+## Scope
+
+Use this skill only when the workflow has already selected a single fix packet.
+
+The workflow phases are fixed and must stay focused:
+
+1. research
+2. plan
+3. implement
+4. validate
+5. open PR
+
+Keep the work narrow. One selected backlog item should become one focused PR.
+
+## Working Rules
+
+- Start from the structured fix packet, not from a blank slate.
+- Use `git-branch paradigmxyz/centaur` before editing because the mounted repo is read-only.
+- Keep the change small and directly tied to the selected failure mode.
+- Prefer the smallest fix that materially improves user outcomes.
+- Do not broaden scope into adjacent cleanup.
+
+## Phase Expectations
+
+### Research
+
+Produce a short structured answer covering:
+
+- root cause (cite specific code, prompts, or patterns)
+- affected files or prompts or skills
+- acceptance criteria (how will we know this worked?)
+- most likely fix type
+- risks or unknowns
+- verification plan (how to test the fix)
+
+**Falsifiability rule:** If you cannot articulate how to verify the fix worked, the fix is speculative. Downgrade confidence and say so.
+
+### Plan
+
+Produce a short implementation plan covering:
+
+- files to touch
+- intended change (specific, not "improve the prompt")
+- validation plan (exact commands or checks to run)
+- PR title draft
+- expected impact on the scored dimension(s)
+
+### Implement
+
+Make the change in the writable clone.
+
+### Validate
+
+Run the smallest relevant checks. Prefer targeted tests or repo checks over broad full-stack suites unless the change touches infra-wide behavior.
+
+### Open PR
+
+Open one focused PR.
+
+## Fix Type Selection: Decision Tree
+
+Before committing to a fix type, work through this decision tree:
+
+1. **Is this failure caused by the agent not knowing what to do, or not being able to do it?**
+   - Not knowing what to do → `prompt_tweak`, `new_skill`, or `new_persona`
+   - Not being able to do it → `bug_fix`, `tool_improvement`, or `workflow_fix`
+
+2. **Does this failure pattern appear in 2+ reviewed tasks?**
+   - One task only → likely cosmetic or one-off. Provide evidence why it is still worth fixing.
+   - 2+ tasks → proceed; this is a systemic pattern.
+
+3. **Can the fix be verified by re-running the failing scenario?**
+   - Yes → proceed with verification plan
+   - No → the fix is speculative. Downgrade priority.
+
+4. **Does the fix risk regressing any currently-passing behavior?**
+   - Yes → must include a regression check in the validation phase
+   - No → proceed
+
+5. **Is this a missing capability (recurring demand with no existing support)?**
+   - Yes → `new_skill` (procedural, repeatable workflow) or `new_persona` (stance, style, decision framing)
+   - No → `bug_fix`, `workflow_fix`, `prompt_tweak`, or `tool_improvement`
+
+## Fix Type Rules
+
+Allowed fix types:
+
+- `bug_fix`
+- `workflow_fix`
+- `prompt_tweak`
+- `tool_improvement`
+- `new_skill`
+- `new_persona`
+
+Treat `new_skill` and `new_persona` as first-class fix types.
+
+If the selected fix type is `new_skill` or `new_persona`, include an explicit justification answering all three questions:
+
+1. Why is a new capability the right fix instead of a code, workflow, prompt, or tool change?
+2. What recurring user demand pattern does this serve?
+3. How would the new skill or persona be triggered and used?
+
+Do not hand-wave this. Make the justification concrete and tied to evidence from the reviewed tasks.
+
+## PR Metadata Block
+
+The PR body must include the hidden metadata block provided by the workflow.
+
+Do not edit the markers. Preserve the JSON payload exactly.
+
+## PR Labels
+
+The PR must include these labels:
+
+- `self-improve`
+- `fix-type:<type>` where `<type>` is the selected fix type
+
+After opening the PR, verify with `gh pr view` that labels and metadata block are present.
+
+## Output Contract
+
+Return JSON only in each phase.
+
+### Research output
+
+```json
+{
+  "root_cause": "",
+  "fix_type": "workflow_fix",
+  "affected_files": [""],
+  "acceptance_criteria": [""],
+  "verification_plan": [""],
+  "risks": [""],
+  "confidence": "high",
+  "new_capability_justification": ""
+}
+```
+
+### Plan output
+
+```json
+{
+  "files": [""],
+  "plan": [""],
+  "validation": [""],
+  "pr_title": "",
+  "expected_impact": ""
+}
+```
+
+### Implement output
+
+```json
+{
+  "changed_files": [""],
+  "summary": ""
+}
+```
+
+### Validate output
+
+```json
+{
+  "checks": [
+    {
+      "command": "",
+      "status": "passed"
+    }
+  ],
+  "summary": "",
+  "regression_check": ""
+}
+```
+
+### Open PR output
+
+```json
+{
+  "branch": "",
+  "commit": "",
+  "pr_number": 0,
+  "pr_url": "",
+  "pr_title": "",
+  "verified_handoff": true
+}
+```
+
+## Reference Files
+
+- Read `references/history.md` for the intervention log format and prior fix context.

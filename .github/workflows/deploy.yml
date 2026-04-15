@@ -70,3 +70,145 @@ jobs:
             "${{ github.repository }}" \
             "${{ job.status }}" \
             "$ERROR_LOG"
+
+      - name: Trigger self-improve deploy notifier
+        if: success()
+        continue-on-error: true
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          DEPLOYED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          NOTIFIER_INPUT=$(DEPLOYED_AT="$DEPLOYED_AT" python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          START = "<!-- self_improve_metadata_v1:start -->"
+          END = "<!-- self_improve_metadata_v1:end -->"
+          ZERO_SHA = "0" * 40
+
+          before = os.environ.get("BEFORE_SHA", "").strip()
+          after = os.environ.get("AFTER_SHA", "").strip()
+          repo = os.environ.get("REPO", "paradigmxyz/centaur").strip()
+          deployed_at = os.environ.get("DEPLOYED_AT", "").strip()
+
+          payload = {
+              "before_sha": before,
+              "after_sha": after,
+              "repo": repo,
+              "status": "success",
+              "deployed_at": deployed_at,
+              "merged_prs": [],
+              "notifications": [],
+          }
+
+          def gh_json(*args):
+              output = subprocess.check_output(["gh", *args], text=True)
+              return json.loads(output)
+
+          def extract_metadata(body):
+              if START not in body or END not in body:
+                  return None
+              start = body.index(START) + len(START)
+              end = body.index(END, start)
+              raw = body[start:end].strip()
+              if not raw:
+                  return None
+              try:
+                  return json.loads(raw)
+              except json.JSONDecodeError:
+                  return None
+
+          if before and after and before != ZERO_SHA:
+              compare = gh_json("api", f"repos/{repo}/compare/{before}...{after}")
+              pr_numbers = set()
+              for commit in compare.get("commits", []):
+                  message = commit.get("commit", {}).get("message", "")
+                  for match in re.findall(r"#(\d+)", message):
+                      pr_numbers.add(int(match))
+
+              merged_prs = []
+              notifications = []
+              for pr_number in sorted(pr_numbers):
+                  pr = gh_json(
+                      "pr",
+                      "view",
+                      str(pr_number),
+                      "--repo",
+                      repo,
+                      "--json",
+                      "number,url,body,labels",
+                  )
+                  labels = {label.get("name", "") for label in pr.get("labels", [])}
+                  if "self-improve" not in labels:
+                      continue
+
+                  metadata = extract_metadata(pr.get("body", ""))
+                  if not isinstance(metadata, dict):
+                      continue
+
+                  summary = str(
+                      metadata.get("summary") or f"Self-improvement PR #{pr_number}"
+                  ).strip()
+                  merged_prs.append(
+                      {
+                          "pr_number": pr_number,
+                          "pr_url": str(pr.get("url", "")).strip(),
+                          "summary": summary,
+                      }
+                  )
+
+                  for thread in metadata.get("source_threads", []):
+                      if not isinstance(thread, dict):
+                          continue
+                      thread_key = str(thread.get("thread_key") or "").strip()
+                      channel = str(thread.get("channel") or "").strip()
+                      thread_ts = str(thread.get("thread_ts") or "").strip()
+                      if not channel and not thread_ts and thread_key:
+                          parts = thread_key.split(":")
+                          if len(parts) == 2 and parts[0] and parts[1]:
+                              channel, thread_ts = parts
+                          elif len(parts) == 3 and parts[1] and parts[2]:
+                              channel, thread_ts = parts[1], parts[2]
+                      if not thread_key and channel and thread_ts:
+                          thread_key = f"{channel}:{thread_ts}"
+                      if not (thread_key and channel and thread_ts):
+                          continue
+                      notifications.append(
+                          {
+                              "pr_number": pr_number,
+                              "pr_url": str(pr.get("url", "")).strip(),
+                              "thread_key": thread_key,
+                              "channel": channel,
+                              "thread_ts": thread_ts,
+                              "summary": summary,
+                          }
+                      )
+
+              payload["merged_prs"] = merged_prs
+              payload["notifications"] = notifications
+
+          print(json.dumps(payload, separators=(",", ":"), ensure_ascii=False))
+          PY
+          )
+
+          if [ "$(echo "$NOTIFIER_INPUT" | jq '(.merged_prs | length) + (.notifications | length)')" -eq 0 ]; then
+            echo "No self-improve PRs in deployed range"
+            exit 0
+          fi
+
+          PAYLOAD=$(jq -cn \
+            --arg trigger "self-improve-deploy:${AFTER_SHA}" \
+            --argjson input "$NOTIFIER_INPUT" \
+            '{
+              workflow_name: "self_improve_deploy_notifier",
+              trigger_key: $trigger,
+              input: $input
+            }')
+
+          docker exec centaur-api-1 curl -sf -X POST http://localhost:8000/workflows/runs \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" > /dev/null
