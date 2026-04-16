@@ -129,6 +129,8 @@ Only select builds where:
 - The implementation is small enough for one focused PR
 - The user value is clear
 
+Each selected build MUST additionally include a `slack_narrative` field — a 2–4 sentence plain-English note that names the specific users who surfaced the pattern, describes what they were trying to do, and explains why this opportunity is worth building now. Use the `source_user_name` field on each evidence pack to ground the narrative in real people. This field is posted to the internal `ai-v2` Slack channel and is stripped before the implementing agent sees the fix packet, so user names and concrete task details are encouraged here. Do NOT invent situations — stay grounded in provided evidence.
+
 If no opportunity meets that bar, return an empty `selected_builds` array. Observations still go in `opportunities` for the scorecard.
 
 ## What Not To Do

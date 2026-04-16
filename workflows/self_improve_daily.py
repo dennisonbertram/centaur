@@ -49,7 +49,7 @@ def _env_positive_int(name: str, default: int) -> int:
 
 
 REVIEW_WINDOW_HOURS_DEFAULT = _env_positive_int("SELF_IMPROVE_REVIEW_WINDOW_HOURS", 24)
-MAX_SELECTED_FIXES_DEFAULT = _env_positive_int("SELF_IMPROVE_MAX_SELECTED_FIXES", 1)
+MAX_SELECTED_FIXES_DEFAULT = _env_positive_int("SELF_IMPROVE_MAX_SELECTED_FIXES", 3)
 CANDIDATE_LIMIT_DEFAULT = _env_positive_int("SELF_IMPROVE_CANDIDATE_LIMIT", 5)
 CANDIDATE_FETCH_FACTOR = _env_positive_int("SELF_IMPROVE_CANDIDATE_FETCH_FACTOR", 4)
 REVIEW_PREFERRED_KEYS = (
@@ -166,6 +166,19 @@ def _normalize_message(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _message_user_display(message: dict[str, Any]) -> str:
+    metadata = message.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        return ""
+    name = str(
+        metadata.get("user_name")
+        or metadata.get("name")
+        or metadata.get("username")
+        or ""
+    ).strip()
+    return name
+
+
 def _serialize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     payload: list[dict[str, Any]] = []
     for message in messages:
@@ -179,6 +192,7 @@ def _serialize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 else None,
                 "text": message.get("text", ""),
                 "part_types": list(message.get("part_types") or []),
+                "user_name": _message_user_display(message),
             }
         )
     return payload
@@ -224,6 +238,7 @@ def _compact_task_summary(task: dict[str, Any]) -> dict[str, Any]:
     return {
         "task_id": task.get("task_id"),
         "thread_key": task.get("thread_key"),
+        "source_user_name": str(task.get("source_user_name") or ""),
         "ask_text": str(task.get("ask_text") or "")[:500],
         "status": task.get("status"),
         "terminal_reason": task.get("terminal_reason"),
@@ -398,6 +413,9 @@ def _reconstruct_task_from_thread(
     ask_text = (
         source_message.get("text", "") if source_message else str(run.get("ask_text") or "")
     ).strip()
+    source_user_name = (
+        _message_user_display(source_message) if source_message else ""
+    )
     prior_messages = [
         message
         for message in thread_messages
@@ -427,6 +445,7 @@ def _reconstruct_task_from_thread(
         "thread_ts": thread_ts,
         "source_message_id": source_message_id,
         "source_created_at": source_created_at.isoformat(),
+        "source_user_name": source_user_name,
         "ask_text": ask_text,
         "prior_context": _serialize_messages(prior_context),
         "followups": _serialize_messages(followups),
@@ -727,6 +746,7 @@ async def _collect_evidence_packs(
                 "thread_ts": task["thread_ts"],
                 "source_message_id": task["source_message_id"],
                 "source_created_at": task["source_created_at"],
+                "source_user_name": task.get("source_user_name", ""),
                 "ask_text": task["ask_text"],
                 "prior_context": task["prior_context"],
                 "followups": task["followups"],
@@ -833,9 +853,22 @@ async def _run_batch_review_pass(
         Each `selected_fixes` entry MUST include:
         `title`, `fix_type`, `target_surface`, `what_to_change`,
         `dominant_failure_mode`, `priority`, `why_now`, `evidence_quotes`,
-        `source_threads`, `representative_tasks`.
+        `source_threads`, `representative_tasks`, `slack_narrative`.
         The `target_surface` must name a real file in the Centaur codebase.
         Vague recommendations are not acceptable.
+
+        `slack_narrative` is a 2-4 sentence human note for the internal
+        `ai-v2` Slack channel. Use the `source_user_name` on each evidence
+        pack to name who surfaced the issue and describe what they were
+        trying to do. This field is posted internally and stripped before
+        any PR is written, so user names and concrete session details are
+        encouraged here.
+
+        Prefer structural fix types (workflow_fix, bug_fix, tool_improvement,
+        new_skill, new_persona) when the root cause is structural. Reach for
+        `prompt_tweak` only when the root cause is a genuine instructional
+        gap — if perfect prompt compliance would not prevent the failure, a
+        code-level fix is the right answer even if the diff is bigger.
 
         Progress reporting: Generating the final review JSON can be long.
         Between evaluating each task (before you start writing the final JSON
@@ -904,6 +937,14 @@ async def _run_learning_synthesis_pass(
         Every opportunity must name a specific target_surface (file path) and a
         concrete implementation_sketch.
         Select up to {max_selected_builds} opportunities for autonomous implementation.
+        Each `selected_builds` entry MUST include `slack_narrative` — 2-4
+        sentences of plain-English prose that name the users who surfaced the
+        pattern (use `source_user_name` from each evidence pack), describe
+        what they were trying to do, and explain why this opportunity is
+        worth building now. This narrative is posted internally on `ai-v2`
+        and stripped before the implementing agent sees the fix packet, so
+        names and concrete session details are encouraged here. Stay grounded
+        in provided evidence — do not invent situations.
         Return JSON only matching the output contract in the skill.
 
         Evidence pack batch:
@@ -965,6 +1006,35 @@ def _mean_composite(review: dict[str, Any]) -> float:
     return round(sum(scores) / len(scores), 1) if scores else 0.0
 
 
+def _slack_pr_link(pr_number: int | str, pr_url: str) -> str:
+    """Render a PR link in Slack's native mrkdwn syntax.
+
+    Slack does not render GitHub-style `[text](url)` markdown links in
+    regular messages — they come through as literal text. Slack's own
+    link format is `<url|text>`.
+    """
+    number = str(pr_number).strip()
+    url = str(pr_url).strip()
+    if not url:
+        return f"#{number}" if number else ""
+    if not number:
+        return f"<{url}>"
+    return f"<{url}|#{number}>"
+
+
+def _clip(text: str, max_chars: int = 500) -> str:
+    stripped = str(text or "").strip()
+    if len(stripped) <= max_chars:
+        return stripped
+    return stripped[: max_chars - 1].rstrip() + "\u2026"
+
+
+def _fix_headline(item: dict[str, Any]) -> str:
+    fix_type = str(item.get("fix_type") or "unknown")
+    title = str(item.get("title") or "Untitled fix").strip()
+    return f"`{fix_type}` {title}"
+
+
 def _build_scorecard_markdown(
     *,
     review: dict[str, Any],
@@ -972,67 +1042,153 @@ def _build_scorecard_markdown(
     child_results: list[dict[str, Any]],
     notifier_stats: dict[str, int],
 ) -> str:
+    """Build the nightly Slack scorecard as flat lines joined by \n.
+
+    We deliberately avoid ``textwrap.dedent`` with multi-line f-string
+    substitutions: when a substituted value's continuation lines have
+    less leading whitespace than the surrounding template, dedent can
+    no longer find a common prefix and leaves the outer indent intact,
+    which is what produced the mangled 8-space-indented scorecard posts.
+    """
     composite = _mean_composite(review)
-    top_failure_modes = ", ".join(
-        f"{entry.get('failure_mode', 'unknown')} x{entry.get('count', 0)}"
-        for entry in list(review.get("top_failure_modes") or [])[:3]
-        if isinstance(entry, dict)
-    ) or "none"
-    selected_fixes = "\n".join(
-        f"- `{item.get('fix_type', 'unknown')}` {item.get('title', 'Untitled fix')}"
+    tasks_reviewed = int(review.get("tasks_reviewed") or 0)
+    below_bar_rate = float(review.get("below_bar_rate") or 0.0)
+    top_failure_modes = (
+        ", ".join(
+            f"{entry.get('failure_mode', 'unknown')} x{entry.get('count', 0)}"
+            for entry in list(review.get("top_failure_modes") or [])[:3]
+            if isinstance(entry, dict)
+        )
+        or "none"
+    )
+
+    lines: list[str] = [
+        "*Self Improve Nightly*",
+        "",
+        (
+            f"Reviewed {tasks_reviewed} tasks. Mean score: {composite:.0f}/100. "
+            f"Below-bar rate: {below_bar_rate:.0%}."
+        ),
+        "",
+        "*Gap Analysis*",
+        f"- Top failure modes: {top_failure_modes}",
+        "- Selected fixes:",
+    ]
+
+    gap_fixes = [
+        item
         for item in list(review.get("selected_fixes") or [])
         if isinstance(item, dict)
-    ) or "- none selected"
-    opportunities = list(synthesis.get("opportunities") or [])
-    selected_builds = list(synthesis.get("selected_builds") or [])
-    opportunity_lines = "\n".join(
-        f"- `{item.get('opportunity_type', 'unknown')}` {item.get('title', 'Untitled')}"
-        for item in opportunities[:5]
+    ]
+    if not gap_fixes:
+        lines.append("  - none selected")
+    for fix in gap_fixes:
+        lines.append(f"  - {_fix_headline(fix)}")
+        narrative = _clip(fix.get("slack_narrative"))
+        if narrative:
+            lines.append(f"    - _Why:_ {narrative}")
+
+    opportunities = [
+        item
+        for item in list(synthesis.get("opportunities") or [])
         if isinstance(item, dict)
-    ) or "- none found"
-    build_lines = "\n".join(
-        f"- `{item.get('opportunity_type', 'unknown')}` {item.get('title', 'Untitled')}"
-        for item in selected_builds
+    ]
+    selected_builds = [
+        item
+        for item in list(synthesis.get("selected_builds") or [])
         if isinstance(item, dict)
-    ) or "- none selected"
-    opened_prs = "\n".join(
-        f"- [#{item['pr_number']}]({item['pr_url']}) {item.get('title', '').strip()}"
+    ]
+
+    lines.extend(
+        [
+            "",
+            "*Learning Synthesis*",
+            f"- Opportunities found: {len(opportunities)}",
+        ]
+    )
+    if not opportunities:
+        lines.append("  - none found")
+    for opportunity in opportunities[:5]:
+        op_type = str(opportunity.get("opportunity_type") or "unknown")
+        title = str(opportunity.get("title") or "Untitled").strip()
+        lines.append(f"  - `{op_type}` {title}")
+
+    lines.append("- Selected builds:")
+    if not selected_builds:
+        lines.append("  - none selected")
+    for build in selected_builds:
+        op_type = str(build.get("opportunity_type") or "unknown")
+        title = str(build.get("title") or "Untitled").strip()
+        lines.append(f"  - `{op_type}` {title}")
+        narrative = _clip(build.get("slack_narrative"))
+        if narrative:
+            lines.append(f"    - _Why:_ {narrative}")
+
+    opened_pr_entries = [
+        item
         for item in child_results
-        if item.get("pr_number") and item.get("pr_url") and not item.get("error")
-    ) or "- none opened"
-    failed_children = "\n".join(
-        f"- {item.get('title') or item.get('child_run_id') or 'unknown child'}: {item.get('error')}"
+        if isinstance(item, dict)
+        and item.get("pr_number")
+        and item.get("pr_url")
+        and not item.get("error")
+    ]
+    failed_entries = [
+        item
         for item in child_results
-        if item.get("error") and not (item.get("pr_number") and item.get("pr_url"))
-    ) or "- none"
-    return textwrap.dedent(
-        f"""
-        Self Improve Nightly
+        if isinstance(item, dict)
+        and item.get("error")
+        and not (item.get("pr_number") and item.get("pr_url"))
+    ]
 
-        Reviewed {review.get('tasks_reviewed', 0)} tasks. Mean score: {composite:.0f}/100. Below-bar rate: {review.get('below_bar_rate', 0.0):.0%}.
+    lines.extend(["", "*Execution*", "- PRs opened:"])
+    if not opened_pr_entries:
+        lines.append("  - none opened")
+    for entry in opened_pr_entries:
+        link = _slack_pr_link(entry.get("pr_number", ""), str(entry.get("pr_url") or ""))
+        title = str(entry.get("title") or "").strip()
+        suffix = f" {title}" if title else ""
+        lines.append(f"  - {link}{suffix}")
+        narrative = _clip(entry.get("slack_narrative"))
+        if narrative:
+            lines.append(f"    - _Why:_ {narrative}")
 
-        *Gap Analysis*
-        - Top failure modes: {top_failure_modes}
-        - Selected fixes:
-        {selected_fixes}
+    lines.append("- Child workflow errors:")
+    if not failed_entries:
+        lines.append("  - none")
+    for entry in failed_entries:
+        label = (
+            str(entry.get("title") or entry.get("child_run_id") or "unknown child").strip()
+        )
+        error = str(entry.get("error") or "").strip()
+        lines.append(f"  - {label}: {error}" if error else f"  - {label}")
 
-        *Learning Synthesis*
-        - Opportunities found: {len(opportunities)}
-        {opportunity_lines}
-        - Selected builds:
-        {build_lines}
+    lines.extend(
+        [
+            f"- PRs merged in last 24h: {int(notifier_stats.get('merged_prs', 0) or 0)}",
+            f"- PRs deployed in last 24h: {int(notifier_stats.get('deployed_prs', 0) or 0)}",
+            (
+                "- Source threads notified in last 24h: "
+                f"{int(notifier_stats.get('source_threads_notified', 0) or 0)}"
+            ),
+        ]
+    )
 
-        *Execution*
-        - PRs opened:
-        {opened_prs}
-        - Child workflow errors:
-        {failed_children}
-        - PRs merged in last 24h: {notifier_stats.get('merged_prs', 0)}
-        - PRs deployed in last 24h: {notifier_stats.get('deployed_prs', 0)}
-        - Source threads notified in last 24h: {notifier_stats.get('source_threads_notified', 0)}
-        """
-    ).strip()
+    return "\n".join(lines).strip()
 
+
+SLACK_ONLY_FIX_FIELDS = ("slack_narrative",)
+
+
+def _strip_slack_only_fields(fix: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *fix* with Slack-only narrative fields removed.
+
+    The implementing child agent should never see user names or concrete
+    session descriptions, because anything in its context risks leaking
+    into PR titles, bodies, or commits. We keep those fields on the
+    parent run output (for the internal scorecard) but physically remove
+    them before handing the packet to the child.
+    """
+    return {k: v for k, v in fix.items() if k not in SLACK_ONLY_FIX_FIELDS}
 
 
 async def _start_fix_children(
@@ -1042,7 +1198,7 @@ async def _start_fix_children(
 ) -> list[dict[str, Any]]:
     children: list[dict[str, Any]] = []
     for index, fix in enumerate(selected_fixes, start=1):
-        packet = dict(fix)
+        packet = _strip_slack_only_fields(fix)
         packet["parent_run_id"] = ctx.run_id
         packet["source_threads"] = _normalize_source_threads(packet.get("source_threads"))
         started = await ctx.start_workflow(
@@ -1133,6 +1289,34 @@ async def _wait_for_fix_children(
     return results
 
 
+def _annotate_child_results_with_narratives(
+    *,
+    child_results: list[dict[str, Any]],
+    selected_fixes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Attach each selected fix's slack_narrative to its child result.
+
+    The child workflow never sees `slack_narrative` (we strip it in
+    `_start_fix_children` for privacy), but the parent needs it to render
+    a human-readable "why we picked this" line next to each PR in the
+    scorecard. Children and fixes are paired by position.
+    """
+    annotated: list[dict[str, Any]] = []
+    for index, result in enumerate(child_results):
+        entry = dict(result) if isinstance(result, dict) else {}
+        fix = selected_fixes[index] if index < len(selected_fixes) else {}
+        if isinstance(fix, dict):
+            narrative = str(fix.get("slack_narrative") or "").strip()
+            if narrative:
+                entry["slack_narrative"] = narrative
+            for key in ("dominant_failure_mode", "fix_type", "title"):
+                value = fix.get(key)
+                if value and not entry.get(key):
+                    entry[key] = value
+        annotated.append(entry)
+    return annotated
+
+
 async def _load_recent_fix_titles(ctx: WorkflowContext) -> list[str]:
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=DEDUP_WINDOW_HOURS)
     rows = await ctx._pool.fetch(
@@ -1184,7 +1368,15 @@ async def _run_reconcile_fixes_pass(
         Each fix in the output must include ALL of these fields:
         `title`, `fix_type`, `target_surface`, `what_to_change`,
         `dominant_failure_mode`, `priority`, `why_now`, `evidence_quotes`,
-        `source_threads`, `representative_tasks`.
+        `source_threads`, `representative_tasks`, `slack_narrative`.
+
+        `slack_narrative` is a 2-4 sentence human note for the internal
+        `ai-v2` Slack post. It should name the user(s) who surfaced the
+        issue and describe concretely what they were trying to do, so a
+        human reading the scorecard understands why this fix was picked.
+        If merging two fixes, synthesize one narrative that references both
+        sources. If a fix lacks a narrative, write one from the evidence
+        quotes and source threads.
 
         If a field was present in the input fix, preserve it. If you merge two
         fixes, combine their evidence and source threads.
@@ -1337,6 +1529,7 @@ async def _run_parent(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             "source_threads": build.get("source_threads", []),
             "representative_tasks": [],
             "new_capability_justification": build.get("what_should_exist", ""),
+            "slack_narrative": build.get("slack_narrative", ""),
         })
 
     selected_fixes = await _run_reconcile_fixes_pass(
@@ -1349,6 +1542,10 @@ async def _run_parent(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
 
     children = await _start_fix_children(ctx, selected_fixes=selected_fixes)
     child_results = await _wait_for_fix_children(ctx, children)
+    child_results = _annotate_child_results_with_narratives(
+        child_results=child_results,
+        selected_fixes=selected_fixes,
+    )
 
     async def _load_stats() -> dict[str, int]:
         return await _load_recent_notifier_stats(ctx)

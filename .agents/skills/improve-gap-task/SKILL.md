@@ -25,9 +25,10 @@ Keep the work narrow. One selected backlog item should become one focused PR.
 
 - Start from the structured fix packet, not from a blank slate.
 - Use `git-branch paradigmxyz/centaur` before editing because the mounted repo is read-only.
-- Keep the change small and directly tied to the selected failure mode.
-- Prefer the smallest fix that materially improves user outcomes.
+- Match the change size to the root cause. Small fixes are great when the root cause is small; do not force a structural problem into a one-line prompt tweak just to keep the diff tiny.
+- Prefer the fix that materially improves user outcomes. A focused 200-line workflow fix is better than a three-line prompt tweak that will not actually prevent the failure.
 - Do not broaden scope into adjacent cleanup.
+- `prompt_tweak` is a real tool but an over-prescribed one. Before committing to it, confirm that perfect prompt compliance would actually fix the failure. If the failure would recur even with the prompt read verbatim, choose a code, workflow, or tool fix instead.
 
 ## Phase Expectations
 
@@ -156,6 +157,14 @@ Frame everything in terms of the **system behavior** that was wrong, not the
 
 If you need to cite evidence, describe the **pattern** ("3 of 5 reviewed tasks
 hit the context limit without using handoff") not the **specific sessions**.
+
+The upstream gap-analysis / learning-synthesis pass separately emits a
+`slack_narrative` that DOES name users and sessions — that narrative is used
+only for the internal `ai-v2` scorecard post and is stripped from the
+`fix_packet` before it reaches you. If you somehow receive a `slack_narrative`
+field, ignore it entirely and never echo it into the PR or commits. Every
+name, handle, and thread reference you see anywhere in your context is
+treated as private.
 
 ## PR Labels
 

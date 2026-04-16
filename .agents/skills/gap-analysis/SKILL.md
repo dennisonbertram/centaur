@@ -158,6 +158,17 @@ Use exactly these fix types:
 
 Treat `new_skill` and `new_persona` as first-class fix types.
 
+### Match fix type to root cause — do not default to `prompt_tweak`
+
+`prompt_tweak` is the easiest fix to author and the easiest to over-prescribe. Before selecting it, ask:
+
+- Is the root cause that the agent did not know what to do (instructional gap)?  → `prompt_tweak` is a reasonable fit.
+- Is the root cause that a workflow, tool, service, or control-plane path is structurally wrong or missing?  → prefer `workflow_fix`, `bug_fix`, or `tool_improvement`.
+- Is the root cause that the same multi-step procedure has been re-derived across sessions?  → prefer `new_skill`.
+- Is the root cause that the agent's stance, framing, or decision style is consistently off?  → prefer `new_persona`.
+
+A one-line addition to a prompt is a valid fix only when the underlying behavior is gated on an instruction. If the problem would persist even with perfect prompt compliance (e.g., a runtime bug, a missing tool method, a workflow step that never runs), choose the structural fix type even though the change is bigger.
+
 When selecting `new_skill` or `new_persona`, you must include an explicit justification answering:
 
 1. Is this failure caused by the agent not knowing what to do, or not being able to do it?
@@ -259,9 +270,25 @@ Required fields:
     }
   ],
   "representative_tasks": ["task-1"],
-  "new_capability_justification": ""
+  "new_capability_justification": "",
+  "slack_narrative": "Josie asked the bot to deploy the new checklist workflow and it shipped without running ruff, so she had to re-ask after CI failed. Matt hit the same pattern on Tuesday when a pulumi change landed unlinted. Two users in one day — the eng persona needs a pre-delivery lint reminder so code-change tasks always verify before handoff."
 }
 ```
+
+### `slack_narrative` — required, Slack-only prose
+
+`slack_narrative` is a 2–4 sentence plain-English explanation of why this fix was chosen. It is posted to the internal `ai-v2` Slack channel so the team sees the nightly reasoning in context.
+
+It MUST:
+
+- Name the specific user(s) who surfaced the issue (use the `source_user_name` field on the evidence pack). If no name is available, say "a user".
+- Describe concretely what they were trying to do and how the gap showed up.
+- Tie the fix to the observed pattern (not just restate the fix title).
+- Be grounded in the provided evidence — do not invent situations.
+
+`slack_narrative` is read by humans in Slack. It WILL NOT be used in the PR body, commit messages, or branch names. Privacy rules that apply to PRs do **not** apply here — using user first names and concrete task descriptions is the whole point of this field. The workflow strips this field before handing the fix packet to the implementing agent.
+
+Keep it conversational and short. Pretend you are explaining to a teammate in Slack why this made the cut.
 
 The `target_surface` field must name a real file or component in the Centaur codebase. Valid targets include:
 
