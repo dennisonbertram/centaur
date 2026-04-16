@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import textwrap
 from dataclasses import dataclass, field
 from typing import Any
 
-from api.runtime_control import ControlPlaneError
+from api.runtime_control import ControlPlaneError, decode_jsonb
 from api.workflow_engine import Delivery, WorkflowContext
 
 WORKFLOW_NAME = "self_improve_deploy_notifier"
+NOTIFIED_REPLY_WINDOW_HOURS = 24 * 180
 
 
 @dataclass
 class Input:
     before_sha: str = ""
     after_sha: str = ""
+    baseline_sha: str = ""
     repo: str = "paradigmxyz/centaur"
     status: str = "success"
     deployed_at: str = ""
@@ -98,6 +101,22 @@ def _dedupe_notifications(entries: list[dict[str, Any]]) -> list[dict[str, Any]]
     return deduped
 
 
+def _filter_already_notified(
+    entries: list[dict[str, Any]],
+    *,
+    already_notified: set[tuple[int, str]],
+) -> list[dict[str, Any]]:
+    if not already_notified:
+        return entries
+    filtered: list[dict[str, Any]] = []
+    for entry in entries:
+        pair = (int(entry["pr_number"]), str(entry["thread_key"]))
+        if pair in already_notified:
+            continue
+        filtered.append(entry)
+    return filtered
+
+
 def _reply_step_name(pr_number: int, thread_key: str) -> str:
     digest = hashlib.sha1(f"{pr_number}:{thread_key}".encode("utf-8")).hexdigest()[:10]
     return f"reply_{pr_number}_{digest}"
@@ -121,6 +140,28 @@ def _normalize_reply_drafts(payload: dict[str, Any]) -> dict[tuple[int, str], st
         if pr_number and thread_key and message:
             drafts[(pr_number, thread_key)] = message
     return drafts
+
+
+async def _load_recent_notified_pairs(ctx: WorkflowContext) -> set[tuple[int, str]]:
+    since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=NOTIFIED_REPLY_WINDOW_HOURS)
+    rows = await ctx._pool.fetch(
+        "SELECT c.state FROM workflow_checkpoints c "
+        "JOIN workflow_runs r ON r.run_id = c.run_id "
+        "WHERE r.workflow_name = $1 AND c.step_kind = 'slack_post' "
+        "  AND c.created_at >= $2",
+        WORKFLOW_NAME,
+        since,
+    )
+    seen_pairs: set[tuple[int, str]] = set()
+    for row in rows:
+        state = decode_jsonb(dict(row).get("state"), {})
+        if not isinstance(state, dict):
+            continue
+        pr_number = _safe_int(state.get("pr_number"))
+        thread_key = str(state.get("thread_key") or "").strip()
+        if pr_number and thread_key:
+            seen_pairs.add((pr_number, thread_key))
+    return seen_pairs
 
 
 async def _draft_thread_replies(
@@ -318,6 +359,8 @@ async def _post_thread_reply(
     ctx: WorkflowContext,
     *,
     step_name: str,
+    pr_number: int,
+    thread_key: str,
     channel: str,
     thread_ts: str,
     text: str,
@@ -337,9 +380,14 @@ async def _post_thread_reply(
             },
         )
         try:
-            return json.loads(raw) if isinstance(raw, str) else raw
+            payload = json.loads(raw) if isinstance(raw, str) else raw
         except (TypeError, ValueError):
-            return {"raw": raw}
+            payload = {"raw": raw}
+        if not isinstance(payload, dict):
+            payload = {"raw": payload}
+        payload["pr_number"] = pr_number
+        payload["thread_key"] = thread_key
+        return payload
 
     return await ctx.step(step_name, _send, step_kind="slack_post")
 
@@ -379,15 +427,28 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             deduped_count=len(deduped),
         )
 
-    drafted_replies = await _draft_thread_replies(ctx, notifications=deduped)
+    already_notified = await _load_recent_notified_pairs(ctx)
+    pending_notifications = _filter_already_notified(
+        deduped,
+        already_notified=already_notified,
+    )
+    if len(pending_notifications) < len(deduped):
+        ctx.log(
+            "self_improve_notifier_already_sent_filtered",
+            original_count=len(deduped),
+            pending_count=len(pending_notifications),
+        )
+
+    drafted_replies = await _draft_thread_replies(ctx, notifications=pending_notifications)
     humanized_replies = await _humanize_thread_replies(
         ctx,
-        notifications=deduped,
+        notifications=pending_notifications,
         drafted_replies=drafted_replies,
     )
 
     sent = 0
-    for entry in deduped:
+    notified_pairs: list[dict[str, Any]] = []
+    for entry in pending_notifications:
         pr_number = int(entry["pr_number"])
         thread_key = str(entry["thread_key"])
         message = humanized_replies.get(
@@ -406,11 +467,17 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         await _post_thread_reply(
             ctx,
             step_name=_reply_step_name(pr_number, thread_key),
+            pr_number=pr_number,
+            thread_key=thread_key,
             channel=str(entry["channel"]),
             thread_ts=str(entry["thread_ts"]),
             text=message,
         )
         sent += 1
+        notified_pairs.append({
+            "pr_number": pr_number,
+            "thread_key": thread_key,
+        })
         ctx.log(
             "self_improve_notifier_thread_replied",
             pr_number=pr_number,
@@ -418,7 +485,11 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         )
 
     return {
+        "before_sha": inp.before_sha,
+        "after_sha": inp.after_sha,
+        "baseline_sha": inp.baseline_sha,
         "merged_prs": len(merged_pr_numbers),
         "deployed_prs": len(merged_pr_numbers),
         "source_threads_notified": sent,
+        "notified_pairs": notified_pairs,
     }

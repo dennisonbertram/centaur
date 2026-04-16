@@ -987,6 +987,11 @@ def _build_scorecard_markdown(
         for item in child_results
         if item.get("pr_number") and item.get("pr_url")
     ) or "- none opened"
+    failed_children = "\n".join(
+        f"- {item.get('title') or item.get('child_run_id') or 'unknown child'}: {item.get('error')}"
+        for item in child_results
+        if item.get("error")
+    ) or "- none"
     return textwrap.dedent(
         f"""
         Self Improve Nightly
@@ -1007,6 +1012,8 @@ def _build_scorecard_markdown(
         *Execution*
         - PRs opened:
         {opened_prs}
+        - Child workflow errors:
+        {failed_children}
         - PRs merged: {notifier_stats.get('merged_prs', 0)}
         - PRs deployed: {notifier_stats.get('deployed_prs', 0)}
         - Source threads notified: {notifier_stats.get('source_threads_notified', 0)}
@@ -1081,6 +1088,11 @@ async def _wait_for_fix_children(
                 output_json = {"error": "malformed child output", "raw": output_json[:500]}
         if isinstance(output_json, dict):
             results.append(output_json)
+        else:
+            results.append({
+                "child_run_id": run_id,
+                "error": "child output was not a JSON object",
+            })
         ctx.log(
             "self_improve_fix_child_completed",
             child_run_id=run_id,
@@ -1089,7 +1101,7 @@ async def _wait_for_fix_children(
     return results
 
 
-async def _load_recent_fix_titles(ctx: WorkflowContext) -> set[str]:
+async def _load_recent_fix_titles(ctx: WorkflowContext) -> list[str]:
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=DEDUP_WINDOW_HOURS)
     rows = await ctx._pool.fetch(
         "SELECT output_json FROM workflow_runs "
@@ -1105,7 +1117,7 @@ async def _load_recent_fix_titles(ctx: WorkflowContext) -> set[str]:
             title = str(output.get("title") or "").strip().lower()
             if title:
                 titles.add(title)
-    return titles
+    return sorted(titles)
 
 
 def _dedup_selected_fixes(
@@ -1113,13 +1125,14 @@ def _dedup_selected_fixes(
     *,
     recent_titles: set[str],
 ) -> list[dict[str, Any]]:
-    if not recent_titles:
-        return fixes
     deduped: list[dict[str, Any]] = []
+    seen_titles = set(recent_titles)
     for fix in fixes:
         title = str(fix.get("title") or "").strip().lower()
-        if title and title in recent_titles:
+        if title and title in seen_titles:
             continue
+        if title:
+            seen_titles.add(title)
         deduped.append(fix)
     return deduped
 
@@ -1177,10 +1190,14 @@ async def _run_parent(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         selected_builds=len(list(synthesis.get("selected_builds") or [])),
     )
 
-    async def _load_dedup_titles() -> set[str]:
+    async def _load_dedup_titles() -> list[str]:
         return await _load_recent_fix_titles(ctx)
 
-    recent_titles = await ctx.step("load_recent_fix_titles", _load_dedup_titles, step_kind="gather")
+    # Workflow checkpoints are stored as JSON, so this step returns a list and
+    # the parent rehydrates set semantics in memory for fast membership checks.
+    recent_titles = set(
+        await ctx.step("load_recent_fix_titles", _load_dedup_titles, step_kind="gather")
+    )
 
     gap_fixes = list(review.get("selected_fixes") or [])[: max(inp.max_selected_fixes, 1)]
     build_fixes = []
