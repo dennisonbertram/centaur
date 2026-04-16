@@ -305,26 +305,27 @@ async def _run_triage_pass(
         """
     ).strip()
 
-    async def _triage() -> dict[str, Any]:
-        result = await ctx.agent_turn(
-            prompt,
-            thread_key=f"workflow:{ctx.run_id}:triage",
-            delivery=Delivery.dev(),
-            prompt_selector="eng",
-            metadata={
-                "source": WORKFLOW_NAME,
-                "mode": "parent",
-                "stage": "triage",
-            },
-        )
+    triage_turn = await ctx.agent_turn(
+        prompt,
+        thread_key=f"workflow:{ctx.run_id}:triage",
+        delivery=Delivery.dev(),
+        prompt_selector="eng",
+        metadata={
+            "source": WORKFLOW_NAME,
+            "mode": "parent",
+            "stage": "triage",
+        },
+    )
+
+    async def _parse_triage() -> dict[str, Any]:
         return _extract_required_json_payload(
-            str(result.get("result_text") or ""),
+            str(triage_turn.get("result_text") or ""),
             stage="triage",
             preferred_keys=TRIAGE_PREFERRED_KEYS,
             required_keys=TRIAGE_REQUIRED_KEYS,
         )
 
-    triage_result = await ctx.step("triage_tasks", _triage, step_kind="review")
+    triage_result = await ctx.step("triage_tasks", _parse_triage, step_kind="review")
     selected_ids = list(triage_result.get("selected_task_ids") or [])
     ctx.log(
         "self_improve_triage_completed",
@@ -866,26 +867,27 @@ async def _run_batch_review_pass(
         """
     ).strip()
 
-    async def _review() -> dict[str, Any]:
-        result = await ctx.agent_turn(
-            prompt,
-            thread_key=f"workflow:{ctx.run_id}:gap-analysis",
-            delivery=Delivery.dev(),
-            prompt_selector="eng",
-            metadata={
-                "source": WORKFLOW_NAME,
-                "mode": "parent",
-                "stage": "batch_review",
-            },
-        )
+    review_turn = await ctx.agent_turn(
+        prompt,
+        thread_key=f"workflow:{ctx.run_id}:gap-analysis",
+        delivery=Delivery.dev(),
+        prompt_selector="eng",
+        metadata={
+            "source": WORKFLOW_NAME,
+            "mode": "parent",
+            "stage": "batch_review",
+        },
+    )
+
+    async def _parse_review() -> dict[str, Any]:
         return _extract_required_json_payload(
-            str(result.get("result_text") or ""),
+            str(review_turn.get("result_text") or ""),
             stage="batch_review",
             preferred_keys=REVIEW_PREFERRED_KEYS,
             required_keys=REVIEW_REQUIRED_KEYS,
         )
 
-    review = await ctx.step("batch_review", _review, step_kind="review")
+    review = await ctx.step("batch_review", _parse_review, step_kind="review")
     return _normalize_review(review, tasks_reviewed=len(evidence_packs))
 
 
@@ -925,26 +927,27 @@ async def _run_learning_synthesis_pass(
         """
     ).strip()
 
-    async def _synthesize() -> dict[str, Any]:
-        result = await ctx.agent_turn(
-            prompt,
-            thread_key=f"workflow:{ctx.run_id}:learning-synthesis",
-            delivery=Delivery.dev(),
-            prompt_selector="eng",
-            metadata={
-                "source": WORKFLOW_NAME,
-                "mode": "parent",
-                "stage": "learning_synthesis",
-            },
-        )
+    synthesis_turn = await ctx.agent_turn(
+        prompt,
+        thread_key=f"workflow:{ctx.run_id}:learning-synthesis",
+        delivery=Delivery.dev(),
+        prompt_selector="eng",
+        metadata={
+            "source": WORKFLOW_NAME,
+            "mode": "parent",
+            "stage": "learning_synthesis",
+        },
+    )
+
+    async def _parse_synthesis() -> dict[str, Any]:
         return _extract_required_json_payload(
-            str(result.get("result_text") or ""),
+            str(synthesis_turn.get("result_text") or ""),
             stage="learning_synthesis",
             preferred_keys=SYNTHESIS_PREFERRED_KEYS,
             required_keys=SYNTHESIS_REQUIRED_KEYS,
         )
 
-    synthesis = await ctx.step("learning_synthesis", _synthesize, step_kind="review")
+    synthesis = await ctx.step("learning_synthesis", _parse_synthesis, step_kind="review")
     if not isinstance(synthesis, dict):
         synthesis = {}
     synthesis.setdefault("sessions_analyzed", len(evidence_packs))
@@ -1201,26 +1204,27 @@ async def _run_reconcile_fixes_pass(
         """
     ).strip()
 
-    async def _reconcile() -> dict[str, Any]:
-        result = await ctx.agent_turn(
-            prompt,
-            thread_key=f"workflow:{ctx.run_id}:reconcile-fixes",
-            delivery=Delivery.dev(),
-            prompt_selector="eng",
-            metadata={
-                "source": WORKFLOW_NAME,
-                "mode": "parent",
-                "stage": "reconcile_fixes",
-            },
-        )
+    reconcile_turn = await ctx.agent_turn(
+        prompt,
+        thread_key=f"workflow:{ctx.run_id}:reconcile-fixes",
+        delivery=Delivery.dev(),
+        prompt_selector="eng",
+        metadata={
+            "source": WORKFLOW_NAME,
+            "mode": "parent",
+            "stage": "reconcile_fixes",
+        },
+    )
+
+    async def _parse_reconcile() -> dict[str, Any]:
         return _extract_required_json_payload(
-            str(result.get("result_text") or ""),
+            str(reconcile_turn.get("result_text") or ""),
             stage="reconcile_fixes",
             preferred_keys=RECONCILE_PREFERRED_KEYS,
             required_keys=RECONCILE_REQUIRED_KEYS,
         )
 
-    reconciled = await ctx.step("reconcile_fixes", _reconcile, step_kind="review")
+    reconciled = await ctx.step("reconcile_fixes", _parse_reconcile, step_kind="review")
     fixes = list(reconciled.get("reconciled_fixes") or [])
     for fix in fixes:
         if isinstance(fix, dict):
