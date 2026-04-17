@@ -7,7 +7,9 @@ import uuid
 import pytest
 import pytest_asyncio
 
+import api.policy_news as policy_news
 from api.policy_news import (
+    ClassificationResult,
     DEFAULT_POLICY_NEWS_FEEDS_FILE,
     QueryRequest,
     build_alert_message,
@@ -15,6 +17,7 @@ from api.policy_news import (
     normalize_title,
     parse_feedback_command,
     parse_query_request,
+    run_policy_news_monitor,
     search_archive,
     title_similarity,
 )
@@ -23,11 +26,22 @@ from api.policy_news import (
 @pytest_asyncio.fixture
 async def policy_news_tables(db_pool):
     await db_pool.execute(
-        "TRUNCATE TABLE policy_news_feedback, policy_news_alerts, policy_news_cluster_articles, "
+        "TRUNCATE TABLE policy_news_monitor_runs, policy_news_feedback, policy_news_alerts, policy_news_cluster_articles, "
         "policy_news_articles, policy_news_clusters, policy_news_feed_fetches, "
         "policy_news_watch_terms, policy_news_sources CASCADE"
     )
     yield
+
+
+class StubWorkflowContext:
+    def __init__(self, pool, *, post_error: str | None = None):
+        self._pool = pool
+        self._post_error = post_error
+
+    async def post_to_slack(self, channel: str, text: str, *, thread_ts: str | None = None):
+        if self._post_error:
+            raise RuntimeError(self._post_error)
+        return {"channel": channel, "ts": thread_ts or "1776.0001"}
 
 
 def test_parse_feedback_command_supports_plain_and_annotated_commands():
@@ -217,3 +231,140 @@ async def test_build_alert_message_includes_reason_and_corroboration(
     assert text.startswith("[AI][Congress][Standard]")
     assert "Reason for inclusion: committee activity" in text
     assert "Corroborating coverage: Politico" in text
+
+
+@pytest.mark.asyncio
+async def test_run_policy_news_monitor_records_failed_slack_post_attempt(
+    db_pool, policy_news_tables, monkeypatch
+):
+    async def fake_fetch_feed(source, *, limit):
+        return [
+            {
+                "external_id": "story-1",
+                "title": "SEC advances digital asset market structure proposal",
+                "canonical_url": "https://example.com/story",
+                "raw_url": "https://example.com/story",
+                "excerpt": "A policy-heavy article.",
+                "content_text": "A policy-heavy article with meaningful congressional movement.",
+                "author": "Reporter",
+                "published_at": dt.datetime(2026, 4, 15, 12, 0, tzinfo=dt.timezone.utc),
+                "categories": ["Crypto"],
+                "excerpt_only": False,
+                "raw_payload": {"title": "SEC advances digital asset market structure proposal"},
+            }
+        ]
+
+    async def fake_classify_candidates(config, articles):
+        return {
+            articles[0].article_key: ClassificationResult(
+                article_key=articles[0].article_key,
+                primary_topic="Crypto",
+                secondary_tags=["Congress"],
+                include=True,
+                reason_for_inclusion="committee activity",
+                what_happened="Congress is moving a market structure item.",
+                why_it_matters="This is the kind of update the monitor should deliver.",
+                suggested_delivery="Standard",
+                scores={
+                    "policy_centrality": 20,
+                    "actor_importance": 12,
+                    "actionability": 8,
+                    "source_quality": 5,
+                    "novelty": 4,
+                    "narrative_influence": 1,
+                },
+            )
+        }
+
+    monkeypatch.setattr(policy_news, "fetch_feed", fake_fetch_feed)
+    monkeypatch.setattr(policy_news, "classify_candidates", fake_classify_candidates)
+
+    ctx = StubWorkflowContext(db_pool, post_error="channel_not_found")
+    with pytest.raises(RuntimeError, match="channel_not_found"):
+        await run_policy_news_monitor(
+            ctx,
+            {
+                "slack_channel": "C0ASR4NFLPR",
+                "sources": [
+                    {
+                        "name": "Reuters",
+                        "url": "https://example.com/rss",
+                    }
+                ],
+                "process_replies": False,
+            },
+        )
+
+    row = await db_pool.fetchrow(
+        "SELECT status, enabled_source_count, new_articles, classified_candidates, alertable_clusters, "
+        "alerts_sent, last_post_attempt, error_text "
+        "FROM policy_news_monitor_runs ORDER BY started_at DESC LIMIT 1"
+    )
+
+    assert row is not None
+    assert row["status"] == "error"
+    assert row["enabled_source_count"] == 1
+    assert row["new_articles"] == 1
+    assert row["classified_candidates"] == 1
+    assert row["alertable_clusters"] == 1
+    assert row["alerts_sent"] == 0
+    assert row["last_post_attempt"]["status"] == "error"
+    assert row["last_post_attempt"]["channel"] == "C0ASR4NFLPR"
+    assert "channel_not_found" in row["last_post_attempt"]["error_text"]
+    assert row["error_text"] == "channel_not_found"
+
+
+@pytest.mark.asyncio
+async def test_run_policy_news_monitor_diagnostics_only_summarizes_latest_run(
+    db_pool, policy_news_tables
+):
+    await db_pool.execute(
+        "INSERT INTO policy_news_sources (source_key, name, feed_url) VALUES "
+        "('reuters', 'Reuters', 'https://example.com/reuters'), "
+        "('politico', 'Politico', 'https://example.com/politico')"
+    )
+    await db_pool.execute(
+        "INSERT INTO policy_news_feed_fetches (source_key, status, item_count, error_text, fetched_at) VALUES "
+        "('reuters', 'error', 0, 'timeout contacting feed', $1)",
+        dt.datetime(2026, 4, 15, 13, 0, tzinfo=dt.timezone.utc),
+    )
+    await db_pool.execute(
+        "INSERT INTO policy_news_monitor_runs ("
+        "started_at, completed_at, status, slack_channel_id, enabled_source_count, fetch_successes, "
+        "fetch_failures, new_articles, classified_candidates, alertable_clusters, alerts_sent, "
+        "last_post_attempt, error_text"
+        ") VALUES ($1, $2, 'error', 'C0ASR4NFLPR', 2, 1, 1, 4, 3, 2, 0, $3::jsonb, 'channel_not_found')",
+        dt.datetime(2026, 4, 15, 12, 0, tzinfo=dt.timezone.utc),
+        dt.datetime(2026, 4, 15, 12, 5, tzinfo=dt.timezone.utc),
+        json.dumps(
+            {
+                "status": "error",
+                "attempted_at": "2026-04-15T12:04:00+00:00",
+                "channel": "C0ASR4NFLPR",
+                "error_text": "channel_not_found",
+            }
+        ),
+    )
+
+    result = await run_policy_news_monitor(
+        StubWorkflowContext(db_pool),
+        {
+            "diagnostics_only": True,
+            "slack_channel": "C0ASR4NFLPR",
+            "sources": [
+                {"name": "Reuters", "url": "https://example.com/reuters"},
+                {"name": "Politico", "url": "https://example.com/politico"},
+            ],
+        },
+    )
+
+    assert result["status"] == "diagnostics"
+    assert result["configured_slack_channel"] == "C0ASR4NFLPR"
+    assert result["enabled_source_count"] == 2
+    assert result["new_articles"] == 4
+    assert result["classified_candidates"] == 3
+    assert result["alertable_clusters"] == 2
+    assert result["last_post_attempt"]["status"] == "error"
+    assert result["last_fetch_failures"][0]["source_name"] == "Reuters"
+    assert "channel_not_found" in result["summary"]
+    assert "Enabled sources: 2" in result["summary"]

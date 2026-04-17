@@ -63,6 +63,7 @@ class Input:
     slack_channel: str = ""
     feeds_file: str = ""
     sources: list[dict[str, Any]] = field(default_factory=list)
+    diagnostics_only: bool = False
     dry_run: bool = False
     process_replies: bool = True
     max_articles_per_feed: int = 40

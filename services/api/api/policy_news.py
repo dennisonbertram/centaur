@@ -235,6 +235,7 @@ class MonitorInput:
     slack_channel: str = ""
     feeds_file: str = ""
     sources: list[dict[str, Any]] = field(default_factory=list)
+    diagnostics_only: bool = False
     dry_run: bool = False
     process_replies: bool = True
     max_articles_per_feed: int = 40
@@ -423,74 +424,289 @@ def load_monitor_config(raw_input: Any) -> MonitorConfig:
     )
 
 
+def _trim_monitor_error(value: Any) -> str:
+    return str(value or "")[:500]
+
+
+def _isoformat(value: dt.datetime | None) -> str:
+    if value is None:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.timezone.utc)
+    return value.isoformat()
+
+
+async def create_monitor_run(pool: asyncpg.Pool, config: MonitorConfig) -> int:
+    return int(
+        await pool.fetchval(
+            "INSERT INTO policy_news_monitor_runs (slack_channel_id, enabled_source_count, dry_run) "
+            "VALUES ($1, $2, $3) RETURNING id",
+            config.slack_channel,
+            len(config.sources),
+            config.dry_run,
+        )
+        or 0
+    )
+
+
+async def complete_monitor_run(
+    pool: asyncpg.Pool,
+    run_id: int,
+    *,
+    status: str,
+    stats: dict[str, Any],
+    last_post_attempt: dict[str, Any] | None,
+    error_text: str = "",
+) -> None:
+    await pool.execute(
+        "UPDATE policy_news_monitor_runs SET completed_at = NOW(), status = $2, "
+        "fetch_successes = $3, fetch_failures = $4, new_articles = $5, "
+        "classified_candidates = $6, alertable_clusters = $7, alerts_sent = $8, "
+        "feedback_commands = $9, query_replies = $10, last_post_attempt = $11::jsonb, error_text = $12 "
+        "WHERE id = $1",
+        run_id,
+        status,
+        int(stats.get("fetch_successes") or 0),
+        int(stats.get("fetch_failures") or 0),
+        int(stats.get("new_articles") or 0),
+        int(stats.get("classified") or 0),
+        int(stats.get("alertable_clusters") or 0),
+        int(stats.get("alerts_sent") or 0),
+        int(stats.get("feedback_commands") or 0),
+        int(stats.get("query_replies") or 0),
+        json.dumps(last_post_attempt or {}),
+        error_text,
+    )
+
+
+async def collect_policy_news_monitor_diagnostics(
+    pool: asyncpg.Pool,
+    config: MonitorConfig,
+) -> dict[str, Any]:
+    latest_run = await pool.fetchrow(
+        "SELECT started_at, completed_at, status, slack_channel_id, enabled_source_count, "
+        "fetch_successes, fetch_failures, new_articles, classified_candidates, alertable_clusters, "
+        "alerts_sent, feedback_commands, query_replies, last_post_attempt, error_text "
+        "FROM policy_news_monitor_runs ORDER BY started_at DESC LIMIT 1"
+    )
+    source_lookup = {source.source_key: source.name for source in config.sources}
+    failures: list[dict[str, Any]] = []
+    if source_lookup:
+        rows = await pool.fetch(
+            "SELECT source_key, fetched_at, status, item_count, error_text "
+            "FROM policy_news_feed_fetches "
+            "WHERE source_key = ANY($1::text[]) AND status <> 'ok' "
+            "ORDER BY fetched_at DESC LIMIT 5",
+            list(source_lookup),
+        )
+        failures = [
+            {
+                "source_key": str(row["source_key"]),
+                "source_name": source_lookup.get(str(row["source_key"]), str(row["source_key"])),
+                "fetched_at": _isoformat(row["fetched_at"]),
+                "status": str(row["status"] or ""),
+                "item_count": int(row["item_count"] or 0),
+                "error_text": str(row["error_text"] or ""),
+            }
+            for row in rows
+        ]
+    last_post_attempt = {}
+    if latest_run and isinstance(latest_run.get("last_post_attempt"), dict):
+        last_post_attempt = dict(latest_run["last_post_attempt"] or {})
+    diagnostics = {
+        "status": "diagnostics",
+        "monitor_enabled": bool(config.slack_channel and config.sources),
+        "configured_slack_channel": config.slack_channel,
+        "enabled_source_count": len(config.sources),
+        "latest_run_status": str(latest_run["status"] or "never_run") if latest_run else "never_run",
+        "latest_run_started_at": _isoformat(latest_run["started_at"]) if latest_run else "",
+        "latest_run_completed_at": _isoformat(latest_run["completed_at"]) if latest_run else "",
+        "fetch_successes": int(latest_run["fetch_successes"] or 0) if latest_run else 0,
+        "fetch_failures": int(latest_run["fetch_failures"] or 0) if latest_run else 0,
+        "new_articles": int(latest_run["new_articles"] or 0) if latest_run else 0,
+        "classified_candidates": int(latest_run["classified_candidates"] or 0) if latest_run else 0,
+        "alertable_clusters": int(latest_run["alertable_clusters"] or 0) if latest_run else 0,
+        "alerts_sent": int(latest_run["alerts_sent"] or 0) if latest_run else 0,
+        "feedback_commands": int(latest_run["feedback_commands"] or 0) if latest_run else 0,
+        "query_replies": int(latest_run["query_replies"] or 0) if latest_run else 0,
+        "latest_run_error": str(latest_run["error_text"] or "") if latest_run else "",
+        "last_post_attempt": last_post_attempt,
+        "last_fetch_failures": failures,
+    }
+    diagnostics["summary"] = render_policy_news_monitor_diagnostics(diagnostics)
+    return diagnostics
+
+
+def render_policy_news_monitor_diagnostics(diagnostics: dict[str, Any]) -> str:
+    channel = str(diagnostics.get("configured_slack_channel") or "(not configured)")
+    lines = [
+        f"Policy news monitor diagnostics for channel {channel}",
+        f"Monitor enabled: {'yes' if diagnostics.get('monitor_enabled') else 'no'}",
+        f"Enabled sources: {int(diagnostics.get('enabled_source_count') or 0)}",
+    ]
+    latest_run_status = str(diagnostics.get("latest_run_status") or "never_run")
+    if latest_run_status == "never_run":
+        lines.append("Latest run: none recorded yet.")
+    else:
+        lines.append(
+            "Latest run: "
+            f"{latest_run_status} at {diagnostics.get('latest_run_started_at') or 'unknown'}; "
+            f"new articles {int(diagnostics.get('new_articles') or 0)}, "
+            f"classified candidates {int(diagnostics.get('classified_candidates') or 0)}, "
+            f"alertable clusters {int(diagnostics.get('alertable_clusters') or 0)}, "
+            f"alerts sent {int(diagnostics.get('alerts_sent') or 0)}."
+        )
+        latest_error = str(diagnostics.get("latest_run_error") or "")
+        if latest_error:
+            lines.append(f"Latest run error: {latest_error}")
+    last_post_attempt = diagnostics.get("last_post_attempt") or {}
+    if isinstance(last_post_attempt, dict) and last_post_attempt:
+        details = [
+            f"status {last_post_attempt.get('status') or 'unknown'}",
+        ]
+        if last_post_attempt.get("attempted_at"):
+            details.append(f"at {last_post_attempt['attempted_at']}")
+        if last_post_attempt.get("channel"):
+            details.append(f"channel {last_post_attempt['channel']}")
+        if last_post_attempt.get("thread_ts"):
+            details.append(f"thread {last_post_attempt['thread_ts']}")
+        if last_post_attempt.get("error_text"):
+            details.append(f"error {last_post_attempt['error_text']}")
+        lines.append("Last Slack post attempt: " + ", ".join(details))
+    else:
+        lines.append("Last Slack post attempt: none recorded.")
+    failures = diagnostics.get("last_fetch_failures") or []
+    if failures:
+        formatted = "; ".join(
+            f"{failure.get('source_name') or failure.get('source_key')}: "
+            f"{failure.get('error_text') or failure.get('status')}"
+            for failure in failures
+        )
+        lines.append(f"Recent fetch failures: {formatted}")
+    else:
+        lines.append("Recent fetch failures: none recorded for configured sources.")
+    return "\n".join(lines)
+
+
 async def run_policy_news_monitor(
     ctx: WorkflowContext,
     raw_input: Any,
 ) -> dict[str, Any]:
-    config = load_monitor_config(raw_input)
+    inp = _coerce_input(raw_input)
+    config = load_monitor_config(inp)
+    if inp.diagnostics_only:
+        return await collect_policy_news_monitor_diagnostics(ctx._pool, config)
     if not config.sources:
         return {"status": "noop", "reason": "no configured sources"}
     await sync_config(ctx._pool, config)
+    run_id = await create_monitor_run(ctx._pool, config)
     stats = {
         "sources": len(config.sources),
         "fetch_successes": 0,
         "fetch_failures": 0,
         "new_articles": 0,
         "classified": 0,
+        "alertable_clusters": 0,
         "alerts_sent": 0,
         "feedback_commands": 0,
         "query_replies": 0,
         "dry_run_preview": [],
     }
-    for source in config.sources:
-        try:
-            items = await fetch_feed(source, limit=config.max_articles_per_feed)
-            inserted = await store_articles(ctx._pool, source, items)
-            await record_fetch(ctx._pool, source.source_key, "ok", len(items), "")
-            stats["fetch_successes"] += 1
-            stats["new_articles"] += len(inserted)
-        except Exception as exc:
-            await record_fetch(ctx._pool, source.source_key, "error", 0, str(exc)[:500])
-            stats["fetch_failures"] += 1
-    candidates = await list_unprocessed_articles(ctx._pool, limit=config.max_candidates)
-    if candidates:
-        classifications = await classify_candidates(config, candidates)
-        stats["classified"] = len(classifications)
-        ready_clusters = await upsert_clusters(ctx._pool, candidates, classifications)
-        alertable = [c for c in ready_clusters if c["delivery_class"] != "Archive Only"]
-        alertable.sort(
-            key=lambda item: (
-                DELIVERY_ORDER.get(str(item["delivery_class"]), 99),
-                -int(item["score_total"]),
-                str(item["canonical_title"]),
+    last_post_attempt: dict[str, Any] = {}
+    try:
+        for source in config.sources:
+            try:
+                items = await fetch_feed(source, limit=config.max_articles_per_feed)
+                inserted = await store_articles(ctx._pool, source, items)
+                await record_fetch(ctx._pool, source.source_key, "ok", len(items), "")
+                stats["fetch_successes"] += 1
+                stats["new_articles"] += len(inserted)
+            except Exception as exc:
+                await record_fetch(
+                    ctx._pool,
+                    source.source_key,
+                    "error",
+                    0,
+                    _trim_monitor_error(exc),
+                )
+                stats["fetch_failures"] += 1
+        candidates = await list_unprocessed_articles(ctx._pool, limit=config.max_candidates)
+        if candidates:
+            classifications = await classify_candidates(config, candidates)
+            stats["classified"] = len(classifications)
+            ready_clusters = await upsert_clusters(ctx._pool, candidates, classifications)
+            alertable = [
+                c for c in ready_clusters if c["delivery_class"] != "Archive Only"
+            ]
+            stats["alertable_clusters"] = len(alertable)
+            alertable.sort(
+                key=lambda item: (
+                    DELIVERY_ORDER.get(str(item["delivery_class"]), 99),
+                    -int(item["score_total"]),
+                    str(item["canonical_title"]),
+                )
             )
+            for cluster in alertable[: config.max_alerts_per_run]:
+                message = await build_alert_message(ctx._pool, cluster)
+                last_post_attempt = {
+                    "attempted_at": _isoformat(dt.datetime.now(dt.timezone.utc)),
+                    "channel": config.slack_channel,
+                    "cluster_id": str(cluster["cluster_id"]),
+                    "delivery_class": str(cluster["delivery_class"]),
+                    "canonical_title": str(cluster.get("canonical_title") or ""),
+                }
+                if config.dry_run:
+                    last_post_attempt["status"] = "dry_run"
+                    stats["dry_run_preview"].append(message)
+                    continue
+                try:
+                    response = await ctx.post_to_slack(config.slack_channel, message)
+                except Exception as exc:
+                    last_post_attempt["status"] = "error"
+                    last_post_attempt["error_text"] = _trim_monitor_error(exc)
+                    raise
+                last_post_attempt["status"] = "sent"
+                last_post_attempt["channel"] = str(
+                    response.get("channel") or config.slack_channel
+                )
+                last_post_attempt["thread_ts"] = str(response.get("ts") or "")
+                await record_alert(
+                    ctx._pool,
+                    cluster_id=str(cluster["cluster_id"]),
+                    channel_id=str(response.get("channel") or config.slack_channel),
+                    thread_ts=str(response.get("ts") or ""),
+                    delivery_class=str(cluster["delivery_class"]),
+                    message_text=message,
+                    reason_for_inclusion=str(cluster["reason_for_inclusion"]),
+                    score_total=int(cluster["score_total"]),
+                )
+                await ctx._pool.execute(
+                    "UPDATE policy_news_clusters SET last_alerted_at = NOW(), updated_at = NOW() "
+                    "WHERE cluster_id = $1",
+                    str(cluster["cluster_id"]),
+                )
+                stats["alerts_sent"] += 1
+        if config.process_replies and not config.dry_run:
+            feedback_count, reply_count = await process_alert_replies(ctx, config)
+            stats["feedback_commands"] = feedback_count
+            stats["query_replies"] = reply_count
+    except Exception as exc:
+        await complete_monitor_run(
+            ctx._pool,
+            run_id,
+            status="error",
+            stats=stats,
+            last_post_attempt=last_post_attempt,
+            error_text=_trim_monitor_error(exc),
         )
-        for cluster in alertable[: config.max_alerts_per_run]:
-            message = await build_alert_message(ctx._pool, cluster)
-            if config.dry_run:
-                stats["dry_run_preview"].append(message)
-                continue
-            response = await ctx.post_to_slack(config.slack_channel, message)
-            await record_alert(
-                ctx._pool,
-                cluster_id=str(cluster["cluster_id"]),
-                channel_id=str(response.get("channel") or config.slack_channel),
-                thread_ts=str(response.get("ts") or ""),
-                delivery_class=str(cluster["delivery_class"]),
-                message_text=message,
-                reason_for_inclusion=str(cluster["reason_for_inclusion"]),
-                score_total=int(cluster["score_total"]),
-            )
-            await ctx._pool.execute(
-                "UPDATE policy_news_clusters SET last_alerted_at = NOW(), updated_at = NOW() "
-                "WHERE cluster_id = $1",
-                str(cluster["cluster_id"]),
-            )
-            stats["alerts_sent"] += 1
-    if config.process_replies and not config.dry_run:
-        feedback_count, reply_count = await process_alert_replies(ctx, config)
-        stats["feedback_commands"] = feedback_count
-        stats["query_replies"] = reply_count
+        raise
+    await complete_monitor_run(
+        ctx._pool,
+        run_id,
+        status="ok",
+        stats=stats,
+        last_post_attempt=last_post_attempt,
+    )
     return {"status": "ok", **stats}
 
 
