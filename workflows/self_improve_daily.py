@@ -215,6 +215,17 @@ def _message_user_display(
     return ""
 
 
+def _first_name_from_user_name(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    cleaned = re.sub(r"\s+", " ", raw).strip()
+    if not cleaned:
+        return ""
+    first = re.split(r"[\s._/()]+", cleaned, maxsplit=1)[0].strip("'\"<>{}[]")
+    return first
+
+
 def _message_user_id(message: dict[str, Any]) -> str:
     metadata = message.get("metadata") or {}
     if not isinstance(metadata, dict):
@@ -255,6 +266,51 @@ def _summarize_followups(messages: list[dict[str, Any]]) -> dict[str, Any]:
         "followup_count": len(messages),
         "has_followup": bool(messages),
         "example_texts": [text for text in texts if text][:5],
+    }
+
+
+def _validate_source_user_names(
+    tasks: list[dict[str, Any]],
+    *,
+    user_name_by_id: dict[str, str] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    cache = user_name_by_id or {}
+    normalized_tasks: list[dict[str, Any]] = []
+    hydrated_count = 0
+    normalized_count = 0
+    unresolved_user_ids: list[str] = []
+
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        normalized = dict(task)
+        user_id = str(task.get("source_user_id") or "").strip()
+        original_name = str(task.get("source_user_name") or "").strip()
+        first_name = _first_name_from_user_name(original_name)
+        if first_name and first_name != original_name:
+            normalized_count += 1
+        if not first_name and user_id:
+            first_name = _first_name_from_user_name(cache.get(user_id, ""))
+            if first_name:
+                hydrated_count += 1
+            else:
+                unresolved_user_ids.append(user_id)
+        normalized["source_user_name"] = first_name
+        normalized_tasks.append(normalized)
+
+    unique_unresolved_ids = list(dict.fromkeys(unresolved_user_ids))
+    missing_name_count = sum(
+        1
+        for task in normalized_tasks
+        if str(task.get("source_user_id") or "").strip()
+        and not str(task.get("source_user_name") or "").strip()
+    )
+    return normalized_tasks, {
+        "hydrated_count": hydrated_count,
+        "normalized_count": normalized_count,
+        "missing_name_count": missing_name_count,
+        "unresolved_user_ids": unique_unresolved_ids,
+        "complete": missing_name_count == 0,
     }
 
 
@@ -2897,6 +2953,21 @@ async def _run_parent(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
 
     coverage = await ctx.step("load_review_window_counts", _load_window_counts, step_kind="gather")
     all_tasks = await ctx.step("collect_tasks", _collect, step_kind="gather")
+
+    async def _validate_names() -> dict[str, Any]:
+        tasks, stats = _validate_source_user_names(
+            list(all_tasks),
+            user_name_by_id=user_name_by_id,
+        )
+        return {"tasks": tasks, "stats": stats}
+
+    validated = await ctx.step("validate_source_user_names", _validate_names, step_kind="gather")
+    if isinstance(validated, dict):
+        all_tasks = list(validated.get("tasks") or [])
+        name_stats = dict(validated.get("stats") or {})
+    else:
+        name_stats = {}
+
     coverage = dict(coverage or {})
     coverage["reconstructed_task_count"] = len(all_tasks)
     coverage["reconstructed_thread_count"] = len(
@@ -2906,6 +2977,26 @@ async def _run_parent(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             if isinstance(task, dict) and str(task.get("thread_key") or "").strip()
         }
     )
+    coverage["source_user_name_batch_complete"] = bool(name_stats.get("complete", True))
+    coverage["source_user_name_hydrated_count"] = int(name_stats.get("hydrated_count") or 0)
+    coverage["source_user_name_normalized_count"] = int(name_stats.get("normalized_count") or 0)
+    coverage["source_user_name_missing_count"] = int(name_stats.get("missing_name_count") or 0)
+    coverage["batch_complete"] = bool(name_stats.get("complete", True))
+
+    unresolved_user_ids = list(name_stats.get("unresolved_user_ids") or [])
+    ctx.log(
+        "self_improve_source_user_names_validated",
+        hydrated_count=coverage["source_user_name_hydrated_count"],
+        normalized_count=coverage["source_user_name_normalized_count"],
+        missing_name_count=coverage["source_user_name_missing_count"],
+        complete=coverage["source_user_name_batch_complete"],
+    )
+    if unresolved_user_ids:
+        ctx.log(
+            "self_improve_source_user_names_unresolved",
+            count=len(unresolved_user_ids),
+            unresolved_user_ids=unresolved_user_ids[:25],
+        )
     ctx.log("self_improve_batch_collected", tasks_total=len(all_tasks), **coverage)
 
     if inp.candidate_limit > 0:

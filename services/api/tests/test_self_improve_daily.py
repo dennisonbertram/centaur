@@ -16,6 +16,7 @@ from workflows.self_improve_daily import (
     _build_flair_digest,
     _build_scorecard_markdown,
     _classify_child_entries,
+    _first_name_from_user_name,
     _is_auto_merge_safe_path,
     _merge_review_batches,
     _message_user_display,
@@ -26,6 +27,7 @@ from workflows.self_improve_daily import (
     _strip_mentions,
     _strip_mentions_multiline,
     _strip_slack_only_fields,
+    _validate_source_user_names,
     _validation_has_failing_check,
 )
 
@@ -82,6 +84,57 @@ def test_message_user_display_cache_miss_returns_empty() -> None:
     assert _message_user_display(message, cache) == ""
     # With no cache at all, no crash and no fake name.
     assert _message_user_display(message) == ""
+
+
+def test_first_name_from_user_name_normalizes_display_and_cache_values() -> None:
+    positives = {
+        "Josie Kim": "Josie",
+        "  Matt   Huang  ": "Matt",
+        "katie.kim": "katie",
+        "ricardo_ops": "ricardo",
+        "Brandon/Research": "Brandon",
+        "Taylor (Contractor)": "Taylor",
+        "Zoe-Lou Hart": "Zoe-Lou",
+    }
+    for raw, expected in positives.items():
+        assert _first_name_from_user_name(raw) == expected
+
+    negatives = ["", "   ", None]
+    for raw in negatives:
+        assert _first_name_from_user_name(raw) == ""  # type: ignore[arg-type]
+
+
+def test_validate_source_user_names_hydrates_normalizes_and_reports_gaps() -> None:
+    tasks = [
+        {"task_id": "t1", "source_user_id": "U1", "source_user_name": ""},
+        {"task_id": "t2", "source_user_id": "U2", "source_user_name": "Josie Kim"},
+        {"task_id": "t3", "source_user_id": "U3", "source_user_name": "matt.huang"},
+        {"task_id": "t4", "source_user_id": "U4", "source_user_name": ""},
+        {"task_id": "t5", "source_user_id": "", "source_user_name": ""},
+    ]
+
+    normalized, stats = _validate_source_user_names(
+        tasks,
+        user_name_by_id={
+            "U1": "arjun.sharma",
+            "U4": "",
+        },
+    )
+
+    by_task = {task["task_id"]: task for task in normalized}
+    assert by_task["t1"]["source_user_name"] == "arjun"
+    assert by_task["t2"]["source_user_name"] == "Josie"
+    assert by_task["t3"]["source_user_name"] == "matt"
+    assert by_task["t4"]["source_user_name"] == ""
+    assert by_task["t5"]["source_user_name"] == ""
+
+    assert stats == {
+        "hydrated_count": 1,
+        "normalized_count": 2,
+        "missing_name_count": 1,
+        "unresolved_user_ids": ["U4"],
+        "complete": False,
+    }
 
 
 def test_slack_thread_archive_url_strips_dot_from_ts() -> None:
