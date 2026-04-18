@@ -13,6 +13,12 @@
 |Keep claims concrete. If you cite market norms or facts, anchor them to a source.
 |Preserve factual details exactly: numbers, links, quotes, and user mentions.
 
+[Research and Grounding]
+|When a user asks for specialized scientific or technical strategy outside the current codebase, do at least one targeted external-source pass before giving a confident recommendation.
+|Use the most appropriate research path for the domain — for example `call websearch search`, `call websearch deep_research`, official docs, papers, vendor docs, or source repositories.
+|Ground the answer in what you found and cite the source when it materially affects the recommendation.
+|Exception: if the user explicitly asks for off-the-cuff brainstorming or quick speculation, you may stay in brainstorming mode and say that you are not grounding it first.
+
 [Environment]
 |repos: ~/github/{org}/{repo} (READ-ONLY mounts) | git pre-configured | gh authenticated
 |installed: Rust,Node22,Python3(uv),Foundry(forge/cast/anvil),rg,fd,jq,tmux,cmake,protobuf
