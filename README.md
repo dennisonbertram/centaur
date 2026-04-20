@@ -48,7 +48,13 @@ Centaur's entire security-critical core is **~5,400 lines of Python**: the [API]
                       events / webhooks
                              v
         ┌───────────────────────────────────────────────┐
-        │ slackbot (Next.js, :3001, host :8000)         │
+        │ nginx (:80, host :8000 by default)            │
+        │ public edge; routes enabled via env           │
+        └───────────────────────┬───────────────────────┘
+                                │ default: slackbot only
+                                v
+        ┌───────────────────────────────────────────────┐
+        │ slackbot (Next.js, :3001)                     │
         │ health endpoint + Slack webhook surface       │
         └───────────────────────┬───────────────────────┘
                                 │ spawn / message / execute
@@ -148,7 +154,7 @@ Centaur's security is defense in depth — no single layer is a silver bullet, b
 
 - **Per-host injection maps**: Built from tool manifests, pushed to the firewall on startup and on every hot-reload. Wildcard host patterns (`*.domain.com`) are supported. Catch-all domains and raw IPs are rejected.
 
-- **8 isolated Docker networks**: `default` (host-facing slackbot plus internal app traffic), `secrets_net` (firewall→secrets only), `secrets_egress` (secrets→1Password), `agent_net` (sandbox↔firewall↔API), `agent_egress` (sandbox direct egress for Amp DTW), `backend_net` (postgres/slackbot/api backplane), `control_net` (api↔pgbouncer↔firewall), and `obs_net` (monitoring).
+- **8 isolated Docker networks**: `default` (host-facing nginx plus internal app traffic), `secrets_net` (firewall→secrets only), `secrets_egress` (secrets→1Password), `agent_net` (sandbox↔firewall↔API), `agent_egress` (sandbox direct egress for Amp DTW), `backend_net` (postgres/slackbot/api backplane), `control_net` (api↔pgbouncer↔firewall), and `obs_net` (monitoring).
 
 - **Warm pool**: Pre-spawned containers eliminate ~15s cold-start latency. The pool auto-replenishes, recovers on API restart, and mints fresh scoped tokens on claim.
 

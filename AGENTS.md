@@ -520,7 +520,7 @@ Sandbox containers never see real API keys. The firewall (`services/firewall/add
 - **API auth**: All callers authenticate with DB-backed API keys (`aiv2_*` prefix, stored in `api_keys` table). Docker bridge IPs (localhost) bypass auth for container→API calls.
 - **Sandbox auth**: Sandbox containers get auto-issued HMAC-signed tokens (`sbx1.*` prefix) minted by the API. These are short-lived (2h TTL) and scoped to `agent` + `tools:*`.
 - **Slack**: HMAC-SHA256 signature verification on all webhooks
-- **Public edge**: The default deployment exposes only `slackbot` on `127.0.0.1:8000`
+- **Public edge**: The default deployment exposes only `slackbot` on `127.0.0.1:8000` via the `nginx` edge service. Additional public routes are opt-in via `CENTAUR_NGINX_ENABLED_SERVICES`.
 - **Sandbox isolation**: Containers get stub keys only; real keys injected by firewall proxy in-flight
 - **Filesystem**: Host repos mounted read-only by default; only working repo is read-write
 - **Docker socket**: Proxied via `tecnativa/docker-socket-proxy` — only container/network/exec ops allowed
