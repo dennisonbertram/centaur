@@ -25,7 +25,7 @@ import tomllib, pathlib
 deps = set()
 for p in pathlib.Path('$_d').glob('**/pyproject.toml'):
     deps.update(tomllib.load(open(p,'rb')).get('project',{}).get('dependencies',[]))
-print('\\n'.join(sorted(deps)))
+print('\n'.join(sorted(deps)))
 " 2>/dev/null || true)
     _extra_deps+=$'\n'
   done
@@ -36,14 +36,31 @@ print('\\n'.join(sorted(deps)))
   fi
 fi
 
-# Allow overlays to extend API startup without baking org-specific behavior into base Centaur.
-if [[ -n "${CENTAUR_OVERLAY_DIR:-}" ]]; then
-  _overlay_entrypoint="${CENTAUR_OVERLAY_DIR}/services/api/entrypoint-overlay.sh"
-  if [[ -f "$_overlay_entrypoint" ]]; then
-    # shellcheck source=/dev/null
-    source "$_overlay_entrypoint"
+# Bootstrap gcloud credentials for tools that need gcloud-backed SSH tunneling.
+_gcp_cred="$(_fetch_secret GCP_GCLOUD_CREDENTIAL 2>/dev/null || true)"
+if [[ -n "$_gcp_cred" ]]; then
+  _gcloud_dir="${HOME}/.config/gcloud"
+  mkdir -p "$_gcloud_dir"
+  echo "$_gcp_cred" > "$_gcloud_dir/application_default_credentials.json"
+  _gcp_account=$(echo "$_gcp_cred" | python3 -c "import sys,json; print(json.load(sys.stdin).get('account',''))" 2>/dev/null || true)
+  if [[ -n "$_gcp_account" ]]; then
+    python3 - "$_gcp_cred" "$_gcp_account" "$_gcloud_dir" <<'PYEOF'
+import sqlite3, json, sys
+cred_json, account, gcloud_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+cred = json.loads(cred_json)
+cred.pop("account", None)
+conn = sqlite3.connect(f"{gcloud_dir}/credentials.db")
+conn.execute("CREATE TABLE IF NOT EXISTS credentials (account_id TEXT PRIMARY KEY, value TEXT)")
+conn.execute("INSERT OR REPLACE INTO credentials VALUES (?, ?)", (account, json.dumps(cred)))
+conn.commit()
+conn.close()
+PYEOF
+    # Set active account + project
+    gcloud config set core/account "$_gcp_account" --quiet 2>/dev/null || true
+    gcloud config set core/project custody-dashboard --quiet 2>/dev/null || true
+    echo "gcloud credentials bootstrapped for $_gcp_account" >&2
   fi
-  unset _overlay_entrypoint
+  unset _gcp_cred _gcp_account _gcloud_dir
 fi
 
 # Canonical env aliases
