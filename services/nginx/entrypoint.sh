@@ -74,6 +74,7 @@ fi
 
 if is_enabled apps; then
   append_proxy_location "^~" "/apps/" "${CENTAUR_NGINX_API_UPSTREAM:-http://api:8000}"
+  append_proxy_location "^~" "/app-proxy/" "${CENTAUR_NGINX_API_UPSTREAM:-http://api:8000}"
 fi
 
 if is_enabled admin; then
