@@ -18,6 +18,11 @@ from asyncpg import Pool
 log = structlog.get_logger().bind(service="api", component="vm_metrics")
 
 _VM_URL = os.environ.get("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
+_PUSH_ENABLED = os.environ.get("VICTORIAMETRICS_PUSH_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
 _PUSH_INTERVAL_S = 15
 
 # ---------------------------------------------------------------------------
@@ -624,6 +629,9 @@ async def _push_loop() -> None:
 
 def start_push_loop(pool: Pool) -> None:
     global _push_task, _push_pool
+    if not _PUSH_ENABLED:
+        log.info("vm_push_loop_disabled")
+        return
     _push_pool = pool
     _push_task = asyncio.create_task(_push_loop())
     log.info("vm_push_loop_started", url=_VM_URL, interval_s=_PUSH_INTERVAL_S)
@@ -638,5 +646,5 @@ async def stop_push_loop() -> None:
         except asyncio.CancelledError:
             pass
         _push_task = None
+        log.info("vm_push_loop_stopped")
     _push_pool = None
-    log.info("vm_push_loop_stopped")

@@ -63,6 +63,8 @@ def pool_status() -> dict:
 async def _spawn_warm_container() -> WarmContainer | None:
     """Create one warm sandbox. Returns None on failure."""
     backend = get_backend()
+    if not backend.supports_warm_pool:
+        return None
     engine = POOL_HARNESS if POOL_HARNESS in {"amp", "claude-code", "codex"} else "amp"
 
     placeholder_key = f"warm-{int(time.time() * 1000)}-{id(asyncio.current_task())}"
@@ -249,6 +251,11 @@ async def claim_container(
     """Try to claim a warm sandbox from the pool. Returns SandboxSession or None."""
     if harness != POOL_HARNESS:
         return None
+    backend = get_backend()
+    if not backend.supports_warm_pool:
+        return None
+    if backend.name == "kubernetes" and (persona or repo):
+        return None
 
     warm: WarmContainer | None = None
     async with _pool_lock:
@@ -257,9 +264,6 @@ async def claim_container(
 
     if warm is None:
         return None
-
-    backend = get_backend()
-
     st = await backend.status_by_id(warm.sandbox_id)
     if st != "running":
         log.warning("warm_container_dead_on_claim", sandbox=warm.sandbox_id[:12])
@@ -348,9 +352,13 @@ async def _get_assigned_sandbox_ids() -> set[str]:
     return {row["sandbox_id"] for row in rows}
 
 
-async def start_replenish_loop() -> asyncio.Task:
+async def start_replenish_loop() -> asyncio.Task | None:
     """Start a background task that keeps the pool at target size."""
     global _replenish_task
+    backend = get_backend()
+    if not backend.supports_warm_pool:
+        log.info("warm_pool_disabled_for_backend", backend=backend.name)
+        return None
 
     async def _loop() -> None:
         assigned = await _get_assigned_sandbox_ids()

@@ -30,4 +30,8 @@ def auto_configure() -> SandboxBackend:
         from api.sandbox.docker import DockerSandboxBackend
 
         return DockerSandboxBackend()
+    if backend_name == "kubernetes":
+        from api.sandbox.kubernetes import KubernetesExecutorBackend
+
+        return KubernetesExecutorBackend()
     raise ValueError(f"Unknown sandbox backend: {backend_name}")

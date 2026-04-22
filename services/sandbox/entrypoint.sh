@@ -2,14 +2,28 @@
 set -e
 
 HOME_DIR="$(eval echo ~)"
+FIREWALL_HOSTNAME="${FIREWALL_HOST:-firewall}"
 
 # ── Write harness configs (no MCP — adds ~10s startup overhead) ───────────────
 cat > "$HOME_DIR/.config/amp/settings.json" <<EOF
 {
   "amp.experimental.compaction": 95,
-  "amp.proxy": "http://firewall:8080"
+  "amp.proxy": "http://${FIREWALL_HOSTNAME}:8080"
 }
 EOF
+
+# Resolve placeholder secret names like AMP_API_KEY=AMP_API_KEY via the firewall.
+for KEY in AMP_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY GITHUB_TOKEN; do
+    VALUE="${!KEY:-}"
+    if [ -n "$VALUE" ] && [ "$VALUE" = "$KEY" ]; then
+        SECRET_VALUE="$({
+            curl -fsS "http://${FIREWALL_HOSTNAME}:8081/secrets/${KEY}" | jq -r '.value // empty'
+        } 2>/dev/null || true)"
+        if [ -n "$SECRET_VALUE" ]; then
+            export "${KEY}=${SECRET_VALUE}"
+        fi
+    fi
+done
 
 # ── Pi-mono settings ─────────────────────────────────────────────────────────
 mkdir -p "$HOME_DIR/.pi/agent/extensions"
@@ -48,6 +62,7 @@ fi
 mkdir -p "$HOME_DIR/uploads"
 
 # ── Copy project skills into workspace (so `skill` tool discovers them) ──────
+BAKED_IN_CENTAUR_SKILLS="$HOME_DIR/.agents/skills"
 MOUNTED_CENTAUR_SKILLS="$HOME_DIR/centaur-skills"
 MOUNTED_ORG_SKILLS="$HOME_DIR/centaur-overlay-skills"
 CENTAUR_SKILLS=""
@@ -55,7 +70,7 @@ if [ -d "$HOME_DIR/github" ]; then
     CENTAUR_SKILLS="$(find "$HOME_DIR/github" -path '*/centaur/.agents/skills' -type d -print -quit 2>/dev/null || true)"
 fi
 WS_SKILLS="$WORKSPACE_DIR/.agents/skills"
-for SKILLS_SRC in "$MOUNTED_CENTAUR_SKILLS" "$CENTAUR_SKILLS" "$MOUNTED_ORG_SKILLS"; do
+for SKILLS_SRC in "$BAKED_IN_CENTAUR_SKILLS" "$MOUNTED_CENTAUR_SKILLS" "$CENTAUR_SKILLS" "$MOUNTED_ORG_SKILLS"; do
     if [ -d "$SKILLS_SRC" ]; then
         mkdir -p "$WS_SKILLS"
         cp -r "$SKILLS_SRC"/. "$WS_SKILLS"/

@@ -171,7 +171,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _push_injection_map()
     watcher_task = asyncio.create_task(_watch_tools(tool_manager))
     wf_watcher_task = asyncio.create_task(_watch_workflows())
-    reconcile_task = asyncio.create_task(_reconcile_loop())
+    reconcile_task = asyncio.create_task(_reconcile_loop()) if execution_worker_enabled else None
     if warm_pool_enabled:
         await start_replenish_loop()
     await app_manager.recover_apps(app.state.db_pool)
@@ -185,15 +185,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await stop_workflow_worker()
         if execution_worker_enabled:
             await stop_execution_worker()
-        reconcile_task.cancel()
+        if reconcile_task is not None:
+            reconcile_task.cancel()
         watcher_task.cancel()
         wf_watcher_task.cancel()
         with suppress(asyncio.CancelledError):
             await watcher_task
         with suppress(asyncio.CancelledError):
             await wf_watcher_task
-        with suppress(asyncio.CancelledError):
-            await reconcile_task
+        if reconcile_task is not None:
+            with suppress(asyncio.CancelledError):
+                await reconcile_task
         await close_pool(app.state.db_pool)
 
 
