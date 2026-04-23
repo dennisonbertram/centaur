@@ -1,6 +1,6 @@
 ---
 name: tldr
-description: "Meeting TLDR / due diligence briefing generator. Takes a company URL or name and produces a concise diligence-ready summary with business context, team profiles, recent news, talking points, strategic questions, and partnership ideas with Paradigm portfolio companies. Use when asked to: 'tldr', 'brief me on', 'dd on', 'diligence on', 'prep for meeting with', 'what does X do', 'research X before my call', 'company brief', 'meeting prep for X'."
+description: "Meeting TLDR / company brief generator for pre-meeting prep in the DEFAULT (non-invest) harness. Takes a company URL or name and produces a Coinbase-style slide-deck-formatted briefing with business context, team profiles, recent news, talking points, and Paradigm portfolio connections. Use when the user explicitly asks for a 'tldr', 'brief me on', 'company brief', 'prep for meeting with X', 'meeting prep for X' in a general-purpose thread. DO NOT USE when running the invest persona (--invest) — the invest persona has its own Phase 1 intake + MIQ flow and its own voice rules that this skill's output format directly violates. DO NOT USE for 'dd on X' or 'diligence on X' when the user is clearly forming an investment view — those are invest-persona Phase 1 requests, not TLDR requests."
 ---
 
 # Meeting TLDR Generator

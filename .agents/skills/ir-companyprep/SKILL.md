@@ -1,6 +1,6 @@
 ---
 name: ir-companyprep
-description: "Creates IR company prep Google Docs for portfolio companies. Triggers on: ir-companyprep <Company Name>. Queries Shift, BigQuery, StandardMetrics, and CoinGecko to populate investment summary, financing history, key metrics, and thesis."
+description: "Creates IR company prep Google Docs for portfolio companies. Triggers ONLY on explicit command: 'ir-companyprep <Company Name>'. Generates a Google Doc artifact using python-docx with investment summary, financing history, key metrics, and thesis, sourced from Shift, BigQuery, StandardMetrics, and CoinGecko. DO NOT USE when running the invest persona (--invest) — the invest persona handles diligence in-thread with its own Phase 1 / Phase 2 flow, not via a Google Doc artifact. DO NOT USE for general 'brief me on X' or 'diligence on X' requests — this skill is exclusively for the 'ir-companyprep <Name>' IR-meeting-preparation workflow."
 ---
 
 # IR Company Prep Memo
