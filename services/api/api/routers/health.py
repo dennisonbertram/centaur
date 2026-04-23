@@ -62,9 +62,8 @@ async def usage_stats() -> Response:
     if not row:
         return JSONResponse(status_code=404, content={"detail": "No stats generated yet"})
     data = row["data_json"]
-    if isinstance(data, str):
-        import json
-        data = json.loads(data)
+    if not isinstance(data, dict):
+        return JSONResponse(status_code=500, content={"detail": "Malformed stats data"})
     data["generated_at"] = row["generated_at"].isoformat() if row["generated_at"] else None
     return JSONResponse(content=data, headers={"Cache-Control": "public, max-age=240"})
 
