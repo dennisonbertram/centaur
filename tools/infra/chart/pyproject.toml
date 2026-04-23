@@ -1,9 +1,11 @@
 [project]
 name = "chart"
-description = "SVG chart generation for crypto market data — line charts, candlestick/OHLC charts, comparison charts, and bar charts. No external dependencies."
-version = "0.1.0"
+description = "Chart generation for crypto market data — line, candlestick/OHLC, comparison, and bar charts. Returns base64 PNG images ready for Slack upload."
+version = "0.2.0"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "cairosvg>=2.7.0",
+]
 
 [tool.ai-v2]
 module = "client.py"

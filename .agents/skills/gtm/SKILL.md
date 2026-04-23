@@ -158,18 +158,26 @@ When the user asks for a **chart** or says "chart [token]":
 ```
 call coingecko get_market_chart '{"coin_id": "<coingecko_id>", "vs_currency": "usd", "days": 30}'
 ```
-2. Generate chart using the chart tool:
+2. Generate chart using the chart tool (returns base64 PNG):
 ```
 call chart line_chart '{"data": <price_history_as_date_price_list>, "title": "<TOKEN> 30d"}'
 ```
-3. Support timeframes: 1d, 7d, 30d, 90d, 365d
-4. For candlestick charts, use `call coingecko get_market_chart` with the same params, then group the price points into daily buckets to derive open/high/low/close per day. Pass the resulting [{date, open, high, low, close}, ...] list to `call chart candlestick_chart`.
+3. Upload the chart image to Slack:
+```
+call slack upload_file '{"channel": "<channel>", "content_base64": "<base64_png_from_chart>", "filename": "<TOKEN>-30d.png", "title": "<TOKEN> 30d price chart"}'
+```
+4. Support timeframes: 1d, 7d, 30d, 90d, 365d
+5. For candlestick charts, use `call coingecko get_market_chart` with the same params, then group the price points into daily buckets to derive open/high/low/close per day. Pass the resulting [{date, open, high, low, close}, ...] list to `call chart candlestick_chart`, then upload via `slack upload_file`.
 
 When the user asks to **compare** tokens (e.g. "ETH vs SOL"):
 1. Get price history for both tokens via coingecko get_market_chart
-2. Generate comparison chart:
+2. Generate comparison chart (returns base64 PNG):
 ```
 call chart comparison_chart '{"series1": <data1>, "series2": <data2>, "label1": "ETH", "label2": "SOL"}'
+```
+3. Upload the chart image to Slack:
+```
+call slack upload_file '{"channel": "<channel>", "content_base64": "<base64_png_from_chart>", "filename": "ETH-vs-SOL.png", "title": "ETH vs SOL comparison"}'
 ```
 
 When the user says **"market"** or asks about market overview:

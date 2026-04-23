@@ -1,6 +1,6 @@
-"""SVG chart generation for crypto market data.
+"""Chart generation for crypto market data.
 
-Generates server-side SVG charts from numeric data. No external dependencies.
+Generates SVG charts from numeric data, then converts to base64 PNG for Slack upload.
 Ported from gtmskill's chart-builder.ts.
 
 Charts: line, candlestick (OHLC), comparison (two tokens), and bar.
@@ -8,8 +8,11 @@ Charts: line, candlestick (OHLC), comparison (two tokens), and bar.
 
 from __future__ import annotations
 
+import base64
 import html
 from typing import Any
+
+import cairosvg
 
 
 def _fmt_price(n: float) -> str:
@@ -28,15 +31,31 @@ def _esc(s: str) -> str:
     return html.escape(s, quote=True)
 
 
+def _svg_to_png_base64(svg: str) -> str:
+    """Convert an SVG string to a base64-encoded PNG."""
+    png_bytes = cairosvg.svg2png(bytestring=svg.encode("utf-8"), scale=2)
+    return base64.b64encode(png_bytes).decode("utf-8")
+
+
 class ChartClient:
-    """SVG chart builder."""
+    """Chart builder. Returns base64-encoded PNG images."""
+
+    def render_png(self, svg: str) -> str:
+        """Convert raw SVG string to base64-encoded PNG.
+
+        svg: raw SVG markup
+        Returns: base64-encoded PNG string (ready for slack upload_file with content_base64)
+        """
+        if not svg:
+            return ""
+        return _svg_to_png_base64(svg)
 
     def line_chart(self, data: list[dict], title: str) -> str:
-        """Generate a line chart SVG from price data.
+        """Generate a line chart as base64 PNG.
 
         data: list of {date: str, price: float}
         title: chart title (e.g. "SOL 30d")
-        Returns: SVG string
+        Returns: base64-encoded PNG string
         """
         if not data:
             return ""
@@ -90,7 +109,7 @@ class ChartClient:
         color = "#34d399" if change >= 0 else "#ef4444"
         pct = (change / (data[0]["price"] or 1)) * 100
 
-        return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="background:#0f0f17;border-radius:8px">
+        svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="background:#0f0f17;border-radius:8px">
   <text x="{pad["left"]}" y="24" fill="#e2e8f0" font-size="14" font-weight="600" font-family="monospace">{_esc(title)}</text>
   <text x="{w - pad["right"]}" y="24" fill="{color}" font-size="12" font-family="monospace" text-anchor="end">${_fmt_price(data[-1]["price"])} ({"+" if change >= 0 else ""}{pct:.1f}%)</text>
   {"".join(y_labels)}
@@ -98,13 +117,14 @@ class ChartClient:
   <path d="{area_path}" fill="{color}" opacity="0.08"/>
   <polyline points="{polyline}" fill="none" stroke="{color}" stroke-width="2" stroke-linejoin="round"/>
 </svg>'''
+        return _svg_to_png_base64(svg)
 
     def candlestick_chart(self, data: list[dict], title: str) -> str:
-        """Generate a candlestick (OHLC) chart SVG.
+        """Generate a candlestick (OHLC) chart as base64 PNG.
 
         data: list of {date: str, open: float, high: float, low: float, close: float}
         title: chart title (e.g. "ETH 30d OHLC")
-        Returns: SVG string
+        Returns: base64-encoded PNG string
         """
         if not data:
             return ""
@@ -163,13 +183,14 @@ class ChartClient:
         color = "#34d399" if change >= 0 else "#ef4444"
         pct = (change / (data[0]["open"] or 1)) * 100
 
-        return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="background:#0f0f17;border-radius:8px">
+        svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="background:#0f0f17;border-radius:8px">
   <text x="{pad["left"]}" y="24" fill="#e2e8f0" font-size="14" font-weight="600" font-family="monospace">{_esc(title)}</text>
   <text x="{w - pad["right"]}" y="24" fill="{color}" font-size="12" font-family="monospace" text-anchor="end">${_fmt_price(data[-1]["close"])} ({"+" if change >= 0 else ""}{pct:.1f}%)</text>
   {"".join(y_labels)}
   {"".join(x_labels)}
   {"".join(candles)}
 </svg>'''
+        return _svg_to_png_base64(svg)
 
     def comparison_chart(self, series1: list[dict], series2: list[dict], label1: str, label2: str) -> str:
         """Generate a comparison chart (two tokens, normalized to % change, log scale).
@@ -241,7 +262,7 @@ class ChartClient:
                     f'<text x="{x}" y="{h - 10}" fill="#9ca3af" font-size="9" text-anchor="middle">{d["date"][5:]}</text>'
                 )
 
-        return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="background:#0f0f17;border-radius:8px">
+        svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="background:#0f0f17;border-radius:8px">
   <text x="{w // 2}" y="18" fill="#e2e8f0" font-size="13" font-weight="600" font-family="monospace" text-anchor="middle">{_esc(label1)} vs {_esc(label2)} — Relative Performance (log scale)</text>
   <rect x="{pad["left"]}" y="{pad["top"] - 30}" width="10" height="10" rx="2" fill="{color1}"/>
   <text x="{pad["left"] + 14}" y="{pad["top"] - 21}" fill="{color1}" font-size="11" font-family="monospace">{_esc(label1)} ({"+" if pct1 >= 0 else ""}{pct1:.1f}%)</text>
@@ -252,13 +273,14 @@ class ChartClient:
   <polyline points="{pts1}" fill="none" stroke="{color1}" stroke-width="2" stroke-linejoin="round"/>
   <polyline points="{pts2}" fill="none" stroke="{color2}" stroke-width="2" stroke-linejoin="round"/>
 </svg>'''
+        return _svg_to_png_base64(svg)
 
     def bar_chart(self, data: list[dict], title: str) -> str:
-        """Generate a bar chart SVG.
+        """Generate a bar chart as base64 PNG.
 
         data: list of {label: str, value: float}
         title: chart title
-        Returns: SVG string
+        Returns: base64-encoded PNG string
         """
         if not data:
             return ""
@@ -283,10 +305,11 @@ class ChartClient:
                 f' transform="rotate(-30 {x + bar_w / 2:.1f} {h - 15})">{_esc(d["label"][:12])}</text>'
             )
 
-        return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="background:#0f0f17;border-radius:8px">
+        svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="background:#0f0f17;border-radius:8px">
   <text x="{pad["left"]}" y="24" fill="#e2e8f0" font-size="14" font-weight="600" font-family="monospace">{_esc(title)}</text>
   {"".join(bars)}
 </svg>'''
+        return _svg_to_png_base64(svg)
 
 
 def _client() -> ChartClient:
