@@ -690,7 +690,7 @@ async def test_claim_next_execution_runs_different_threads_concurrently_but_seri
 
 
 @pytest.mark.asyncio
-async def test_claim_next_execution_reclaims_expired_cancel_requested(db_pool):
+async def test_recover_stale_running_finalizes_expired_cancel_requested(db_pool):
     from api.runtime_control import _claim_next_execution, _recover_stale_running
 
     execution_id = f"exe-{uuid.uuid4().hex[:12]}"
@@ -707,11 +707,15 @@ async def test_claim_next_execution_reclaims_expired_cancel_requested(db_pool):
     )
 
     await _recover_stale_running(db_pool)
-    claimed = await _claim_next_execution(db_pool)
 
-    assert claimed is not None
-    assert claimed["execution_id"] == execution_id
-    assert claimed["status"] == "cancel_requested"
+    row = await db_pool.fetchrow(
+        "SELECT status, terminal_reason FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert row is not None
+    assert row["status"] == "cancelled"
+    assert row["terminal_reason"] == "cancelled"
+    assert await _claim_next_execution(db_pool) is None
 
 
 @pytest.mark.asyncio
@@ -777,7 +781,7 @@ async def test_cancel_execution_interrupts_runtime_and_clears_inflight(db_pool):
 
 
 @pytest.mark.asyncio
-async def test_recover_stale_running_requeues_expired_execution(db_pool):
+async def test_recover_stale_running_fails_expired_execution(db_pool):
     from api.runtime_control import _recover_stale_running
 
     execution_id = f"exe-{uuid.uuid4().hex[:12]}"
@@ -796,11 +800,13 @@ async def test_recover_stale_running_requeues_expired_execution(db_pool):
     await _recover_stale_running(db_pool)
 
     row = await db_pool.fetchrow(
-        "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
+        "SELECT status, terminal_reason, error_text FROM agent_execution_requests WHERE execution_id = $1",
         execution_id,
     )
     assert row is not None
-    assert row["status"] == "queued"
+    assert row["status"] == "failed_permanent"
+    assert row["terminal_reason"] == "worker_lease_expired"
+    assert row["error_text"] is not None and "worker lease expired" in row["error_text"]
 
 
 @pytest.mark.asyncio

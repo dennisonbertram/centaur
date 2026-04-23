@@ -1885,13 +1885,44 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
 
 
 async def _recover_stale_running(pool) -> None:
-    await pool.execute(
-        "UPDATE agent_execution_requests SET "
-        "status = CASE WHEN status IN ('running', 'retry_wait') THEN 'queued' ELSE status END, "
-        "worker_id = NULL, worker_lease_expires_at = NULL, updated_at = NOW() "
+    # A stale lease means the worker that owned this turn is gone (API restart,
+    # crash, or hang). The in-memory stdout stream from the sandbox is lost —
+    # re-claiming and reattaching via `docker exec` would only see new output,
+    # not the events the previous worker was consuming, so the turn would just
+    # sit idle until the silence watchdog fires ~10 min later. Skip the limbo
+    # and finalize it now so the worker slot frees up immediately.
+    rows = await pool.fetch(
+        "SELECT execution_id, thread_key, status FROM agent_execution_requests "
         "WHERE status IN ('running', 'retry_wait', 'cancel_requested') "
-        "AND (worker_lease_expires_at IS NULL OR worker_lease_expires_at <= NOW())",
+        "AND (worker_lease_expires_at IS NULL OR worker_lease_expires_at <= NOW())"
     )
+    for row in rows:
+        prior_status = row["status"]
+        if prior_status == "cancel_requested":
+            status = "cancelled"
+            terminal_reason = "cancelled"
+            error_text = None
+        else:
+            status = "failed_permanent"
+            terminal_reason = "worker_lease_expired"
+            error_text = "worker lease expired (API restart or worker crash); turn stream unrecoverable"
+        try:
+            await _mark_execution_terminal(
+                pool,
+                execution_id=row["execution_id"],
+                thread_key=row["thread_key"],
+                status=status,
+                terminal_reason=terminal_reason,
+                result_text=error_text or "",
+                error_text=error_text,
+            )
+        except Exception:
+            log.warning(
+                "recover_stale_running_finalize_failed",
+                execution_id=row["execution_id"],
+                thread_key=row["thread_key"],
+                exc_info=True,
+            )
 
 
 async def _recover_stale_running_if_due(pool) -> None:
