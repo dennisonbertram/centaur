@@ -122,9 +122,59 @@ The JSON parameter object:
 
 The script outputs the path to the generated `.docx` file.
 
-### Step 4: Deliver
+### Step 4: Upload the .docx to Slack
 
-Tell the user the file has been generated and provide the file path. Offer:
+You MUST upload the generated `.docx` file directly to the Slack channel/thread so the user can download it. Do not just report that a file was generated — the user needs the actual document.
+
+**Step 4a: Discover the Slack upload method**
+
+```bash
+curl -s http://api:8000/tools/slack -H "X-Api-Key: $CENTAUR_API_KEY"
+```
+
+Look for any method with "upload" or "file" in the name (e.g., `upload_file`, `send_file`, `files_upload`).
+
+**Step 4b: Upload the file**
+
+Call the discovered method. Example (adjust method name and parameters based on discovery):
+
+```bash
+curl -s -X POST http://api:8000/tools/slack/upload_file \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: $CENTAUR_API_KEY" \
+  -d '{
+    "file_path": "<path to generated .docx>",
+    "filename": "Term Sheet - <Company> Series <X>.docx",
+    "channel": "<channel from thread metadata>",
+    "title": "Term Sheet - <Company> Series <X>",
+    "initial_comment": "Here is the generated term sheet."
+  }'
+```
+
+**Step 4c: Fallback — if no Slack upload method exists**
+
+If the slack tool has no file upload method, use the Slack API directly with the bot token:
+
+```bash
+curl -s -X POST https://slack.com/api/files.uploadV2 \
+  -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+  -F "channel_id=<channel_id>" \
+  -F "filename=Term Sheet - <Company> Series <X>.docx" \
+  -F "file=@<path to generated .docx>" \
+  -F "title=Term Sheet - <Company> Series <X>" \
+  -F "initial_comment=Here is the generated term sheet."
+```
+
+If `$SLACK_BOT_TOKEN` is not set, try reading it from secrets:
+```bash
+curl -s http://api:8000/tools/slack/get_bot_token -H "X-Api-Key: $CENTAUR_API_KEY"
+```
+
+⚠️ **Do not skip this step.** The user must receive the actual .docx file in Slack.
+
+### Step 5: Deliver
+
+Confirm the file was uploaded and the user can download it. Offer:
 - "Want me to review this term sheet against the Paradigm playbook?"
 - "Want me to adjust any terms?"
 - "Want me to generate a version with different economics?"
@@ -139,4 +189,5 @@ However, if the user asks to "review" a term sheet that this skill just generate
 
 - Always output a `.docx` file — never markdown-only
 - File name format: `Term Sheet - [Company] Series [X].docx`
-- Save to the current working directory unless the user specifies a path
+- Always upload the .docx directly to the Slack thread so the user can download it
+- If Slack upload fails, tell the user and offer to retry
