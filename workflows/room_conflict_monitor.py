@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from api.workflow_engine import WorkflowContext
 
 WORKFLOW_NAME = "room_conflict_monitor"
 
-ROOM_CALENDARS = [
+ROOM_EMAILS = [
     "paradigm.xyz_188fm3e1sqa38h6alb7s452fnlu6q6gb74oj0c9o6co3ad9p6k@resource.calendar.google.com",
     "paradigm.xyz_188boiki4jtm2js3n7uq5mfr58k6q6gb74o34cpl70s32chi70@resource.calendar.google.com",
     "paradigm.xyz_188f57ur7em5cimjkten5t7idbboi6ga64sjgd9k6cq36c9p@resource.calendar.google.com",
@@ -29,7 +29,7 @@ class Input:
 
 
 async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
-    """Poll all SF conference room calendars and alert on double-bookings."""
+    """Poll all accessible user calendars for room bookings and alert on double-bookings."""
 
     seen_conflict_keys: list[str] = []
     iteration = 0
@@ -41,42 +41,46 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             f"check_{iteration}",
             text=f"""You are monitoring SF conference rooms for double-bookings. Follow these steps exactly.
 
-ROOMS TO MONITOR:
-{chr(10).join(f"- {r}" for r in ROOM_CALENDARS)}
+ROOM RESOURCE EMAILS TO WATCH:
+{chr(10).join(f"- {r}" for r in ROOM_EMAILS)}
 
-ALREADY-REPORTED CONFLICTS (do NOT alert on these again):
+ALREADY-REPORTED CONFLICTS (skip these):
 {seen_conflict_keys}
 
 STEPS:
 
-1. For each room calendar above, call the gsuite `calendar_events` tool to fetch all events
-   from now through {inp.lookahead_days} days from now.
+1. Call gsuite `calendar_list` to get all accessible calendars.
 
-2. For each room, check every pair of events for a time overlap. Two events overlap when:
+2. For each calendar returned, call gsuite `calendar_events` with that calendar's ID
+   to fetch all events from now through {inp.lookahead_days} days from now.
+   Use max_results=100.
+
+3. From all fetched events, keep only events where at least one attendee email
+   matches one of the ROOM RESOURCE EMAILS above. These are room bookings.
+
+4. Group the room bookings by the matched room email.
+
+5. Within each room group, check every pair of events for a time overlap:
      event_a.start < event_b.end  AND  event_a.end > event_b.start
 
-3. For each overlapping pair, compute a conflict key:
-     "<calendar_id>::<sorted_event_id_1>|<sorted_event_id_2>"
-   (sort the two event IDs alphabetically before joining)
+6. For each overlapping pair compute a conflict key:
+     "<room_email>::<alphabetically_first_event_id>|<alphabetically_second_event_id>"
 
-4. Skip any conflict key that appears in the ALREADY-REPORTED CONFLICTS list above.
+7. Skip any key already in ALREADY-REPORTED CONFLICTS.
 
-5. For each NEW conflict:
-   a. Determine which event is newer by comparing their `created` timestamps.
-      The newer event is the "new booking" (the one causing the conflict).
-   b. Post a Slack message to channel #{inp.slack_channel} in this exact format:
+8. For each NEW conflict:
+   a. The newer event (higher `created` timestamp) is the booking causing the conflict.
+   b. Send a Slack message to channel #{inp.slack_channel}:
 
       🚨 *Room Conflict Detected*
-      *Room:* <room calendar summary/name>
-      *New booking by:* <organizer display name of the newer event>
-      *Event:* "<newer event title>"
+      *Room:* <room name from the attendee displayName field>
+      *New booking by:* <organizer.displayName of the newer event>
+      *Event:* "<newer event summary>"
       *Time:* <day of week, date, start time – end time in PT>
-      *Conflicts with:* "<older event title>" (organized by <older event organizer>)
+      *Conflicts with:* "<older event summary>" (organized by <older event organizer.displayName>)
 
-6. Return a JSON object with exactly this key:
-   {{"new_conflict_keys": ["key1", "key2", ...]}}
-
-   If there are no new conflicts, return {{"new_conflict_keys": []}}
+9. Return JSON: {{"new_conflict_keys": ["key1", ...]}}
+   Return {{"new_conflict_keys": []}} if no new conflicts.
 """,
         )
 
