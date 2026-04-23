@@ -176,12 +176,11 @@ async def get_app_logs(request: Request, name: str, tail: int = 200):
 
 # ── Reverse proxy (NO API key — uses basic auth only) ────────────────────────
 #
-# This is a separate router so browser/public traffic can reach apps via
-# subdomain ({name}.svc-ai.dayno.xyz) without an API key.  Nginx rewrites
-# the subdomain to /app-proxy/{name}/{path}, which hits this router.
-# Basic auth is checked per-app if configured.
+# Separate router so browser/public traffic can reach apps at /apps/{name}/
+# without an API key.  Basic auth is checked per-app if configured.
+# Registered AFTER the management router so explicit routes match first.
 
-proxy_router = APIRouter(tags=["app-proxy"])
+proxy_router = APIRouter(prefix="/apps", tags=["app-proxy"])
 
 
 def _check_basic_auth(request: Request, auth_user: str, auth_pass_hash: str) -> bool:
@@ -279,14 +278,10 @@ async def _do_proxy(request: Request, name: str, path: str):
 
 
 @proxy_router.api_route(
-    "/app-proxy/{name}/{path:path}",
+    "/{name}/{path:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
     include_in_schema=False,
 )
 async def proxy_to_app(request: Request, name: str, path: str):
-    """Reverse proxy requests to app containers.
-
-    Nginx rewrites subdomain requests ({name}.svc-ai.dayno.xyz/foo)
-    to /app-proxy/{name}/foo so this handler can resolve the app.
-    """
+    """Reverse proxy requests to app containers at /apps/{name}/{path}."""
     return await _do_proxy(request, name, path)

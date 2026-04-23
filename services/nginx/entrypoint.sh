@@ -74,7 +74,6 @@ fi
 
 if is_enabled apps; then
   append_proxy_location "^~" "/apps/" "${CENTAUR_NGINX_API_UPSTREAM:-http://api:8000}"
-  append_proxy_location "^~" "/app-proxy/" "${CENTAUR_NGINX_API_UPSTREAM:-http://api:8000}"
 fi
 
 if is_enabled admin; then
@@ -124,7 +123,7 @@ server {
     server_name ~^(?<appname>[a-z0-9][a-z0-9-]*)\.${ESCAPED_DOMAIN}\$;
 
     location / {
-        rewrite ^(.*)\$ /app-proxy/\$appname\$1 break;
+        rewrite ^(.*)\$ /apps/\$appname\$1 break;
         proxy_pass ${API_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
