@@ -49,6 +49,25 @@ async def metrics() -> Response:
     return Response(content=payload, media_type="text/plain; charset=utf-8")
 
 
+@router.get("/usage-stats")
+async def usage_stats() -> Response:
+    from api.app import app
+
+    try:
+        row = await app.state.db_pool.fetchrow(
+            "SELECT data_json, generated_at FROM usage_stats WHERE id = 'current'"
+        )
+    except Exception:
+        return JSONResponse(status_code=503, content={"detail": "Database unavailable"})
+    if not row:
+        return JSONResponse(status_code=404, content={"detail": "No stats generated yet"})
+    data = row["data_json"]
+    if not isinstance(data, dict):
+        return JSONResponse(status_code=500, content={"detail": "Malformed stats data"})
+    data["generated_at"] = row["generated_at"].isoformat() if row["generated_at"] else None
+    return JSONResponse(content=data, headers={"Cache-Control": "public, max-age=240"})
+
+
 @router.get("/health/tools", dependencies=[Depends(verify_operator_api_key)])
 async def health_tools() -> dict[str, Any]:
     from api.app import get_tool_manager
