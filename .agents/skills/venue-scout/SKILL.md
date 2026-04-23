@@ -1,11 +1,19 @@
 ---
 name: venue-scout
-description: "Finds and ranks venues for Paradigm events. Use when asked to scout a venue, shortlist private dining rooms, compare buyout options, or match a venue to an event brief with city, neighborhood, size, and vibe constraints. Triggers on: venue scout, find me a venue, private dining, full buyout, offsite, fellow dinner, cocktail party, flagship event."
+description: "Finds and ranks venues for Paradigm events. When invoked without a concrete brief, sends the Venue Scout web app for the full intake flow; when a brief is provided in chat, researches and returns a ranked shortlist. Use when asked to scout a venue, shortlist private dining rooms, compare buyout options, or match a venue to an event brief with city, neighborhood, guest count, and vibe constraints. Triggers on: venue scout, find me a venue, private dining, full buyout, offsite, fellow dinner, cocktail party, flagship event."
 ---
 
 # Venue Scout
 
-Centaur-native port of the `krgxyz/venue-scout` skill. It preserves the original curated venue database, search strategy, and scoring rubric, but expresses them in Centaur's `SKILL.md` format so the skill can actually load inside Centaur.
+Centaur-native port of the `krgxyz/venue-scout` skill. Route users to the Venue Scout web app for the full intake flow, or research and return a ranked shortlist directly in chat when the brief is already provided.
+
+## How To Invoke
+
+```text
+@Centaur open venue scout
+@Centaur venue scout
+@Centaur find me a venue
+```
 
 ## Use When
 
@@ -16,6 +24,20 @@ Centaur-native port of the `krgxyz/venue-scout` skill. It preserves the original
 
 Do not use this skill for travel planning, hotel room blocks without event programming, or generic restaurant recommendations that do not involve an event brief.
 
+## Behavior
+
+When this skill is invoked without a concrete brief, respond with the web app URL so the user can complete the full intake flow:
+
+```text
+Venue Scout is ready.
+Open the full intake flow here: https://venue-scout.centaur.paradigm.xyz
+
+Or give me a quick brief here and I will return a shortlist right in chat:
+city · event type · guest count · vibe · budget
+```
+
+If the user provides a brief directly in chat, do not bounce them to the app first. Research venues and return a ranked shortlist in chat using the workflow and scoring rubric below.
+
 ## Paradigm Defaults
 
 - Bias toward Michelin-caliber or craft-driven kitchens, design-forward rooms, strong neighborhood feel, and spaces that feel intentional rather than corporate.
@@ -23,6 +45,10 @@ Do not use this skill for travel planning, hotel room blocks without event progr
 - Avoid hotel ballrooms unless the brief is a true resort offsite or flagship property buyout.
 - Prioritize Paradigm's pre-vetted venues from `reference/curated-venues.md` when they fit the brief.
 - Still surface at least 1 or 2 strong new or under-the-radar options whenever possible.
+
+## Paradigm Venue Database
+
+Start with `reference/curated-venues.md` for the pre-vetted venue set by city and event archetype. Treat it as the first pass, not the automatic final answer.
 
 ## Required Inputs
 
@@ -74,8 +100,10 @@ call websearch search '{"query":"site:eater.com <city> best private dining rooms
 call websearch search '{"query":"site:theinfatuation.com <city> intimate restaurant private dining","num_results":5,"synthesize":true}'
 call websearch search '{"query":"site:resy.com <city> private dining restaurants events","num_results":5,"synthesize":true}'
 call websearch search '{"query":"site:opentable.com <city> private dining buyout events","num_results":5,"synthesize":true}'
+call websearch search '{"query":"site:beliapp.com <city> private dining restaurants events","num_results":5,"synthesize":true}'
 call websearch search '{"query":"reddit <city> best private dining event space 2026","num_results":5,"synthesize":true}'
 call websearch search '{"query":"site:yelp.com <city> private dining room event space highly rated","num_results":5,"synthesize":true}'
+call websearch search '{"query":"site:instagram.com <city> restaurant private dining events","num_results":5,"synthesize":true}'
 call websearch search '{"query":"<city> under the radar restaurant hidden gem 2026 private dining","num_results":5,"synthesize":true}'
 call websearch search '{"query":"<neighborhood> <city> best restaurant private dining 2026","num_results":5,"synthesize":true}'
 ```
@@ -85,8 +113,10 @@ Favor these source types because they map closely to the original skill:
 - Eater for new openings and editor-curated roundups
 - Infatuation for vibe matching and neighborhood picks
 - Resy and OpenTable for event-readiness and reservation signals
+- Beli for current diner signal
 - Reddit for local edge and hidden gems
 - Yelp for private-dining and event-space operational signal
+- Instagram for real-world visual signal and recent activity
 - local press for freshness and opening status
 
 ### 4. Verify the venue is real and live
@@ -116,7 +146,7 @@ Use these interpretations:
 - `food_quality`: chef reputation, kitchen quality, ingredient rigor, consistency.
 - `private_dining`: quality of PDR or buyout setup, privacy, event friendliness, flexibility.
 - `neighborhood_feel`: walkability, local character, lack of tourist or corporate feel.
-- `design_aesthetic`: interior design, lighting, texture, visual cohesion, photography value.
+- `design_aesthetic`: interior design, lighting, natural light when relevant, texture, visual cohesion, photography value.
 - `logistics`: capacity fit, accessibility, noise, A/V, booking practicality, price realism.
 
 ### 6. Return a ranked shortlist
@@ -134,7 +164,7 @@ For each venue include:
 - `scores`
 - `outreach hook`
 
-## Output Shape
+## Slack Output Format
 
 Default to a human-readable shortlist, not raw JSON.
 
