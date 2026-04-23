@@ -402,6 +402,10 @@ Answer any question about a Member of Congress — their staff, donors, voting r
 
 Maintain a standing map of current staff across the Senate Banking Committee and House Financial Services Committee (HFSC), covering both Republican and Democratic sides. Pulls from LegiStorm, joins against existing Gigabrain touchpoints and notes, and generates three purpose-built views from a single underlying dataset. Runs a silent weekly refresh with targeted Slack pings for roster changes.
 
+**LegiStorm office IDs (hardcoded — do not re-discover):**
+- Senate Banking, Housing and Urban Affairs Committee: `office_id = 676`
+- House Financial Services Committee: `office_id = 1200`
+
 **Trigger Phrases:**
 - "Hill staff map" / "Banking Committee staff" / "HFSC bench"
 - "Who do we know on Senate Banking?" / "Who do we know on HFSC?"
@@ -414,38 +418,45 @@ Maintain a standing map of current staff across the Senate Banking Committee and
 **Ranking Logic**
 
 Rank by two fields — not title, since titles are inconsistent across offices:
-1. **Committee role depth** — committee staff rank above personal office staff
-2. **Total years of Hill experience** — computed from LegiStorm career history across all Hill roles, from earliest start date to present
+1. **Committee role depth** — staff with `office_id` 676 or 1200 in their current position (committee staff) rank above personal office staff
+2. **Total years of Hill experience** — use the earliest `start_date` across all entries in `positions[]` to compute years on the Hill to present
 
-All title variants are descriptive metadata only. Record as-is; do not use for ranking. Accepted variants: `Legislative Assistant`, `Senior Legislative Assistant`, `Legislative Correspondent`, `Legislative Director`, `Policy Advisor`, `Counsel`, `Professional Staff Member`, `Staff Director`.
+All title variants are descriptive metadata only. Record the value from `positions[].position_title` as-is; do not use for ranking. Accepted variants include: `Legislative Assistant`, `Senior Legislative Assistant`, `Legislative Correspondent`, `Legislative Director`, `Policy Advisor`, `Counsel`, `Professional Staff Member`, `Staff Director`.
+
+**Data fields to use from LegiStorm staff records:**
+- Name: `staff.preferred_first_name` + `staff.preferred_last_name`
+- Title (metadata): `positions[is_current=true].position_title`
+- Party/side: `staff.bio_details.party_name` (Republican / Democrat) and `staff.bio_details.maj_min` (majority / minority)
+- Hill experience: earliest `positions[].start_date` across all positions → compute years to today
+- Committee staff flag: check if any `positions[].office_id` matches 676 or 1200
 
 **Steps — On-Demand Query:**
 
-1. **Get committee member lists via Congress.gov:**
+1. **Pull committee staff directly using hardcoded office IDs:**
    ```bash
-   # Get Senate committee list, identify Senate Banking (SSBK)
-   call congress committees '{"congress":119,"chamber":"senate"}'
-   # Get House committee list, identify HFSC (HSHM)
-   call congress committees '{"congress":119,"chamber":"house"}'
+   call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","office_id":676,"limit":100}'
+   call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","office_id":1200,"limit":100}'
    ```
 
-2. **Resolve committee members to LegiStorm IDs:**
+2. **Get committee member lists for personal office staff:**
    ```bash
-   # Pull a broad current member list and match by name/state
+   read_web_page https://www.banking.senate.gov/about/members
+   read_web_page https://financialservices.house.gov/about/members.htm
+   ```
+
+3. **Resolve committee members to LegiStorm member IDs, then pull personal office staff:**
+   ```bash
+   # Match members by name/state from the membership pages
    call legistorm get_members '{"updated_from":"2025-01-01","updated_to":"2026-12-31","limit":100}'
-   ```
-
-3. **Pull staff for all committee members — both R and D sides:**
-   ```bash
-   # Repeat for each member_id resolved in Step 2
+   # Then for each matching member_id:
    call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","member_id":[member_id],"limit":50}'
    ```
 
-4. **Filter for policy-relevant staff.** Accept all title variants listed above. Record the exact title as metadata; do not filter or rank by title.
+4. **Filter personal office staff** to policy-relevant titles only (see accepted variants above). Skip schedulers, communications staff, and caseworkers.
 
 5. **Rank the combined roster:**
-   - Committee staff before personal office staff
-   - Within each tier, sort by total years of Hill experience (earliest LegiStorm role start date → present)
+   - Committee staff (office_id 676 or 1200) first
+   - Within each tier, sort by total years of Hill experience ascending from earliest `positions[].start_date`
 
 6. **Join against Gigabrain touchpoints and notes for relationship context:**
    ```bash
@@ -469,8 +480,8 @@ Generate whichever view is requested. Default to Policy View.
 
 **Policy View** — outreach and issue tracking
 
-| Name | Office | Title (metadata) | Cmt Staff? | Hill Yrs | Issue Areas | Known to Paradigm | Last Touchpoint |
-|------|--------|-----------------|------------|----------|-------------|-------------------|-----------------|
+| Name | Office | Title (metadata) | Cmt Staff? | Hill Yrs | Side | Known to Paradigm | Last Touchpoint |
+|------|--------|-----------------|------------|----------|------|-------------------|-----------------|
 
 Sort: committee staff first, then Hill years descending. Open relationships (Known: No) surfaced last within each tier.
 
@@ -499,9 +510,9 @@ Silently refresh the canonical LegiStorm data in the background — no notificat
 Do not ping for title changes, intra-office transfers, or data corrections.
 
 ```bash
-# Refresh pattern
-call legistorm get_members '{"updated_from":"[last_refresh_date]","updated_to":"[today]","limit":100}'
-call legistorm get_staff '{"updated_from":"[last_refresh_date]","updated_to":"[today]","limit":200}'
+# Refresh pattern — use office_id directly, no discovery step needed
+call legistorm get_staff '{"updated_from":"[last_refresh_date]","updated_to":"[today]","office_id":676,"limit":100}'
+call legistorm get_staff '{"updated_from":"[last_refresh_date]","updated_to":"[today]","office_id":1200,"limit":100}'
 ```
 
 **Notes Policy (scoped to this section)**
