@@ -129,6 +129,13 @@ NOISE_WORDS = frozenset({
     "ordering", "these", "this", "that",
 })
 
+INTERNAL_TOOLS = frozenset({
+    "paradigmdb", "vlogs", "personas", "workflow", "agent", "investmemos",
+    "research", "events", "termsheet", "social-monitor", "demo", "unit410",
+    "infra", "crypto", "archiver", "media", "vmetrics", "metadata",
+    "productivity", "comms", "nano-banana", "read_web_page",
+})
+
 CALL_RE = re.compile(r"call\s+([a-z][a-z0-9_-]*)\s+([a-z][a-z0-9_-]*)")
 CURL_RE = re.compile(r"/tools/([a-z][a-z0-9_-]+)/([a-z][a-z0-9_-]+)")
 
@@ -220,7 +227,7 @@ async def _extract_tools(pool, thread_users: dict[str, str]) -> list[dict]:
             "last_seen": s["last"],
             "first_url": _thread_to_slack_url(s["first_thread"] or ""),
             "last_url": _thread_to_slack_url(s["last_thread"] or ""),
-            "icon": f"icons/{tool}.png" if tool not in NOISE_WORDS else "centaur.png",
+            "icon": "centaur.png" if tool in INTERNAL_TOOLS else f"icons/{tool}.png",
         })
     return result
 
