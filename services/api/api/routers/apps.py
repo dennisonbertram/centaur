@@ -222,7 +222,7 @@ async def _do_proxy(request: Request, name: str, path: str):
     if not container_ip:
         raise HTTPException(status_code=503, detail="Cannot resolve app container IP")
 
-    target_url = f"http://{container_ip}:{row['port']}/{path}"
+    target_url = f"http://{container_ip}:{row['port']}/apps/{name}/{path}"
     if request.url.query:
         target_url += f"?{request.url.query}"
 
