@@ -36,6 +36,10 @@ RSS_FEEDS = [
     {"name": "New York Times - Politics", "url": "https://rss.nytimes.com/services/xml/rss/nyt/Politics.xml"},
     {"name": "Wall Street Journal", "url": "https://feeds.a.dj.com/rss/RSSWorldNews.xml"},
     {"name": "Financial Times", "url": "https://www.ft.com/rss/home"},
+    {"name": "CFTC - Press Releases", "url": "https://www.cftc.gov/RSS/RSSGP/rssgp.xml"},
+    {"name": "CFTC - Enforcement", "url": "https://www.cftc.gov/RSS/RSSENF/rssenf.xml"},
+    {"name": "SEC - Press Releases", "url": "https://www.sec.gov/rss/news/pressreleases.rss"},
+    {"name": "OCC - News Releases", "url": "https://www.occ.treas.gov/rss/occ_news.xml"},
 ]
 
 EDITORIAL_BRIEF = """
