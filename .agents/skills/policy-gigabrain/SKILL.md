@@ -398,6 +398,116 @@ Answer any question about a Member of Congress — their staff, donors, voting r
 - Legislative activity relevant to the question
 - Internal Paradigm touchpoints (Slack, email, notes)
 
+### 2c. Hill Staff Map
+
+Maintain a standing map of current staff across the Senate Banking Committee and House Financial Services Committee (HFSC), covering both Republican and Democratic sides. Pulls from LegiStorm, joins against existing Gigabrain touchpoints and notes, and generates three purpose-built views from a single underlying dataset. Runs a silent weekly refresh with targeted Slack pings for roster changes.
+
+**Trigger Phrases:**
+- "Hill staff map" / "Banking Committee staff" / "HFSC bench"
+- "Who do we know on Senate Banking?" / "Who do we know on HFSC?"
+- "Who should we be meeting on Senate Banking?" / "on HFSC?"
+- "Which staffers cover [issue] on Senate Banking / HFSC?"
+- "Talent view of Banking Committee staff"
+- "Any new hires on Senate Banking?" / "on HFSC?"
+- "Policy view / briefing view of Senate Banking / HFSC staff"
+
+**Ranking Logic**
+
+Rank by two fields — not title, since titles are inconsistent across offices:
+1. **Committee role depth** — committee staff rank above personal office staff
+2. **Total years of Hill experience** — computed from LegiStorm career history across all Hill roles, from earliest start date to present
+
+All title variants are descriptive metadata only. Record as-is; do not use for ranking. Accepted variants: `Legislative Assistant`, `Senior Legislative Assistant`, `Legislative Correspondent`, `Legislative Director`, `Policy Advisor`, `Counsel`, `Professional Staff Member`, `Staff Director`.
+
+**Steps — On-Demand Query:**
+
+1. **Get committee member lists via Congress.gov:**
+   ```bash
+   # Get Senate committee list, identify Senate Banking (SSBK)
+   call congress committees '{"congress":119,"chamber":"senate"}'
+   # Get House committee list, identify HFSC (HSHM)
+   call congress committees '{"congress":119,"chamber":"house"}'
+   ```
+
+2. **Resolve committee members to LegiStorm IDs:**
+   ```bash
+   # Pull a broad current member list and match by name/state
+   call legistorm get_members '{"updated_from":"2025-01-01","updated_to":"2026-12-31","limit":100}'
+   ```
+
+3. **Pull staff for all committee members — both R and D sides:**
+   ```bash
+   # Repeat for each member_id resolved in Step 2
+   call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","member_id":[member_id],"limit":50}'
+   ```
+
+4. **Filter for policy-relevant staff.** Accept all title variants listed above. Record the exact title as metadata; do not filter or rank by title.
+
+5. **Rank the combined roster:**
+   - Committee staff before personal office staff
+   - Within each tier, sort by total years of Hill experience (earliest LegiStorm role start date → present)
+
+6. **Join against Gigabrain touchpoints and notes for relationship context:**
+   ```bash
+   call slack search_messages '{"query":"in:#gigabrain-feed [staffer_name]"}'
+   call slack search_messages '{"query":"in:#gigabrain-feed #touchpoint [office_name]"}'
+   call paradigmdb notes_search '{"query":"[staffer_name]"}'
+   call gsuite drive_search '{"query":"Policy Touchpoint Log","max_results":10}'
+   call gsuite sheets_read '{"spreadsheet_id":"[touchpoint_sheet_id]","range_notation":"A:C"}'
+   ```
+
+7. **Flag relationship status.** Mark each staffer `Known to Paradigm: Yes` if any touchpoint, note, or Slack mention surfaces in Step 6; otherwise `No`.
+
+8. **Relationship prompt.** When surfacing any staffers with `Known to Paradigm: No`, append to the response:
+   > "I don't have a relationship record for these people — do you know any of them?"
+
+   If the user replies inline, log the reply as a retroactive touchpoint using the same `#touchpoint` capture pattern from **1a**: post to `#gigabrain-feed` and silently append to the Google Sheet touchpoint log.
+
+**Three Views — Same Underlying Data**
+
+Generate whichever view is requested. Default to Policy View.
+
+**Policy View** — outreach and issue tracking
+
+| Name | Office | Title (metadata) | Cmt Staff? | Hill Yrs | Issue Areas | Known to Paradigm | Last Touchpoint |
+|------|--------|-----------------|------------|----------|-------------|-------------------|-----------------|
+
+Sort: committee staff first, then Hill years descending. Open relationships (Known: No) surfaced last within each tier.
+
+**Talent View** — portfolio company hiring
+
+| Name | Current Office | Title (metadata) | Hill Yrs | Crypto/Fintech Coverage | Known to Paradigm |
+|------|---------------|-----------------|----------|------------------------|-------------------|
+
+Sort: Hill years descending. Filter to policy staff with crypto, fintech, or financial regulation coverage. Notes must be positive, observational, concrete, and professional — limited to what you would say directly to the person. Candidate filtering and ranking happen through structured data, not written notes.
+
+**Briefing View** — quick pre-meeting reference
+
+| Name | Office | Committee | Side | Title (metadata) | Hill Yrs | Known |
+|------|--------|-----------|------|-----------------|----------|-------|
+
+Condensed, no issue-area detail. One glance before a meeting or hearing.
+
+**Weekly Refresh**
+
+Silently refresh the canonical LegiStorm data in the background — no notification unless:
+
+- **New staffer** enters the Senate Banking or HFSC universe: post to the policy team Slack channel:
+  > "New staffer added to your bench — do you know them?" [name, office, title, committee side]
+- **Staffer departure**: a staffer previously in the map no longer appears: post a brief departure ping with name and office.
+
+Do not ping for title changes, intra-office transfers, or data corrections.
+
+```bash
+# Refresh pattern
+call legistorm get_members '{"updated_from":"[last_refresh_date]","updated_to":"[today]","limit":100}'
+call legistorm get_staff '{"updated_from":"[last_refresh_date]","updated_to":"[today]","limit":200}'
+```
+
+**Notes Policy (scoped to this section)**
+
+Notes must be positive, observational, concrete, and professional — limited to things you would say directly to the person. Candidate filtering happens through structured data and ranking logic, not written notes.
+
 ### 3. Bill Tracking & Analysis
 
 Monitor crypto-relevant legislation across federal and state jurisdictions.
