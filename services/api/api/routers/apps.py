@@ -279,3 +279,13 @@ async def _do_proxy(request: Request, name: str, path: str):
 async def proxy_to_app(request: Request, name: str, path: str):
     """Reverse proxy requests to app containers at /apps/{name}/{path}."""
     return await _do_proxy(request, name, path)
+
+
+@proxy_router.api_route(
+    "/{name}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+    include_in_schema=False,
+)
+async def proxy_to_app_root(request: Request, name: str):
+    """Reverse proxy requests to app containers at /apps/{name} (no trailing path)."""
+    return await _do_proxy(request, name, "")
