@@ -22,127 +22,87 @@ class Input:
     max_iterations: int = 0  # 0 = run forever
 
 
-BRIEF_PROMPT = """Act as my institutional morning market-color analyst.
+BRIEF_PROMPT = """IMPORTANT: Work efficiently. Follow these data-gathering steps first, then write the brief.
 
+DATA GATHERING (do these in parallel where possible):
+1. Visit https://finance.yahoo.com/ and extract the top market headlines, trending tickers, and market movers
+2. Visit https://finance.yahoo.com/markets/ for SPX, NDX, DXY, VIX, gold, oil, bond yields, USDJPY levels
+3. Visit https://finance.yahoo.com/markets/crypto/ for BTC, ETH, SOL prices and crypto market data
+4. Search for "BTC funding rates open interest ETF flows today" for crypto derivatives color
+5. Visit https://finance.yahoo.com/quote/MSTR/, https://finance.yahoo.com/quote/COIN/, https://finance.yahoo.com/quote/HOOD/, https://finance.yahoo.com/quote/NVDA/, https://finance.yahoo.com/quote/MARA/ for equity data
+6. Search for "crypto market news today" for any breaking developments
+
+After gathering data, write the brief. CITE EVERY DATA POINT with its source in brackets, e.g. [Yahoo Finance], [CoinGlass], [SoSoValue], [Deribit], etc. If a number is stale or unverified, say so.
+
+Act as my institutional morning market-color analyst.
 Audience: a professional trader at Paradigm.
-Goal: give me a dense, no-fluff morning brief that helps me understand what is happening across crypto, macro, and my equities watchlist, and what actually matters for today's tape.
+Goal: dense, no-fluff morning brief. Prioritize signal over noise, positioning over headlines, catalysts over recap.
 
-Use the freshest available verified information. Timestamp the brief clearly in ET and UTC. Separate facts from interpretation. Prioritize signal over noise, positioning over headlines, and catalysts over generic recap language.
+Timestamp the brief in ET and UTC. Separate facts from interpretation.
 
-My watchlists
+Crypto focus: BTC, ETH, SOL, majors, perp funding, spot/perp basis, options skew, ETF flows, stablecoin flows, OI, liquidations, exchange flows, unlocks, protocol developments.
+Macro focus: US 2y, US 10y, real yields, DXY, USDJPY, CNH, gold, oil, VIX, SPX, NDX, credit spreads, central-bank expectations, economic data.
+Equities: {equities}
 
-Crypto focus:
-BTC, ETH, SOL, majors, crypto beta, perp funding, spot/perp basis, options skew and term structure, ETF flows, stablecoin flows, open interest, liquidations, exchange flows, major unlocks, relevant on-chain or protocol-specific developments.
-
-Macro focus:
-US 2y, US 10y, real yields, DXY, USDJPY, CNH, gold, oil, VIX, SPX, NDX, credit spreads, central-bank expectations, major economic data, fiscal/political developments that matter for risk assets.
-
-Equities of interest:
-{equities}
-
-Give me the output in this exact structure:
+OUTPUT STRUCTURE:
 
 1) Top line
-Give me 5-8 bullets on the only things I need to know before the day starts.
-For each bullet, include:
-- what happened
-- why it matters
-- whether it is regime-relevant or just noise
+5-8 bullets. Each bullet: what happened [source], why it matters, regime-relevant or noise.
 
 2) Cross-asset dashboard
-Make a compact table with:
-- asset
-- latest level
-- overnight / 24h move
-- 5d move
-- one-line interpretation
-
-Include at minimum:
-BTC, ETH, SOL, total crypto beta proxy, BTC funding, BTC/ETH basis, BTC/ETH ATM IV, DXY, US 2y, US 10y, real yields, SPX futures, NQ futures, VIX, gold, oil, USDJPY.
-
-Flag anything that is a statistically large move versus recent realized behavior.
+Compact table: asset | level [source] | 24h move | 5d move | interpretation.
+Include: BTC, ETH, SOL, BTC funding, BTC basis, DXY, US 2y, US 10y, SPX, NQ, VIX, gold, oil, USDJPY.
+Flag statistically large moves vs recent realized.
 
 3) Crypto color
-Cover:
-- price action and internals: whether spot or perp-led, OI change, liquidations, funding, basis, options skew, major strikes/expiries, ETF flow context
-- flow/read-through: stablecoin mint/burn, exchange inflows/outflows, treasury or whale activity only if it actually matters
-- sector and token color: majors, L1s, DeFi, memecoins, AI, infra, restaking, or other sectors only where volume/catalyst is real
-- idiosyncratic developments: listings/delistings, legal/regulatory headlines, governance votes, launches, hacks/exploits, unlocks, treasury announcements, exchange issues
-
-End this section with:
-"What matters most for crypto today" in 3 bullets.
+- Price action and internals: spot vs perp-led, OI change, liquidations, funding, basis, options skew, ETF flows [cite source for each]
+- Flow: stablecoin mint/burn, exchange flows, whale activity only if material [cite source]
+- Sector: majors, L1s, DeFi, memecoins — only where volume/catalyst is real
+- Idiosyncratic: listings, regulatory, governance, hacks, unlocks
+End with: "What matters most for crypto today" — 3 bullets.
 
 4) Macro color
-Give me:
-- overnight recap across Asia, Europe, and US premarket
-- the main macro driver of the session
-- what rates/FX/commodities are saying
-- whether this looks like a liquidity day, growth scare, inflation scare, policy relief, squeeze, or idiosyncratic crypto session
-- how macro is feeding into crypto beta, vol, and correlation today
+- Overnight recap: Asia, Europe, US premarket [cite sources]
+- Main macro driver
+- What rates/FX/commodities are saying
+- Session type: liquidity, growth scare, inflation scare, policy relief, squeeze, or idiosyncratic
+- How macro feeds into crypto beta/vol/correlation
 
 5) Equities of interest
-For each ticker in {equities}, give me:
-- premarket or recent move
-- the driver
-- why it matters for crypto / risk sentiment / market structure
-- relevant catalysts, earnings, guidance, legal/policy issues, financing, or positioning only if relevant today
-- key levels only when they matter
+For each ticker in {equities}: move [Yahoo Finance], driver, crypto relevance, catalysts, key levels.
 
-6) What changed since yesterday?
-Give me 3-5 deltas that would actually change priors or positioning.
-Do not repeat stale narratives unless something genuinely changed.
+6) Yahoo Finance headlines
+Top 5-8 headlines from Yahoo Finance that matter for markets today. For each: headline, why it matters, and whether it affects crypto.
 
-7) Calendar and catalysts for the next 24 hours
-List exact times in ET.
-Include only things with plausible market impact:
-- economic data
-- central-bank speakers
-- Treasury supply / auctions
-- major earnings
-- token unlocks
-- ETF decisions or flows
-- court rulings / regulatory deadlines
-- governance votes
-- major expiries / rebalances / conferences
+7) What changed since yesterday?
+3-5 deltas that would change priors. Do not repeat stale narratives.
 
-Rank by expected impact.
+8) Calendar and catalysts next 24h
+Exact times in ET. Rank by expected impact. Include: economic data, central-bank speakers, Treasury auctions, earnings, token unlocks, ETF decisions, regulatory deadlines, governance votes, major expiries.
 
-8) Positioning and variant perception
-Tell me:
-- what the market appears to believe
-- what is underpriced or over-discounted
-- what consensus is leaning on
-- what would invalidate consensus
+9) Positioning and variant perception
+What market believes, what is underpriced, consensus leans, what invalidates consensus.
 
-9) Trade framing
-Give me:
-- base case for today
-- bull case
-- bear case
-- the levels and triggers that matter
-- what flow or macro confirmation I'd need to lean harder
-- any clean cross-asset expressions or hedges that make sense
+10) Trade framing
+Base/bull/bear case, levels and triggers, flow confirmation needed, cross-asset expressions or hedges. No forced ideas — only setups with catalyst, dislocation, or positioning edge.
 
-No forced trade ideas. Only include setups with an actual catalyst, dislocation, or positioning edge.
-
-10) Bottom line
-End with exactly these three lines:
+11) Bottom line
+Exactly three lines:
 - The one thing that matters most today:
 - What I'm watching first at the open:
 - What would make me change my mind:
 
-Style rules:
-- Be concise, specific, skeptical, and useful.
-- No basic explanations.
-- No generic recap language.
-- Prefer numbers, levels, flows, and catalysts over adjectives.
-- Explicitly say when something is noise.
-- Explicitly say when data is stale or unverified.
-- Mention source names next to non-obvious claims.
-- Keep the whole brief tight enough to read in 5 minutes.
-- Don't bury the lede.
+STYLE RULES:
+- Concise, specific, skeptical, useful
+- No basic explanations or generic recap language
+- Numbers, levels, flows, catalysts over adjectives
+- ALWAYS cite sources in [brackets] next to data points
+- Say when something is noise
+- Say when data is stale or unverified
+- Keep the whole brief readable in 5 minutes
+- Don't bury the lede
 
-Use all available tools (websearch, crypto data sources, etc.) to gather the freshest data you can. Verify numbers across sources where possible."""
+After writing the brief, post it to Slack channel "morning-brief" using the slack tool's send_message method. Format with emoji section headers for readability."""
 
 
 async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
