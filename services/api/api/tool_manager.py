@@ -781,8 +781,14 @@ class ToolManager:
         args: dict[str, Any],
         *,
         request: Request | None = None,
-    ) -> str:
-        """Call a tool method by name and return the result as a TOON string."""
+        format: str = "json",
+    ) -> str | Any:
+        """Call a tool method by name.
+
+        *format* controls the response serialization:
+        - ``"toon"``  – token-efficient TOON string (used by sandbox agents).
+        - ``"json"``  – return the normalised Python object as-is (default).
+        """
         lt = self.tools.get(tool_name)
         if not lt:
             return json.dumps(
@@ -859,8 +865,6 @@ class ToolManager:
                 **call_fields,
             )
             record_tool_call(tool_name, method_name, True, duration_ms / 1000)
-            if isinstance(result, str):
-                return result
             if isinstance(result, dict):
                 thread_key = sandbox_claims.get("thread_key") if sandbox_claims else None
                 result = await _extract_tool_attachment(
@@ -869,7 +873,9 @@ class ToolManager:
                     thread_key=thread_key,
                     tool_name=tool_name,
                 )
-            return _to_toon(result)
+            if format == "toon":
+                return result if isinstance(result, str) else _to_toon(result)
+            return _normalize_for_serialization(result)
         except (SystemExit, Exception) as e:
             duration_ms = round((time.monotonic() - t0) * 1000)
             error_msg = f"sys.exit({e.code})" if isinstance(e, SystemExit) else str(e)
@@ -975,9 +981,12 @@ class ToolManager:
                 if not isinstance(body, dict):
                     raise HTTPException(status_code=400, detail="Request body must be a JSON object")
             _require_tool_scope(request, tool_name)
-            result = await pm.call_tool(tool_name, method_name, body, request=request)
-            if "text/plain" in request.headers.get("accept", ""):
-                return PlainTextResponse(result)
+            accept = request.headers.get("accept", "")
+            want_toon = "text/plain" in accept
+            fmt = "toon" if want_toon else "json"
+            result = await pm.call_tool(tool_name, method_name, body, request=request, format=fmt)
+            if want_toon:
+                return PlainTextResponse(result if isinstance(result, str) else _to_toon(result))
             return {"tool": tool_name, "method": method_name, "result": result}
 
         return router
