@@ -17,7 +17,7 @@ import httpx
 from api.workflow_engine import WorkflowContext
 
 WORKFLOW_NAME = "usage_stats"
-INTERVAL = 3600  # every hour
+INTERVAL = 300  # every 5 minutes
 
 USER_MAP = {
     "U016MDTJM4J": ("Georgios Konstantopoulos", "georgios"),

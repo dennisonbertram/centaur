@@ -53,9 +53,12 @@ async def metrics() -> Response:
 async def usage_stats() -> Response:
     from api.app import app
 
-    row = await app.state.db_pool.fetchrow(
-        "SELECT data_json, generated_at FROM usage_stats WHERE id = 'current'"
-    )
+    try:
+        row = await app.state.db_pool.fetchrow(
+            "SELECT data_json, generated_at FROM usage_stats WHERE id = 'current'"
+        )
+    except Exception:
+        return JSONResponse(status_code=404, content={"detail": "No stats generated yet"})
     if not row:
         return JSONResponse(status_code=404, content={"detail": "No stats generated yet"})
     data = row["data_json"]
@@ -63,7 +66,7 @@ async def usage_stats() -> Response:
         import json
         data = json.loads(data)
     data["generated_at"] = row["generated_at"].isoformat() if row["generated_at"] else None
-    return JSONResponse(content=data, headers={"Cache-Control": "public, max-age=300"})
+    return JSONResponse(content=data, headers={"Cache-Control": "public, max-age=60"})
 
 
 @router.get("/health/tools", dependencies=[Depends(verify_operator_api_key)])
