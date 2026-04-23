@@ -231,7 +231,7 @@ class DockerSandboxBackend(SandboxBackend):
                     "ai2.thread": thread_key,
                 },
                 "HostConfig": {
-                    "Privileged": False,
+                    "Privileged": os.getenv("DIND_PRIVILEGED", "").lower() in ("1", "true"),
                     "CapAdd": ["SYS_ADMIN", "NET_ADMIN"],
                     "SecurityOpt": ["apparmor=unconfined"],
                     "NetworkMode": network,

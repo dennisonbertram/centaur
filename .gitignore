@@ -26,6 +26,11 @@ htmlcov/
 # Environment
 .env
 .env.local
+.env.local.*
+docker-compose.local.yml
+
+# Local-only dev scripts (not committed)
+scripts/local_invest_smoke.sh
 
 # IDE
 .vscode/
