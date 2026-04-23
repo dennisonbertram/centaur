@@ -463,6 +463,81 @@ async def _extract_apps(pool) -> list[dict]:
     return result
 
 
+WORKFLOW_EMOJIS = {
+    "slack_thread_turn": "\U0001F4AC",
+    "policy_news_monitor": "\U0001F4F0",
+    "self_improve_daily": "\U0001F504",
+    "agent_turn": "\U0001F916",
+    "paradigm_pulse_daily": "\U0001F4E1",
+    "eth_morning_brief": "\u2615",
+    "investment_pipeline_weekly": "\U0001F4BC",
+    "daily_checklist_digest": "\u2705",
+    "morning_market_brief": "\U0001F4C8",
+    "room_conflict_monitor": "\U0001F3E2",
+    "agent_loop": "\U0001F501",
+    "usage_stats": "\U0001F4CA",
+    "multi_step_demo": "\U0001F9EA",
+    "self_improve_deploy_notifier": "\U0001F680",
+}
+
+
+async def _extract_workflows(pool) -> list[dict]:
+    rows = await pool.fetch(
+        "SELECT workflow_name, status, count(*) as cnt, "
+        "  min(created_at) as first_run, max(created_at) as last_run, "
+        "  avg(EXTRACT(EPOCH FROM (completed_at - started_at))) as avg_duration_s "
+        "FROM workflow_runs "
+        "WHERE created_at > NOW() - INTERVAL '90 days' "
+        "GROUP BY workflow_name, status "
+        "ORDER BY workflow_name"
+    )
+
+    wf_stats: dict[str, dict] = {}
+    for row in rows:
+        name = row["workflow_name"]
+        if name not in wf_stats:
+            wf_stats[name] = {
+                "completed": 0, "failed": 0, "other": 0, "total": 0,
+                "first": None, "last": None, "avg_duration_s": None,
+            }
+        s = wf_stats[name]
+        cnt = row["cnt"]
+        status = row["status"]
+        s["total"] += cnt
+        if status == "completed":
+            s["completed"] += cnt
+            s["avg_duration_s"] = round(row["avg_duration_s"], 1) if row["avg_duration_s"] else None
+        elif status == "failed":
+            s["failed"] += cnt
+        else:
+            s["other"] += cnt
+
+        first = row["first_run"]
+        last = row["last_run"]
+        if first and (not s["first"] or first < s["first"]):
+            s["first"] = first
+        if last and (not s["last"] or last > s["last"]):
+            s["last"] = last
+
+    result = []
+    for name in sorted(wf_stats, key=lambda n: wf_stats[n]["total"], reverse=True):
+        s = wf_stats[name]
+        total = s["total"]
+        result.append({
+            "workflow": name,
+            "total": total,
+            "completed": s["completed"],
+            "failed": s["failed"],
+            "other": s["other"],
+            "success_rate": round(s["completed"] / total * 100, 1) if total > 0 else 0,
+            "avg_duration_s": s["avg_duration_s"],
+            "first_seen": s["first"].strftime("%Y-%m-%d") if s["first"] else "",
+            "last_seen": s["last"].strftime("%Y-%m-%d") if s["last"] else "",
+            "emoji": WORKFLOW_EMOJIS.get(name, "\u2699\uFE0F"),
+        })
+    return result
+
+
 async def handler(_inp: dict[str, Any], ctx: WorkflowContext) -> dict[str, Any]:
     pool = ctx._pool
 
@@ -497,12 +572,19 @@ async def handler(_inp: dict[str, Any], ctx: WorkflowContext) -> dict[str, Any]:
         step_kind="gather",
     )
 
+    workflows = await ctx.step(
+        "extract_workflows",
+        lambda: _extract_workflows(pool),
+        step_kind="gather",
+    )
+
     data = {
         "tools": tools,
         "skills": skills,
         "users": users,
         "teams": teams,
         "apps": apps,
+        "workflows": workflows,
     }
 
     await ctx.step(
@@ -523,6 +605,7 @@ async def handler(_inp: dict[str, Any], ctx: WorkflowContext) -> dict[str, Any]:
         users=len(users),
         teams=len(teams),
         apps=len(apps),
+        workflows=len(workflows),
     )
 
     return {
@@ -532,4 +615,5 @@ async def handler(_inp: dict[str, Any], ctx: WorkflowContext) -> dict[str, Any]:
         "users": len(users),
         "teams": len(teams),
         "apps": len(apps),
+        "workflows": len(workflows),
     }
