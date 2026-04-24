@@ -19,6 +19,8 @@ class RuntimeState:
     turn_counter: int = 0
     stdout_stream: Any = None  # aiodocker Stream for reading stdout
     stdin_stream: Any = None  # aiodocker Stream for writing stdin
+    attach_context: Any = None  # backend-specific context manager for attach sessions
+    prefetched_stdout: list[str] | None = None  # buffered lines loaded before live attach
     last_result: str | None = None
 
 
@@ -95,6 +97,15 @@ class SandboxBackend(abc.ABC):
 
     async def close_streams(self, session: SandboxSession) -> None:
         """Close any open streams. Default: no-op."""
+
+    async def close_stdin(self, session: SandboxSession) -> None:
+        """Close only the stdin stream. Default: fall back to closing all streams."""
+        await self.close_streams(session)
+
+    async def reattach_stdin(self, session: SandboxSession) -> None:
+        """Re-open stdin after a broken pipe. Default: re-attach the full session."""
+        await self.close_streams(session)
+        await self.attach(session)
 
     async def exec_run(
         self, sandbox_id: str, cmd: list[str], *, environment: dict | None = None, user: str = ""

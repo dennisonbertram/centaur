@@ -10,6 +10,7 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import aiodocker
 import structlog
@@ -121,9 +122,10 @@ def _container_env(
     local_dev = os.getenv("AGENT_LOCAL_DEV", "").lower() in ("1", "true")
 
     api_key = mint_sandbox_token(thread_key, container_name)
+    api_url = os.getenv("AGENT_API_URL", "http://api:8000")
 
     env = [
-        f"CENTAUR_API_URL={os.getenv('AGENT_API_URL', 'http://api:8000')}",
+        f"CENTAUR_API_URL={api_url}",
         f"CENTAUR_API_KEY={api_key}",
         f"CENTAUR_THREAD_KEY={thread_key}",
         "AMP_MODE=deep",
@@ -138,16 +140,22 @@ def _container_env(
                 env.append(f"{key}={real}")
     else:
         firewall_host = os.getenv("FIREWALL_HOST", "firewall")
+        no_proxy_hosts = ["localhost", "127.0.0.1", firewall_host]
+        api_host = urlsplit(api_url).hostname
+        if api_host:
+            no_proxy_hosts.append(api_host)
+        no_proxy = ",".join(dict.fromkeys(no_proxy_hosts))
         for key in _HARNESS_STUB_KEYS:
             env.append(f"{key}={key}")
         env.extend(
             [
+                f"FIREWALL_HOST={firewall_host}",
                 f"HTTPS_PROXY=http://{firewall_host}:8080",
                 f"HTTP_PROXY=http://{firewall_host}:8080",
                 f"https_proxy=http://{firewall_host}:8080",
                 f"http_proxy=http://{firewall_host}:8080",
-                "NO_PROXY=localhost,127.0.0.1",
-                "no_proxy=localhost,127.0.0.1",
+                f"NO_PROXY={no_proxy}",
+                f"no_proxy={no_proxy}",
                 "NODE_EXTRA_CA_CERTS=/firewall-certs/ca-cert.pem",
                 "REQUESTS_CA_BUNDLE=/firewall-certs/ca-cert.pem",
                 "SSL_CERT_FILE=/firewall-certs/ca-cert.pem",

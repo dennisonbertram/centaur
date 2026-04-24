@@ -39,6 +39,7 @@ open('/tmp/pd.txt','w').write('\n'.join(sorted(deps)))" \
 # 3. Copy source (changes often — keep last for fast rebuilds)
 COPY services/api/api/ api/
 COPY services/api/db/ db/
+COPY services/sandbox/SYSTEM_PROMPT.md services/sandbox/SYSTEM_PROMPT.md
 COPY tools/ tools/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --inexact

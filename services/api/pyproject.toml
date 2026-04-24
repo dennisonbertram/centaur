@@ -18,6 +18,7 @@ dependencies = [
     "mcp>=1.0.0",
     "toon-format @ git+https://github.com/toon-format/toon-python.git",
     "aiodocker>=0.22.0",
+    "kubernetes-asyncio>=33.3.0",
     "psycopg2-binary>=2.9.11",
     "centaur-sdk",
     "sse-starlette>=3.2.0",
