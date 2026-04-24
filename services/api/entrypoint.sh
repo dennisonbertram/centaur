@@ -25,7 +25,7 @@ import tomllib, pathlib
 deps = set()
 for p in pathlib.Path('$_d').glob('**/pyproject.toml'):
     deps.update(tomllib.load(open(p,'rb')).get('project',{}).get('dependencies',[]))
-print('\n'.join(sorted(deps)))
+print('\\n'.join(sorted(deps)))
 " 2>/dev/null || true)
     _extra_deps+=$'\n'
   done
@@ -36,42 +36,14 @@ print('\n'.join(sorted(deps)))
   fi
 fi
 
-# Bootstrap optional gcloud credentials for deployments that use gcloud-backed SSH tunneling.
-if [[ "${CENTAUR_ENABLE_GCLOUD_BOOTSTRAP:-0}" =~ ^(1|true|yes)$ ]]; then
-  _gcp_cred="${GCP_GCLOUD_CREDENTIAL:-}"
-  if [[ -z "$_gcp_cred" && -n "${SECRET_MANAGER_URL:-}" ]]; then
-    _gcp_cred="$(_fetch_secret GCP_GCLOUD_CREDENTIAL 2>/dev/null || true)"
+# Allow overlays to extend API startup without baking org-specific behavior into base Centaur.
+if [[ -n "${CENTAUR_OVERLAY_DIR:-}" ]]; then
+  _overlay_entrypoint="${CENTAUR_OVERLAY_DIR}/services/api/entrypoint-overlay.sh"
+  if [[ -f "$_overlay_entrypoint" ]]; then
+    # shellcheck source=/dev/null
+    source "$_overlay_entrypoint"
   fi
-  if [[ -n "$_gcp_cred" ]]; then
-    _gcloud_dir="${HOME}/.config/gcloud"
-    mkdir -p "$_gcloud_dir"
-    echo "$_gcp_cred" > "$_gcloud_dir/application_default_credentials.json"
-    _gcp_account=$(echo "$_gcp_cred" | python3 -c "import sys,json; print(json.load(sys.stdin).get('account',''))" 2>/dev/null || true)
-    _gcp_project="${GCLOUD_PROJECT:-}"
-    if [[ -z "$_gcp_project" ]]; then
-      _gcp_project=$(echo "$_gcp_cred" | python3 -c "import sys,json; print(json.load(sys.stdin).get('project_id',''))" 2>/dev/null || true)
-    fi
-    if [[ -n "$_gcp_account" ]]; then
-      python3 - "$_gcp_cred" "$_gcp_account" "$_gcloud_dir" <<'PYEOF'
-import sqlite3, json, sys
-cred_json, account, gcloud_dir = sys.argv[1], sys.argv[2], sys.argv[3]
-cred = json.loads(cred_json)
-cred.pop("account", None)
-conn = sqlite3.connect(f"{gcloud_dir}/credentials.db")
-conn.execute("CREATE TABLE IF NOT EXISTS credentials (account_id TEXT PRIMARY KEY, value TEXT)")
-conn.execute("INSERT OR REPLACE INTO credentials VALUES (?, ?)", (account, json.dumps(cred)))
-conn.commit()
-conn.close()
-PYEOF
-      # Set active account + project when configured.
-      gcloud config set core/account "$_gcp_account" --quiet 2>/dev/null || true
-      if [[ -n "$_gcp_project" ]]; then
-        gcloud config set core/project "$_gcp_project" --quiet 2>/dev/null || true
-      fi
-      echo "gcloud credentials bootstrapped for $_gcp_account" >&2
-    fi
-  fi
-  unset _gcp_cred _gcp_account _gcp_project _gcloud_dir
+  unset _overlay_entrypoint
 fi
 
 # Canonical env aliases
