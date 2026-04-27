@@ -111,17 +111,28 @@ fi
 printf '}\n' >> "$CONF_PATH"
 
 # ── Wildcard subdomain server block for Centaur Apps ─────────────────────────
-# Routes {app-name}.{base-domain} → API /app-proxy/{app-name}/{path}
-# Only enabled when the "apps" service is active AND a base domain is set.
-APPS_DOMAIN="${CENTAUR_NGINX_APPS_DOMAIN:-}"
-if is_enabled apps && [ -n "$APPS_DOMAIN" ]; then
-  ESCAPED_DOMAIN=$(printf '%s' "$APPS_DOMAIN" | sed 's/\./\\./g')
+# Routes {app-name}.{base-domain} → API /apps/{app-name}/{path}
+# Supports one or more comma-separated domains via CENTAUR_NGINX_APPS_DOMAINS.
+APPS_DOMAINS_RAW="${CENTAUR_NGINX_APPS_DOMAINS:-${CENTAUR_NGINX_APPS_DOMAIN:-}}"
+if is_enabled apps && [ -n "$APPS_DOMAINS_RAW" ]; then
+  DOMAIN_REGEX=""
+  for domain in $(printf '%s' "$APPS_DOMAINS_RAW" | tr ',' ' '); do
+    [ -n "$domain" ] || continue
+    ESCAPED_DOMAIN=$(printf '%s' "$domain" | sed 's/\./\\./g')
+    if [ -z "$DOMAIN_REGEX" ]; then
+      DOMAIN_REGEX="$ESCAPED_DOMAIN"
+    else
+      DOMAIN_REGEX="$DOMAIN_REGEX|$ESCAPED_DOMAIN"
+    fi
+  done
+
+  [ -n "$DOMAIN_REGEX" ] || exit 1
   API_UPSTREAM="${CENTAUR_NGINX_API_UPSTREAM:-http://api:8000}"
   cat >> "$CONF_PATH" <<EOF
 
 server {
     listen 80;
-    server_name ~^(?<appname>[a-z0-9][a-z0-9-]*)\.${ESCAPED_DOMAIN}\$;
+    server_name ~^(?<appname>[a-z0-9][a-z0-9-]*)\.(?:${DOMAIN_REGEX})\$;
 
     location / {
         rewrite ^(.*)\$ /apps/\$appname\$1 break;

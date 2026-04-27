@@ -181,40 +181,62 @@ async def get_app_logs(request: Request, name: str, tail: int = 200):
 proxy_router = APIRouter(prefix="/apps", tags=["app-proxy"])
 
 
-async def _check_global_auth(request: Request) -> bool:
-    """Check password against the global hash in app_config."""
+def _decode_basic_auth(request: Request) -> tuple[str, str] | None:
+    """Return decoded basic-auth credentials when present and valid."""
     auth_header = request.headers.get("authorization", "")
     if not auth_header.lower().startswith("basic "):
-        return False
+        return None
     try:
         decoded = base64.b64decode(auth_header[6:]).decode()
-        _, password = decoded.split(":", 1)
+        username, password = decoded.split(":", 1)
+        return username, password
     except Exception:
+        return None
+
+
+def _is_valid_basic_auth(
+    request: Request,
+    *,
+    expected_user: str | None,
+    expected_password_hash: str | None,
+) -> bool:
+    """Validate per-app basic auth when the app is configured to require it."""
+    if not expected_user and not expected_password_hash:
+        return True
+
+    credentials = _decode_basic_auth(request)
+    if credentials is None:
         return False
-    pool = request.app.state.db_pool
-    row = await pool.fetchrow("SELECT password_hash FROM app_config WHERE id = 1")
-    if not row:
-        return False
-    return hashlib.sha256(password.encode()).hexdigest() == row["password_hash"]
+
+    username, password = credentials
+    return (
+        username == expected_user
+        and expected_password_hash is not None
+        and hashlib.sha256(password.encode()).hexdigest() == expected_password_hash
+    )
 
 
 async def _do_proxy(request: Request, name: str, path: str):
     """Shared proxy logic used by both path-based and subdomain routes."""
-    if not await _check_global_auth(request):
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Unauthorized"},
-            headers={"WWW-Authenticate": 'Basic realm="Centaur App"'},
-        )
-
     pool = request.app.state.db_pool
     row = await pool.fetchrow(
-        "SELECT container_id, status, port "
+        "SELECT container_id, status, port, basic_auth_user, basic_auth_pass_hash "
         "FROM apps WHERE name = $1",
         name,
     )
     if not row:
         raise HTTPException(status_code=404, detail=f"App '{name}' not found")
+
+    if not _is_valid_basic_auth(
+        request,
+        expected_user=row["basic_auth_user"],
+        expected_password_hash=row["basic_auth_pass_hash"],
+    ):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Unauthorized"},
+            headers={"WWW-Authenticate": 'Basic realm="Centaur App"'},
+        )
 
     if row["status"] != "running":
         raise HTTPException(
@@ -226,7 +248,8 @@ async def _do_proxy(request: Request, name: str, path: str):
     if not container_ip:
         raise HTTPException(status_code=503, detail="Cannot resolve app container IP")
 
-    target_url = f"http://{container_ip}:{row['port']}/apps/{name}/{path}"
+    target_path = f"/{path}" if path else "/"
+    target_url = f"http://{container_ip}:{row['port']}{target_path}"
     if request.url.query:
         target_url += f"?{request.url.query}"
 
