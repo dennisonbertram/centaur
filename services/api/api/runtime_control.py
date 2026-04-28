@@ -52,6 +52,10 @@ EXECUTION_TOOL_SILENCE_TIMEOUT_S = int(os.getenv("EXECUTION_TOOL_SILENCE_TIMEOUT
 EXECUTION_HARD_TIMEOUT_S = int(os.getenv("EXECUTION_HARD_TIMEOUT_S", "3600"))
 EXECUTION_WATCHDOG_POLL_S = float(os.getenv("EXECUTION_WATCHDOG_POLL_S", "1.0"))
 EXECUTION_RECONCILE_INTERVAL_S = float(os.getenv("EXECUTION_RECONCILE_INTERVAL_S", "0.5"))
+EXECUTION_STREAM_EOF_RETRY_DELAY_S = max(
+    float(os.getenv("EXECUTION_STREAM_EOF_RETRY_DELAY_S", "1.0")),
+    0.0,
+)
 EXECUTION_STALE_RECOVERY_INTERVAL_S = float(
     os.getenv("EXECUTION_STALE_RECOVERY_INTERVAL_S", "5.0")
 )
@@ -1344,7 +1348,7 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
                 "WHERE ("
                 "  er.status = 'queued' "
                 "  OR ("
-                "    er.status = 'cancel_requested' "
+                "    er.status IN ('cancel_requested', 'retry_wait') "
                 "    AND (er.worker_lease_expires_at IS NULL OR er.worker_lease_expires_at <= NOW())"
                 "  )"
                 ") "
@@ -1408,7 +1412,7 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
                     continue
                 row = await conn.fetchrow(
                     "UPDATE agent_execution_requests er "
-                    "SET status = CASE WHEN er.status = 'queued' THEN 'running' ELSE er.status END, "
+                    "SET status = CASE WHEN er.status IN ('queued', 'retry_wait') THEN 'running' ELSE er.status END, "
                     "claimed_at = NOW(), "
                     "started_at = COALESCE(er.started_at, NOW()), "
                     "last_progress_at = COALESCE(er.last_progress_at, NOW()), "
@@ -1416,7 +1420,7 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
                     "worker_id = $2, "
                     "worker_lease_expires_at = NOW() + make_interval(secs => $3::double precision), "
                     "updated_at = NOW() "
-                    "WHERE er.execution_id = $4 AND er.status IN ('queued', 'cancel_requested') "
+                    "WHERE er.execution_id = $4 AND er.status IN ('queued', 'cancel_requested', 'retry_wait') "
                     "RETURNING er.execution_id, er.thread_key, er.assignment_generation, "
                     "er.execute_id, er.durable_turn_id, er.status, er.delivery, er.metadata, er.silence_deadline_at, "
                     "er.hard_deadline_at, er.created_at, er.claimed_at",
@@ -1846,6 +1850,55 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
             await stream.aclose()
 
     if turn_done_event is None:
+        status_row = await pool.fetchrow(
+            "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
+            execution_id,
+        )
+        if status_row and status_row["status"] == "cancel_requested":
+            await _stop_execution_session(
+                thread_key,
+                reason="cancel_requested",
+            )
+            await _finalize_execution(
+                status="cancelled",
+                terminal_reason="cancel_requested",
+                result_text="",
+                error_text="cancel_requested",
+            )
+            return
+
+        session_status = "gone"
+        with contextlib.suppress(Exception):
+            session_status = await backend.status(session)
+
+        if session_status in {"running", "created"}:
+            await pool.execute(
+                "UPDATE agent_execution_requests SET "
+                "status = 'retry_wait', "
+                "worker_id = NULL, "
+                "worker_lease_expires_at = NOW() + make_interval(secs => $1::double precision), "
+                "silence_deadline_at = GREATEST("
+                "  COALESCE(silence_deadline_at, NOW()), "
+                "  NOW() + make_interval(secs => $2::double precision)"
+                "), "
+                "stream_break_count = stream_break_count + 1, "
+                "last_stream_break_at = NOW(), "
+                "updated_at = NOW() "
+                "WHERE execution_id = $3 AND status = 'running'",
+                float(EXECUTION_STREAM_EOF_RETRY_DELAY_S),
+                float(max(EXECUTION_TOOL_SILENCE_TIMEOUT_S, EXECUTION_SILENCE_TIMEOUT_S)),
+                execution_id,
+            )
+            log.warning(
+                "execution_stream_interrupted_retry_wait",
+                execution_id=execution_id,
+                thread_key=thread_key,
+                runtime_id=session.sandbox_id,
+                session_status=session_status,
+                retry_delay_s=EXECUTION_STREAM_EOF_RETRY_DELAY_S,
+            )
+            return
+
         await _finalize_execution(
             status="failed_permanent",
             terminal_reason="stream_ended_without_turn_done",
