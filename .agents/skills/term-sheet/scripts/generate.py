@@ -18,6 +18,7 @@ from pathlib import Path
 
 try:
     from docx import Document
+    from docx.enum.text import WD_COLOR_INDEX
 except ImportError:
     print("ERROR: python-docx not installed. Run: pip install python-docx", file=sys.stderr)
     sys.exit(1)
@@ -26,6 +27,7 @@ except ImportError:
 DEFAULTS = {
     "no_shop_days": 45,
     "counsel_fee_cap": 75000,
+    "debt_limit_m": 1,
     "board_seat": True,
     "observer_seat": True,
     "is_crypto": False,
@@ -226,7 +228,9 @@ def generate(params):
                     r.text = ""
 
     # --- Row 3: Protective Provisions ---
-    # No placeholders to fill (debt limit is already "[1-10M]M")
+    cell = table.rows[3].cells[1]
+    debt_limit = p.get("debt_limit_m", 1)
+    replace_in_cell(cell, "[1-10M]", str(debt_limit))
 
     # --- Row 4: Other Rights ---
     # No placeholders to fill
@@ -257,6 +261,30 @@ def generate(params):
         cell = table.rows[row_idx].cells[1]
         if no_shop != 45:
             replace_in_cell(cell, "45 days", f"{no_shop} days")
+
+    # === REMOVE DRI NOTES (paragraphs starting with "Paradigm DRI to confirm") ===
+    paras_to_remove = []
+    dri_found = False
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if text.startswith("Paradigm DRI to confirm"):
+            dri_found = True
+        if dri_found and text:
+            paras_to_remove.append(para)
+    for para in paras_to_remove:
+        parent = para._element.getparent()
+        parent.remove(para._element)
+
+    # === STRIP ALL HIGHLIGHTING ===
+    for para in doc.paragraphs:
+        for run in para.runs:
+            run.font.highlight_color = None
+    for table_obj in doc.tables:
+        for row in table_obj.rows:
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    for run in para.runs:
+                        run.font.highlight_color = None
 
     # === SAVE ===
     output_dir = p.get("output_dir", os.getcwd())
