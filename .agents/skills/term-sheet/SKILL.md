@@ -128,7 +128,16 @@ The script outputs the path to the generated `.docx` file.
 
 **Step 4a: Get the Slack channel**
 
-The channel name or ID comes from the thread metadata (the `metadata` field in the user message, e.g. `metadata.channel`). If you don't have it, check the environment or ask the user. Common channel names: `deals`, `legal`, or the DM channel.
+You are running inside a Slack thread. Extract the channel from your own thread context:
+
+```bash
+# The thread_key typically looks like "slack:<channel_id>:<thread_ts>"
+# Parse your own thread key to get the channel_id and thread_ts
+# Or check the SLACK_CHANNEL_ID / SLACK_THREAD_TS environment variables
+echo $SLACK_CHANNEL_ID $SLACK_THREAD_TS
+```
+
+If env vars are not set, parse the thread key (format: `slack:CHANNEL_ID:THREAD_TS`). If you still can't determine the channel, ask the user for the channel name.
 
 **Step 4b: Upload the file using the slack tool**
 
