@@ -33,7 +33,7 @@ import urllib.request
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from mitmproxy import http
+from mitmproxy import http, tls
 
 from centaur_sdk.logging import configure_json_logging
 
@@ -247,6 +247,37 @@ def _resolve_host(host: str) -> list[str]:
         return []
 
 
+def _load_host_rewrites() -> dict[str, str]:
+    raw = os.environ.get("FIREWALL_HOST_REWRITES", "").strip()
+    if not raw:
+        return {}
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "FIREWALL_HOST_REWRITES must be a JSON object mapping source hosts to upstream hosts"
+        ) from exc
+
+    if not isinstance(data, dict):
+        raise RuntimeError(
+            "FIREWALL_HOST_REWRITES must be a JSON object mapping source hosts to upstream hosts"
+        )
+
+    rewrites: dict[str, str] = {}
+    for source, target in data.items():
+        if not isinstance(source, str) or not isinstance(target, str):
+            raise RuntimeError(
+                "FIREWALL_HOST_REWRITES must contain only string hostnames"
+            )
+        source_host = source.strip().lower().rstrip(".")
+        target_host = target.strip().lower().rstrip(".")
+        if not source_host or not target_host:
+            raise RuntimeError("FIREWALL_HOST_REWRITES entries cannot be empty")
+        rewrites[source_host] = target_host
+    return rewrites
+
+
 class CredentialInjector:
     def __init__(self) -> None:
         # Fail-closed on unset control token: /secrets/{key} and /injection-map
@@ -280,8 +311,27 @@ class CredentialInjector:
         self._injection_map_lock = threading.Lock()
         log.info("credential injector started (stateless header-value replacement)")
         log.info("secret injection allowlist: %s", SECRET_INJECTION_HOSTS)
+        if HOST_REWRITES:
+            log.info("host rewrites configured: %d", len(HOST_REWRITES))
         self._start_health_server()
         self._start_keys_refresh()
+
+    # ------------------------------------------------------------------
+    # TLS handshake customization
+    # ------------------------------------------------------------------
+
+    def tls_start_server(self, tls_start: tls.TlsData) -> None:
+        client_sni = tls_start.context.client.sni
+        if not client_sni:
+            return
+
+        source_host = client_sni.lower().rstrip(".")
+        target_host = HOST_REWRITES.get(source_host)
+        if not target_host:
+            return
+
+        tls_start.conn.sni = target_host
+        log.info("tls sni rewrite: %s → %s", source_host, target_host)
 
     # ------------------------------------------------------------------
     # Health server
@@ -685,6 +735,19 @@ class CredentialInjector:
                 return True
         return False
 
+    def _try_host_rewrite(self, flow: http.HTTPFlow, host: str) -> str | None:
+        """Override upstream TLS SNI/Host while keeping the original TCP target."""
+        target_host = HOST_REWRITES.get(host)
+        if not target_host:
+            return None
+
+        flow.request.port = 443
+        flow.request.scheme = "https"
+        flow.request.headers["host"] = target_host
+        flow.server_conn.sni = target_host
+        log.info("host rewrite: %s → %s (tcp target unchanged)", host, target_host)
+        return target_host
+
     # ------------------------------------------------------------------
     # Provider rewriting
     # ------------------------------------------------------------------
@@ -928,23 +991,29 @@ class CredentialInjector:
         # 2. Sanitize outbound headers: strip non-whitelisted, fix User-Agent
         self._sanitize_outbound_headers(flow)
 
-        # 3. SSRF protection: resolve destination IP, block if private/internal
+        # 3. Rewrite exact internal aliases before SSRF so sandbox callers can
+        #    keep stable names while the firewall uses the correct upstream SNI.
+        host_rewritten_to = self._try_host_rewrite(flow, host)
+        if host_rewritten_to:
+            host = host_rewritten_to
+
+        # 4. SSRF protection: resolve destination IP, block if private/internal
         if self._block_private_ip(flow, host):
             return
 
-        # 4. Check for amp provider proxy rewrite (before method filtering
+        # 5. Check for amp provider proxy rewrite (before method filtering
         #    so ampcode.com POSTs can be rewritten to LLM API hosts)
-        rewritten = self._try_provider_rewrite(flow, host)
+        provider_rewritten = self._try_provider_rewrite(flow, host)
 
         # Re-read host after potential provider rewrite
         host = flow.request.pretty_host.lower().rstrip(".")
 
-        # 4b. Re-check SSRF after provider rewrite — the rewritten host
+        # 5b. Re-check SSRF after provider rewrite — the rewritten host
         # could resolve to a private IP
-        if rewritten and self._block_private_ip(flow, host):
+        if provider_rewritten and self._block_private_ip(flow, host):
             return
 
-        # 5. HTTP method filtering: hosts not in the unrestricted set are
+        # 6. HTTP method filtering: hosts not in the unrestricted set are
         #    limited to safe methods only (GET/HEAD/OPTIONS).  LLM API hosts,
         #    trusted internal services, and essential services are unrestricted.
         #    Skip if we just rewrote the request (it's now targeting an LLM host).
@@ -953,7 +1022,7 @@ class CredentialInjector:
         host_is_injection = self._host_in_patterns(host, SECRET_INJECTION_HOSTS)
         host_is_unrestricted = self._host_in_patterns(host, UNRESTRICTED_METHOD_HOSTS)
         host_is_trusted = self._host_in_patterns(host, TRUSTED_INTERNAL_HOSTS)
-        if not rewritten and not host_in_injection_map and not host_is_injection and not host_is_unrestricted and not host_is_trusted:
+        if not provider_rewritten and not host_in_injection_map and not host_is_injection and not host_is_unrestricted and not host_is_trusted:
             method = flow.request.method.upper()
             if method not in SAFE_METHODS:
                 flow.response = http.Response.make(
@@ -964,12 +1033,12 @@ class CredentialInjector:
                 log.warning("method_blocked: %s not allowed for %s", method, host)
                 return
 
-        # 6. Secret injection: replace known key placeholders only for hosts
+        # 7. Secret injection: replace known key placeholders only for hosts
         #    that are explicitly allowed by the injection map.
         self._replace_in_headers(flow)
         self._replace_in_url(flow)
 
-        # 7. Audit-only body inspection for prompt injection patterns
+        # 8. Audit-only body inspection for prompt injection patterns
         self._inspect_request_body(flow)
 
     # ------------------------------------------------------------------
@@ -1056,6 +1125,9 @@ class CredentialInjector:
                 "duration_ms": duration_ms,
             },
         )
+
+
+HOST_REWRITES = _load_host_rewrites()
 
 
 addons = [CredentialInjector()]
