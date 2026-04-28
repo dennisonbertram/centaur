@@ -3,6 +3,7 @@
 from typing import Any
 
 import httpx
+from centaur_sdk import secret
 
 
 class AttioClient:
@@ -34,6 +35,40 @@ class AttioClient:
                 msg = response.text
             raise RuntimeError(f"Attio API error ({response.status_code}): {msg}")
         return response.json()
+
+    def _clean_params(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Remove unset values and encode list query params the way Attio expects."""
+        cleaned: dict[str, Any] = {}
+        for key, value in params.items():
+            if value is None:
+                continue
+            if isinstance(value, list):
+                cleaned[key] = ",".join(str(item) for item in value)
+                continue
+            cleaned[key] = value
+        return cleaned
+
+    def raw_request(
+        self,
+        method: str,
+        endpoint: str,
+        json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Make a raw request to the Attio REST API.
+
+        The endpoint may be either a full `/v2/...` path or a path relative to `/v2`.
+        """
+        normalized_endpoint = endpoint if endpoint.startswith("/") else f"/{endpoint}"
+        if normalized_endpoint.startswith("/v2"):
+            normalized_endpoint = normalized_endpoint[len("/v2") :]
+
+        kwargs: dict[str, Any] = {}
+        if json is not None:
+            kwargs["json"] = json
+        if params is not None:
+            kwargs["params"] = params
+        return self._request(method.upper(), normalized_endpoint, **kwargs)
 
     def list_objects(self) -> list[dict]:
         """List all objects in workspace."""
@@ -143,6 +178,91 @@ class AttioClient:
         )
         return data.get("data", [])
 
+    def list_threads(
+        self,
+        object_slug: str | None = None,
+        record_id: str | None = None,
+        list_id: str | None = None,
+        entry_id: str | None = None,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> list[dict]:
+        """List comment threads for a record or list entry."""
+        params = self._clean_params(
+            {
+                "object": object_slug,
+                "record_id": record_id,
+                "list": list_id,
+                "entry_id": entry_id,
+                "limit": limit,
+                "offset": offset,
+            }
+        )
+        data = self._request("GET", "/threads", params=params)
+        return data.get("data", [])
+
+    def get_thread(self, thread_id: str) -> dict:
+        """Get a thread and its comments by thread ID."""
+        data = self._request("GET", f"/threads/{thread_id}")
+        return data.get("data", {})
+
+    def list_meetings(
+        self,
+        limit: int = 50,
+        cursor: str | None = None,
+        linked_object: str | None = None,
+        linked_record_id: str | None = None,
+        participants: list[str] | str | None = None,
+        sort: str | None = None,
+        ends_from: str | None = None,
+        starts_before: str | None = None,
+        timezone: str | None = None,
+    ) -> dict[str, Any]:
+        """List meetings with optional filtering and cursor pagination."""
+        params = self._clean_params(
+            {
+                "limit": limit,
+                "cursor": cursor,
+                "linked_object": linked_object,
+                "linked_record_id": linked_record_id,
+                "participants": participants,
+                "sort": sort,
+                "ends_from": ends_from,
+                "starts_before": starts_before,
+                "timezone": timezone,
+            }
+        )
+        return self._request("GET", "/meetings", params=params)
+
+    def get_meeting(self, meeting_id: str) -> dict:
+        """Get a single meeting by ID."""
+        data = self._request("GET", f"/meetings/{meeting_id}")
+        return data.get("data", {})
+
+    def list_call_recordings(
+        self,
+        meeting_id: str,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """List call recordings for a meeting."""
+        params = self._clean_params({"limit": limit, "cursor": cursor})
+        return self._request("GET", f"/meetings/{meeting_id}/call_recordings", params=params)
+
+    def get_call_transcript(
+        self,
+        meeting_id: str,
+        call_recording_id: str,
+        cursor: str | None = None,
+    ) -> dict[str, Any]:
+        """Get the transcript for a call recording."""
+        params = self._clean_params({"cursor": cursor})
+        return self._request(
+            "GET",
+            f"/meetings/{meeting_id}/call_recordings/{call_recording_id}/transcript",
+            params=params,
+        )
+
     def create_note(
         self, parent_object: str, parent_record_id: str, title: str, content: str
     ) -> dict:
@@ -217,6 +337,4 @@ class AttioClient:
 
 def _client() -> AttioClient:
     """Factory for tool SDK integration."""
-    from centaur_sdk import secret
-
     return AttioClient(api_key=secret("ATTIO_API_KEY"))
