@@ -1173,6 +1173,133 @@ async def test_worker_reuses_durable_turn_id_without_reinjecting(db_pool):
 
 
 @pytest.mark.asyncio
+async def test_worker_retries_running_execution_when_stream_ends_without_turn_done(db_pool):
+    from api.runtime_control import _claim_next_execution, _process_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    runtime_id = f"rt-retry-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, durable_turn_id, "
+        "delivery, metadata, silence_deadline_at, hard_deadline_at"
+        ") VALUES ($1, $2, 1, 'exec-retry', 'hash-retry', 'running', 'turn-existing', '{}'::jsonb, '{}'::jsonb, "
+        "NOW() + INTERVAL '10 minutes', NOW() + INTERVAL '30 minutes')",
+        execution_id,
+        thread_key,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
+        "VALUES ($1, $2, '{}'::jsonb, 'awaiting_terminal')",
+        execution_id,
+        thread_key,
+    )
+
+    row = {
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "assignment_generation": 1,
+        "status": "running",
+        "durable_turn_id": "turn-existing",
+        "delivery": {},
+        "silence_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
+        "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=30),
+        "created_at": dt.datetime.now(dt.timezone.utc),
+        "claimed_at": dt.datetime.now(dt.timezone.utc),
+    }
+    session = SandboxSession(
+        sandbox_id=runtime_id,
+        thread_key=thread_key,
+        harness="amp",
+        engine="amp",
+    )
+
+    stream_calls = 0
+
+    async def _interrupted_then_done_stream(*_args, **_kwargs):
+        nonlocal stream_calls
+        stream_calls += 1
+        if stream_calls == 1:
+            if False:
+                yield {}
+            return
+        yield {
+            "data": json.dumps(
+                {
+                    "type": "turn.done",
+                    "turn_id": 1,
+                    "result": "recovered",
+                    "agent_thread_id": "",
+                }
+            )
+        }
+
+    stop_session_mock = AsyncMock()
+    inject_stdin_mock = AsyncMock()
+    backend = SimpleNamespace(attach=AsyncMock(), status=AsyncMock(return_value="running"))
+
+    with (
+        patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
+        patch("api.runtime_control.inject_stdin", inject_stdin_mock),
+        patch("api.runtime_control.get_backend", return_value=backend),
+        patch(
+            "api.runtime_control._get_runtime",
+            return_value=SimpleNamespace(turn_counter=1),
+        ),
+        patch("api.runtime_control._stream_stdout", _interrupted_then_done_stream),
+        patch("api.runtime_control.stop_session", stop_session_mock),
+        patch("api.runtime_control.EXECUTION_STREAM_EOF_RETRY_DELAY_S", 0.0),
+    ):
+        await _process_execution(db_pool, row)
+
+        interrupted = await db_pool.fetchrow(
+            "SELECT status, stream_break_count, terminal_reason, error_text "
+            "FROM agent_execution_requests WHERE execution_id = $1",
+            execution_id,
+        )
+        assert interrupted is not None
+        assert interrupted["status"] == "retry_wait"
+        assert interrupted["stream_break_count"] == 1
+        assert interrupted["terminal_reason"] is None
+        assert interrupted["error_text"] is None
+
+        outbox = await db_pool.fetchrow(
+            "SELECT state, final_payload FROM agent_final_delivery_outbox WHERE execution_id = $1",
+            execution_id,
+        )
+        assert outbox is not None
+        assert outbox["state"] == "awaiting_terminal"
+        assert outbox["final_payload"] is None
+
+        claimed = await _claim_next_execution(db_pool)
+        assert claimed is not None
+        assert claimed["execution_id"] == execution_id
+        assert claimed["status"] == "running"
+
+        await _process_execution(db_pool, claimed)
+
+    execution = await db_pool.fetchrow(
+        "SELECT status, terminal_reason, result_text FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution is not None
+    assert execution["status"] == "completed"
+    assert execution["terminal_reason"] == "completed"
+    assert execution["result_text"] == "recovered"
+    inject_stdin_mock.assert_not_awaited()
+    stop_session_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_worker_refreshes_silence_deadline_when_resuming_existing_turn(db_pool):
     from api.runtime_control import _process_execution
 
