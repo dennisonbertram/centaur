@@ -3,9 +3,15 @@ import type { CanonicalEvent } from "@centaur/harness-events";
 import { CentaurClient } from "@centaur/api-client";
 import type { InputContentBlock } from "@centaur/api-client";
 
-import { stringifyMarkdown, parseMarkdown, isTableNode, type StreamChunk } from "chat";
-import type { Root, Content } from "chat";
 import { log } from "@/lib/logger";
+import {
+  stringifyMarkdown,
+  parseMarkdown,
+  isTableNode,
+  type Root,
+  type Content,
+} from "@/lib/slack/markdown";
+import type { StreamChunk } from "@/lib/slack/types";
 import { ProgressTracker } from "./progress-tracker";
 import { convertDashboardBlocks } from "./dashboard-to-slack";
 
@@ -595,7 +601,7 @@ export class SlackBot {
 
       // If the response contains markdown tables, edit the streamed message to
       // use native Slack table blocks (the streaming path renders tables as plain
-      // code blocks; editMessage triggers the Chat SDK's renderWithTableBlocks).
+      // code blocks; editMessage rerenders markdown through the Slack adapter).
       if (sentMessage && tracker.streamedMarkdown && containsMarkdownTable(tracker.streamedMarkdown)) {
         try {
           await sentMessage.edit({ markdown: tracker.streamedMarkdown });

@@ -1,5 +1,5 @@
 import type { CanonicalEvent } from "@centaur/harness-events";
-import type { StreamChunk } from "chat";
+import type { StreamChunk } from "@/lib/slack/types";
 
 /**
  * ProgressTracker — converts CanonicalEvents into Slack streaming chunks.
