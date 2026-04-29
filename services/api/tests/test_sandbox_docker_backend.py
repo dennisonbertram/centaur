@@ -4,11 +4,13 @@ from pathlib import Path
 
 import pytest
 
+from api.agent import _drop_runtime
 from api.sandbox.docker import (
     DockerSandboxBackend,
     _repo_host_dir,
     _resolve_host_bind_path,
 )
+from api.sandbox.base import SandboxSession
 
 
 class FakeContainer:
@@ -30,10 +32,14 @@ class FakeContainer:
             "Config": {"Labels": self.config.get("Labels", {})},
         }
 
+    def attach(self, **kwargs):
+        return {"container": self.name, "kwargs": kwargs}
+
 
 class FakeContainers:
     def __init__(self) -> None:
         self.by_name: dict[str, FakeContainer] = {}
+        self.get_calls: list[str] = []
 
     async def create_or_replace(self, name: str, config: dict) -> FakeContainer:
         container = FakeContainer(name, config)
@@ -41,6 +47,7 @@ class FakeContainers:
         return container
 
     async def get(self, name: str) -> FakeContainer:
+        self.get_calls.append(name)
         if name not in self.by_name:
             raise RuntimeError(name)
         return self.by_name[name]
@@ -70,6 +77,25 @@ class FakeDockerClient:
     def __init__(self) -> None:
         self.containers = FakeContainers()
         self.networks = FakeNetworks()
+
+
+@pytest.mark.asyncio
+async def test_attach_uses_dedicated_docker_client() -> None:
+    control_client = FakeDockerClient()
+    attach_client = FakeDockerClient()
+    attach_client.containers.by_name["sandbox-1"] = FakeContainer("sandbox-1", {})
+    backend = DockerSandboxBackend()
+    backend._client = control_client
+    backend._attach_client = attach_client
+    session = SandboxSession("sandbox-1", "thread-1", "amp", "amp")
+
+    try:
+        await backend.attach(session)
+    finally:
+        _drop_runtime("sandbox-1")
+
+    assert control_client.containers.get_calls == []
+    assert attach_client.containers.get_calls == ["sandbox-1"]
 
 
 def test_repo_host_dir_defaults_to_repo_root(monkeypatch: pytest.MonkeyPatch) -> None:

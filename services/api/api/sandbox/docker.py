@@ -215,15 +215,23 @@ class DockerSandboxBackend(SandboxBackend):
 
     def __init__(self) -> None:
         self._client: aiodocker.Docker | None = None
+        self._attach_client: aiodocker.Docker | None = None
+
+    def _new_client(self) -> aiodocker.Docker:
+        docker_host = os.getenv("DOCKER_HOST")
+        if docker_host:
+            return aiodocker.Docker(url=docker_host)
+        return aiodocker.Docker()
 
     def _get_client(self) -> aiodocker.Docker:
         if self._client is None:
-            docker_host = os.getenv("DOCKER_HOST")
-            if docker_host:
-                self._client = aiodocker.Docker(url=docker_host)
-            else:
-                self._client = aiodocker.Docker()
+            self._client = self._new_client()
         return self._client
+
+    def _get_attach_client(self) -> aiodocker.Docker:
+        if self._attach_client is None:
+            self._attach_client = self._new_client()
+        return self._attach_client
 
     @property
     def name(self) -> str:
@@ -414,7 +422,7 @@ class DockerSandboxBackend(SandboxBackend):
 
     async def attach(self, session: SandboxSession, *, logs: bool = False) -> None:
         rt = _get_rt(session)
-        client = self._get_client()
+        client = self._get_attach_client()
         container = await client.containers.get(session.sandbox_id)
         if rt.stdout_stream is None:
             rt.stdout_stream = container.attach(stdin=False, stdout=True, stderr=False, logs=logs)
@@ -559,7 +567,7 @@ class DockerSandboxBackend(SandboxBackend):
             with contextlib.suppress(Exception):
                 await rt.stdin_stream.close()
             rt.stdin_stream = None
-        client = self._get_client()
+        client = self._get_attach_client()
         container = await client.containers.get(session.sandbox_id)
         rt.stdin_stream = container.attach(stdin=True, stdout=False, stderr=False)
 
