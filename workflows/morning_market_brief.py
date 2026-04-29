@@ -22,87 +22,49 @@ class Input:
     max_iterations: int = 0  # 0 = run forever
 
 
-BRIEF_PROMPT = """IMPORTANT: Work efficiently. Follow these data-gathering steps first, then write the brief.
+BRIEF_PROMPT = """SPEED IS CRITICAL. Post to Slack within 3 minutes. Do NOT visit individual stock pages.
 
-DATA GATHERING (do these in parallel where possible):
-1. Visit https://finance.yahoo.com/ and extract the top market headlines, trending tickers, and market movers
-2. Visit https://finance.yahoo.com/markets/ for SPX, NDX, DXY, VIX, gold, oil, bond yields, USDJPY levels
-3. Visit https://finance.yahoo.com/markets/crypto/ for BTC, ETH, SOL prices and crypto market data
-4. Search for "BTC funding rates open interest ETF flows today" for crypto derivatives color
-5. Visit https://finance.yahoo.com/quote/MSTR/, https://finance.yahoo.com/quote/COIN/, https://finance.yahoo.com/quote/HOOD/, https://finance.yahoo.com/quote/NVDA/, https://finance.yahoo.com/quote/MARA/ for equity data
-6. Search for "crypto market news today" for any breaking developments
+STEP 1 - Do exactly 3 searches in parallel:
+a) "site:finance.yahoo.com top market news today"
+b) "BTC ETH SOL price funding rates ETF flows today"
+c) "MSTR COIN HOOD NVDA MARA stock price today"
 
-After gathering data, write the brief. CITE EVERY DATA POINT with its source in brackets, e.g. [Yahoo Finance], [CoinGlass], [SoSoValue], [Deribit], etc. If a number is stale or unverified, say so.
+STEP 2 - Write the brief. RULES:
 
-Act as my institutional morning market-color analyst.
-Audience: a professional trader at Paradigm.
-Goal: dense, no-fluff morning brief. Prioritize signal over noise, positioning over headlines, catalysts over recap.
+SIGNAL OVER COMPLETENESS:
+- Brief must be readable in 90 seconds, not 5 minutes
+- ONLY include items that moved meaningfully or have a clear catalyst today
+- SKIP any asset/ticker/section that did not move >1% (crypto/equities) or >1 stdev (rates/FX/vol)
+- If nothing material in a section, write "no material moves" and move on. Do NOT pad.
+- Lead with biggest moves
+- NEVER include items just to fill space
 
-Timestamp the brief in ET and UTC. Separate facts from interpretation.
+CITE SOURCES in [brackets] for every number. Flag stale data.
 
-Crypto focus: BTC, ETH, SOL, majors, perp funding, spot/perp basis, options skew, ETF flows, stablecoin flows, OI, liquidations, exchange flows, unlocks, protocol developments.
-Macro focus: US 2y, US 10y, real yields, DXY, USDJPY, CNH, gold, oil, VIX, SPX, NDX, credit spreads, central-bank expectations, economic data.
-Equities: {equities}
+STRUCTURE:
 
-OUTPUT STRUCTURE:
+BIG MOVES - 3-5 bullets max. Only items that materially moved or have a clear driver. For each: asset, exact move with source, why it matters in one line.
 
-1) Top line
-5-8 bullets. Each bullet: what happened [source], why it matters, regime-relevant or noise.
+DASHBOARD - Compact table of ONLY assets that moved >1% or are doing something unusual. Skip flat assets entirely. Format: asset | level [source] | move | one-line read.
 
-2) Cross-asset dashboard
-Compact table: asset | level [source] | 24h move | 5d move | interpretation.
-Include: BTC, ETH, SOL, BTC funding, BTC basis, DXY, US 2y, US 10y, SPX, NQ, VIX, gold, oil, USDJPY.
-Flag statistically large moves vs recent realized.
+CRYPTO - Only if real signal. Otherwise: "Crypto: range-bound, no material catalysts."
 
-3) Crypto color
-- Price action and internals: spot vs perp-led, OI change, liquidations, funding, basis, options skew, ETF flows [cite source for each]
-- Flow: stablecoin mint/burn, exchange flows, whale activity only if material [cite source]
-- Sector: majors, L1s, DeFi, memecoins — only where volume/catalyst is real
-- Idiosyncratic: listings, regulatory, governance, hacks, unlocks
-End with: "What matters most for crypto today" — 3 bullets.
+MACRO - Only if real driver. Otherwise: "Macro: quiet session."
 
-4) Macro color
-- Overnight recap: Asia, Europe, US premarket [cite sources]
-- Main macro driver
-- What rates/FX/commodities are saying
-- Session type: liquidity, growth scare, inflation scare, policy relief, squeeze, or idiosyncratic
-- How macro feeds into crypto beta/vol/correlation
+EQUITIES - Only tickers from {equities} that moved >2% or have a real catalyst. Skip the rest entirely.
 
-5) Equities of interest
-For each ticker in {equities}: move [Yahoo Finance], driver, crypto relevance, catalysts, key levels.
+HEADLINES - Top 3-5 headlines that actually matter today. Cite source.
 
-6) Yahoo Finance headlines
-Top 5-8 headlines from Yahoo Finance that matter for markets today. For each: headline, why it matters, and whether it affects crypto.
+NEXT 24H - Only events with plausible market impact, ranked by importance. ET times.
 
-7) What changed since yesterday?
-3-5 deltas that would change priors. Do not repeat stale narratives.
-
-8) Calendar and catalysts next 24h
-Exact times in ET. Rank by expected impact. Include: economic data, central-bank speakers, Treasury auctions, earnings, token unlocks, ETF decisions, regulatory deadlines, governance votes, major expiries.
-
-9) Positioning and variant perception
-What market believes, what is underpriced, consensus leans, what invalidates consensus.
-
-10) Trade framing
-Base/bull/bear case, levels and triggers, flow confirmation needed, cross-asset expressions or hedges. No forced ideas — only setups with catalyst, dislocation, or positioning edge.
-
-11) Bottom line
-Exactly three lines:
+BOTTOM LINE (always include - exactly 3 lines):
 - The one thing that matters most today:
-- What I'm watching first at the open:
+- What I am watching first at the open:
 - What would make me change my mind:
 
-STYLE RULES:
-- Concise, specific, skeptical, useful
-- No basic explanations or generic recap language
-- Numbers, levels, flows, catalysts over adjectives
-- ALWAYS cite sources in [brackets] next to data points
-- Say when something is noise
-- Say when data is stale or unverified
-- Keep the whole brief readable in 5 minutes
-- Don't bury the lede
+STYLE: Brutal selection. If in doubt, leave it out. Numbers and levels over adjectives. No throat-clearing.
 
-After writing the brief, post it to Slack channel "morning-brief" using the slack tool's send_message method. Format with emoji section headers for readability."""
+STEP 3 - Post to Slack channel "morning-brief" using the slack tool send_message method."""
 
 
 async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
