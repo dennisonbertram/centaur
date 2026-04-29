@@ -70,6 +70,10 @@ type SlackHistoryMessage = {
   attachments?: BotAttachment[];
 };
 
+type StreamPayload =
+  | { markdown_text: string; chunks?: never }
+  | { chunks: StreamChunk[]; markdown_text?: never };
+
 function threadIdFromEvent(event: SlackMessageEvent): string | null {
   if (!event.channel) return null;
   const threadTs = event.thread_ts || event.ts;
@@ -219,6 +223,7 @@ class WebClientSlackAdapter implements SlackAdapter {
     }
 
     const { channel, threadTs } = splitSlackThreadId(threadId);
+    const firstPayload = this.streamPayloadForChunk(first.value);
     const start = await this.call<{ ts?: string }>("chat.startStream", {
       channel,
       thread_ts: threadTs,
@@ -229,9 +234,17 @@ class WebClientSlackAdapter implements SlackAdapter {
             recipient_team_id: options?.recipientTeamId,
           }),
       ...(options?.taskDisplayMode ? { task_display_mode: options.taskDisplayMode } : {}),
-      ...this.streamPayloadForChunk(first.value),
+      ...("chunks" in firstPayload ? { markdown_text: STREAM_BOOTSTRAP_TEXT } : firstPayload),
     });
     const ts = String(start.ts || "");
+
+    if ("chunks" in firstPayload) {
+      await this.call("chat.appendStream", {
+        channel,
+        ts,
+        ...firstPayload,
+      });
+    }
 
     while (true) {
       const next = await iterator.next();
@@ -346,10 +359,10 @@ class WebClientSlackAdapter implements SlackAdapter {
     };
   }
 
-  private streamPayloadForChunk(chunk: string | StreamChunk): { markdown_text: string; chunks?: StreamChunk[] } {
+  private streamPayloadForChunk(chunk: string | StreamChunk): StreamPayload {
     if (typeof chunk === "string") return { markdown_text: chunk || STREAM_BOOTSTRAP_TEXT };
     if (chunk.type === "markdown_text") return { markdown_text: chunk.text || STREAM_BOOTSTRAP_TEXT };
-    return { markdown_text: STREAM_BOOTSTRAP_TEXT, chunks: [chunk] };
+    return { chunks: [chunk] };
   }
 
   private async call<T = Record<string, unknown>>(method: string, params: Record<string, unknown>): Promise<T> {
