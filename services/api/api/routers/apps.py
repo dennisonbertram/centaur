@@ -200,10 +200,7 @@ def _is_valid_basic_auth(
     expected_user: str | None,
     expected_password_hash: str | None,
 ) -> bool:
-    """Validate per-app basic auth when the app is configured to require it."""
-    if not expected_user and not expected_password_hash:
-        return True
-
+    """Validate per-app basic auth credentials."""
     credentials = _decode_basic_auth(request)
     if credentials is None:
         return False
@@ -214,6 +211,18 @@ def _is_valid_basic_auth(
         and expected_password_hash is not None
         and hashlib.sha256(password.encode()).hexdigest() == expected_password_hash
     )
+
+
+async def _check_global_auth(request: Request, pool) -> bool:
+    """Check password against the global hash in app_config."""
+    credentials = _decode_basic_auth(request)
+    if credentials is None:
+        return False
+    _, password = credentials
+    row = await pool.fetchrow("SELECT password_hash FROM app_config WHERE id = 1")
+    if not row:
+        return False
+    return hashlib.sha256(password.encode()).hexdigest() == row["password_hash"]
 
 
 async def _do_proxy(request: Request, name: str, path: str):
@@ -227,11 +236,25 @@ async def _do_proxy(request: Request, name: str, path: str):
     if not row:
         raise HTTPException(status_code=404, detail=f"App '{name}' not found")
 
-    if not _is_valid_basic_auth(
-        request,
-        expected_user=row["basic_auth_user"],
-        expected_password_hash=row["basic_auth_pass_hash"],
-    ):
+    if row["basic_auth_user"] or row["basic_auth_pass_hash"]:
+        authorized = _is_valid_basic_auth(
+            request,
+            expected_user=row["basic_auth_user"],
+            expected_password_hash=row["basic_auth_pass_hash"],
+        )
+    else:
+        authorized = await _check_global_auth(request, pool)
+        if not authorized:
+            try:
+                await verify_api_key(
+                    request,
+                    x_api_key=request.headers.get("x-api-key"),
+                )
+                authorized = True
+            except HTTPException:
+                pass
+
+    if not authorized:
         return JSONResponse(
             status_code=401,
             content={"detail": "Unauthorized"},

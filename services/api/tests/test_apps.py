@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from api.apps import AppManager
 
@@ -64,28 +66,48 @@ async def test_build_and_start_wraps_custom_start_command_in_shell(
 
 
 @pytest.mark.asyncio
-async def test_app_proxy_strips_prefix_and_allows_public_apps(
+async def test_app_proxy_requires_global_auth_for_unconfigured_apps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from api.routers import apps as apps_router
 
-    pool = AsyncMock()
-    pool.fetchrow.return_value = {
+    global_pass = "testpass"
+    global_hash = hashlib.sha256(global_pass.encode()).hexdigest()
+
+    app_row = {
         "container_id": "container-public",
         "status": "running",
         "port": 3000,
         "basic_auth_user": None,
         "basic_auth_pass_hash": None,
     }
+    config_row = {"password_hash": global_hash}
 
-    request = SimpleNamespace(
-        headers={},
-        url=SimpleNamespace(query="city=sf"),
-        client=SimpleNamespace(host="127.0.0.1"),
-        method="GET",
-        app=SimpleNamespace(state=SimpleNamespace(db_pool=pool)),
-        body=AsyncMock(return_value=b""),
-    )
+    pool = AsyncMock()
+
+    def make_request(headers=None):
+        return SimpleNamespace(
+            headers=headers or {},
+            url=SimpleNamespace(query="city=sf"),
+            client=SimpleNamespace(host="127.0.0.1"),
+            method="GET",
+            app=SimpleNamespace(state=SimpleNamespace(db_pool=pool)),
+            body=AsyncMock(return_value=b""),
+        )
+
+    async def mock_verify_api_key(request, x_api_key=None):
+        raise HTTPException(status_code=401, detail="Missing API key")
+
+    monkeypatch.setattr(apps_router, "verify_api_key", mock_verify_api_key)
+
+    # Unauthenticated request → 401
+    pool.fetchrow.return_value = app_row
+    response = await apps_router._do_proxy(make_request(), "public-app", "api/scout")
+    assert response.status_code == 401
+
+    # Authenticated with global password → 200
+    auth_header = "Basic " + base64.b64encode(f"user:{global_pass}".encode()).decode()
+    pool.fetchrow.side_effect = [app_row, config_row]
 
     calls: list[dict[str, str]] = []
 
@@ -110,8 +132,11 @@ async def test_app_proxy_strips_prefix_and_allows_public_apps(
     )
     monkeypatch.setattr(apps_router.httpx, "AsyncClient", FakeAsyncClient)
 
-    response = await apps_router._do_proxy(request, "public-app", "api/scout")
-
+    response = await apps_router._do_proxy(
+        make_request({"authorization": auth_header}),
+        "public-app",
+        "api/scout",
+    )
     assert response.status_code == 200
     assert calls == [
         {
@@ -184,3 +209,66 @@ async def test_app_proxy_requires_auth_only_for_protected_apps(
     assert unauthorized.status_code == 401
     assert authorized.status_code == 200
     assert calls == ["http://10.0.0.9:3000/"]
+
+
+@pytest.mark.asyncio
+async def test_app_proxy_allows_x_api_key_for_unconfigured_apps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.routers import apps as apps_router
+
+    app_row = {
+        "container_id": "container-public",
+        "status": "running",
+        "port": 3000,
+        "basic_auth_user": None,
+        "basic_auth_pass_hash": None,
+    }
+
+    pool = AsyncMock()
+    pool.fetchrow.return_value = app_row
+
+    request = SimpleNamespace(
+        headers={"x-api-key": "test-key-123"},
+        url=SimpleNamespace(query=""),
+        client=SimpleNamespace(host="10.0.0.1"),
+        method="GET",
+        app=SimpleNamespace(state=SimpleNamespace(db_pool=pool)),
+        body=AsyncMock(return_value=b""),
+    )
+
+    api_key_received: list[str | None] = []
+
+    async def mock_verify_api_key(request, x_api_key=None):
+        api_key_received.append(x_api_key)
+
+    monkeypatch.setattr(apps_router, "verify_api_key", mock_verify_api_key)
+
+    calls: list[str] = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, method, url, headers=None, content=None):
+            calls.append(url)
+            return httpx.Response(200, content=b"ok")
+
+    monkeypatch.setattr(
+        apps_router.app_manager,
+        "get_container_ip",
+        AsyncMock(return_value="10.0.0.5"),
+    )
+    monkeypatch.setattr(apps_router.httpx, "AsyncClient", FakeAsyncClient)
+
+    response = await apps_router._do_proxy(request, "public-app", "")
+
+    assert response.status_code == 200
+    assert api_key_received == ["test-key-123"]
+    assert calls == ["http://10.0.0.5:3000/"]
