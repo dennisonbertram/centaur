@@ -315,17 +315,19 @@ async def _fetch_workflow_events(pool) -> list[dict]:
 async def _fetch_token_events(pool, thread_users: dict[str, str]) -> list[dict]:
     rows = await pool.fetch(
         "SELECT thread_key, created_at, "
-        "  (event_json->>'total_tokens')::bigint as tokens "
+        "  COALESCE((event_json->>'input_tokens')::bigint, 0) "
+        "  + COALESCE((event_json->>'output_tokens')::bigint, 0) "
+        "  + COALESCE((event_json->>'cache_creation_input_tokens')::bigint, 0) "
+        "  as tokens "
         "FROM agent_execution_events "
         "WHERE event_kind = 'execution_summary' "
-        "  AND created_at > NOW() - INTERVAL '90 days' "
-        "  AND (event_json->>'total_tokens')::bigint > 0"
+        "  AND created_at > NOW() - INTERVAL '90 days'"
     )
     return [{
         "uid": thread_users.get(row["thread_key"], "unknown"),
         "tokens": row["tokens"],
         "ts": row["created_at"].isoformat(),
-    } for row in rows]
+    } for row in rows if row["tokens"] > 0]
 
 
 # ── Aggregation (runs per window on pre-fetched events) ──────────
