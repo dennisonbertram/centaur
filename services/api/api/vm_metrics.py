@@ -316,6 +316,16 @@ FINAL_DELIVERY_OUTBOX_GAUGE = Gauge(
     ["state"],
 )
 
+RUNTIME_ASSIGNMENTS_GAUGE = Gauge(
+    "agent_runtime_assignments",
+    "Runtime assignment rows by state.",
+    ["state"],
+)
+RUNTIME_ASSIGNMENTS_STALE_ACTIVE = Gauge(
+    "agent_runtime_assignments_stale_active",
+    "Active runtime assignments older than the inactivity TTL.",
+)
+
 WARM_POOL_CONTAINERS = Gauge(
     "agent_warm_pool_containers",
     "Warm pool container counts.",
@@ -565,6 +575,20 @@ async def refresh_runtime_metrics(pool: Pool) -> None:
     )
     for row in rows:
         FINAL_DELIVERY_OUTBOX_GAUGE.labels(state=row["state"]).set(row["cnt"])
+
+    RUNTIME_ASSIGNMENTS_GAUGE.clear_children()
+    rows = await pool.fetch(
+        "SELECT state, COUNT(*) AS cnt FROM agent_runtime_assignments GROUP BY state"
+    )
+    for row in rows:
+        RUNTIME_ASSIGNMENTS_GAUGE.labels(state=row["state"]).set(row["cnt"])
+    stale_active = await pool.fetchval(
+        "SELECT COUNT(*) FROM agent_runtime_assignments "
+        "WHERE state = 'active' "
+        "  AND updated_at < NOW() - make_interval(secs => $1::double precision)",
+        float(os.getenv("IDLE_TTL_S", "86400")),
+    )
+    RUNTIME_ASSIGNMENTS_STALE_ACTIVE.set(int(stale_active or 0))
 
     WORKFLOW_RUNS_GAUGE.clear_children()
     rows = await pool.fetch(

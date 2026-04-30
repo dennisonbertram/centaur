@@ -1153,6 +1153,83 @@ async def supervise_wires() -> None:
         log.warning("supervisor_error", exc_info=True)
 
 
+async def _release_stale_runtime_assignments(pool, backend, *, limit: int = 100) -> int:
+    """Release active assignment rows whose runtime is gone and no execution is live.
+
+    This is intentionally conservative: a transient Docker/API lookup failure
+    skips the row, and assignments with non-terminal executions are left alone
+    for the execution watchdog to handle.
+    """
+    rows = await pool.fetch(
+        "SELECT a.thread_key, a.assignment_generation, a.runtime_id, a.updated_at, "
+        "       s.state AS session_state "
+        "FROM agent_runtime_assignments a "
+        "LEFT JOIN sandbox_sessions s "
+        "  ON s.thread_key = a.thread_key AND s.sandbox_id = a.runtime_id "
+        "WHERE a.state = 'active' "
+        "  AND a.updated_at < NOW() - make_interval(secs => $1::double precision) "
+        "  AND NOT EXISTS ("
+        "    SELECT 1 FROM agent_execution_requests e "
+        "    WHERE e.thread_key = a.thread_key "
+        "      AND e.assignment_generation = a.assignment_generation "
+        "      AND e.status IN ('queued', 'running', 'retry_wait', 'cancel_requested')"
+        "  ) "
+        "  AND NOT EXISTS ("
+        "    SELECT 1 FROM agent_message_requests m "
+        "    WHERE m.thread_key = a.thread_key "
+        "      AND m.assignment_generation = a.assignment_generation "
+        "      AND m.delivered_execution_id IS NULL"
+        "  ) "
+        "ORDER BY a.updated_at ASC "
+        "LIMIT $2",
+        float(IDLE_TTL_S),
+        max(1, min(limit, 500)),
+    )
+    released = 0
+    for row in rows:
+        thread_key = row["thread_key"]
+        generation = int(row["assignment_generation"])
+        runtime_id = str(row["runtime_id"])
+        session_state = str(row["session_state"] or "")
+        try:
+            if session_state in {"gone", "stopped"}:
+                runtime_status = session_state
+            else:
+                runtime_status = await backend.status_by_id(runtime_id)
+        except Exception:
+            log.warning(
+                "runtime_assignment_gc_status_failed",
+                thread_key=thread_key,
+                assignment_generation=generation,
+                runtime_id=runtime_id[:12],
+                exc_info=True,
+            )
+            continue
+
+        if runtime_status in {"running", "created"}:
+            continue
+
+        result = await pool.execute(
+            "UPDATE agent_runtime_assignments "
+            "SET state = 'released', released_at = NOW(), updated_at = NOW() "
+            "WHERE thread_key = $1 AND assignment_generation = $2 AND state = 'active'",
+            thread_key,
+            generation,
+        )
+        if result.endswith(" 1"):
+            released += 1
+            log.info(
+                "runtime_assignment_released_stale",
+                thread_key=thread_key,
+                assignment_generation=generation,
+                runtime_id=runtime_id[:12],
+                runtime_status=runtime_status,
+                session_state=session_state or None,
+            )
+            _drop_runtime(runtime_id)
+    return released
+
+
 async def reconcile_tick() -> None:
     """Periodic reconciliation: check DB vs Docker, enforce idle TTL, clean orphans.
 
@@ -1288,6 +1365,17 @@ async def reconcile_tick() -> None:
                             await backend.stop_by_id(dind["id"])
         except Exception:
             log.warning("reconcile_dind_scan_failed", exc_info=True)
+
+        # Step E: Release active assignment rows whose runtime has disappeared.
+        # This keeps spawn gating and operator views from being poisoned by
+        # historical assignment rows while leaving live executions to the
+        # execution watchdog.
+        try:
+            released = await _release_stale_runtime_assignments(pool, backend)
+            if released:
+                log.info("runtime_assignment_gc_completed", released=released)
+        except Exception:
+            log.warning("runtime_assignment_gc_failed", exc_info=True)
 
     except Exception:
         log.warning("reconcile_tick_error", exc_info=True)

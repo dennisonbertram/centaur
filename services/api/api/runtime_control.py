@@ -1241,7 +1241,7 @@ async def _mark_execution_terminal(
     )
     await pool.execute(
         "UPDATE agent_final_delivery_outbox SET state = 'pending', final_payload = $1::jsonb, "
-        "next_attempt_at = $2, updated_at = NOW() "
+        "next_attempt_at = $2, lease_owner = NULL, lease_expires_at = NULL, updated_at = NOW() "
         "WHERE execution_id = $3",
         canonical_json(
             {

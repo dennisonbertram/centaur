@@ -223,8 +223,9 @@ async def test_mark_execution_terminal_delays_outbox_claimability(db_pool):
     execution_id = f"exe-{uuid.uuid4().hex[:10]}"
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"
     await db_pool.execute(
-        "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
-        "VALUES ($1, $2, '{}'::jsonb, 'awaiting_terminal')",
+        "INSERT INTO agent_final_delivery_outbox ("
+        "execution_id, thread_key, delivery, state, lease_owner, lease_expires_at"
+        ") VALUES ($1, $2, '{}'::jsonb, 'awaiting_terminal', 'stale-worker', NOW() + INTERVAL '5 minutes')",
         execution_id,
         thread_key,
     )
@@ -242,12 +243,15 @@ async def test_mark_execution_terminal_delays_outbox_claimability(db_pool):
         )
 
     row = await db_pool.fetchrow(
-        "SELECT state, next_attempt_at FROM agent_final_delivery_outbox WHERE execution_id = $1",
+        "SELECT state, next_attempt_at, lease_owner, lease_expires_at "
+        "FROM agent_final_delivery_outbox WHERE execution_id = $1",
         execution_id,
     )
     assert row is not None
     assert row["state"] == "pending"
     assert row["next_attempt_at"] >= started_at + dt.timedelta(seconds=1.5)
+    assert row["lease_owner"] is None
+    assert row["lease_expires_at"] is None
 
 
 @pytest.mark.asyncio
@@ -288,6 +292,85 @@ async def test_final_delivery_claim_filters_platform(client, db_pool, api_key: s
     assert claim.status_code == 200
     deliveries = claim.json()["deliveries"]
     assert [delivery["execution_id"] for delivery in deliveries] == [slack_execution_id]
+
+
+@pytest.mark.asyncio
+async def test_final_delivery_non_retryable_failure_dead_letters_immediately(
+    client,
+    db_pool,
+    api_key: str,
+):
+    execution_id = f"exe-{uuid.uuid4().hex[:10]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox ("
+        "execution_id, thread_key, delivery, state, final_payload, lease_owner, lease_expires_at, "
+        "next_attempt_at, attempt_count"
+        ") VALUES ($1, $2, $3::jsonb, 'sending', $4::jsonb, 'slackbot:test', "
+        "NOW() + INTERVAL '1 minute', NOW(), 1)",
+        execution_id,
+        thread_key,
+        json.dumps({"platform": "slack", "channel": "C-missing"}),
+        json.dumps({"type": "final", "result_text": "done"}),
+    )
+
+    failed = await client.post(
+        f"/agent/final-deliveries/{execution_id}/failed",
+        headers=_auth(api_key),
+        json={
+            "consumer_id": "slackbot:test",
+            "error": "channel_not_found",
+            "error_class": "invalid_destination",
+            "non_retryable": True,
+        },
+    )
+    assert failed.status_code == 200
+
+    row = await db_pool.fetchrow(
+        "SELECT state, last_error, next_attempt_at, lease_owner, lease_expires_at "
+        "FROM agent_final_delivery_outbox WHERE execution_id = $1",
+        execution_id,
+    )
+    assert row is not None
+    assert row["state"] == "dead_letter"
+    assert row["last_error"] == "invalid_destination: channel_not_found"
+    assert row["next_attempt_at"] is None
+    assert row["lease_owner"] is None
+    assert row["lease_expires_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_final_delivery_non_retryable_failure_requires_lease(client, db_pool, api_key: str):
+    execution_id = f"exe-{uuid.uuid4().hex[:10]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox ("
+        "execution_id, thread_key, delivery, state, final_payload, next_attempt_at"
+        ") VALUES ($1, $2, $3::jsonb, 'pending', $4::jsonb, NOW())",
+        execution_id,
+        thread_key,
+        json.dumps({"platform": "slack", "channel": "C-missing"}),
+        json.dumps({"type": "final", "result_text": "done"}),
+    )
+
+    failed = await client.post(
+        f"/agent/final-deliveries/{execution_id}/failed",
+        headers=_auth(api_key),
+        json={
+            "error": "channel_not_found",
+            "error_class": "invalid_destination",
+            "non_retryable": True,
+        },
+    )
+
+    assert failed.status_code == 409
+    row = await db_pool.fetchrow(
+        "SELECT state, last_error FROM agent_final_delivery_outbox WHERE execution_id = $1",
+        execution_id,
+    )
+    assert row is not None
+    assert row["state"] == "pending"
+    assert row["last_error"] is None
 
 
 @pytest.mark.asyncio
@@ -753,6 +836,7 @@ async def test_cancel_execution_interrupts_runtime_and_clears_inflight(db_pool):
     assert result == {
         "ok": True,
         "execution_id": execution_id,
+        "thread_key": thread_key,
         "status": "cancel_requested",
     }
     backend.interrupt_by_id.assert_awaited_once_with(runtime_id)
@@ -801,6 +885,111 @@ async def test_recover_stale_running_requeues_expired_execution(db_pool):
     )
     assert row is not None
     assert row["status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_release_stale_runtime_assignments_releases_gone_idle_assignment(db_pool):
+    from api.agent import _release_stale_runtime_assignments
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state, updated_at"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active', "
+        "NOW() - INTERVAL '2 days')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions (thread_key, sandbox_id, harness, engine, state, started_at, updated_at) "
+        "VALUES ($1, $2, 'amp', 'amp', 'gone', NOW() - INTERVAL '2 days', NOW() - INTERVAL '2 days')",
+        thread_key,
+        runtime_id,
+    )
+
+    backend = SimpleNamespace(status_by_id=AsyncMock())
+    released = await _release_stale_runtime_assignments(db_pool, backend)
+
+    assert released == 1
+    backend.status_by_id.assert_not_awaited()
+    row = await db_pool.fetchrow(
+        "SELECT state, released_at FROM agent_runtime_assignments WHERE thread_key = $1",
+        thread_key,
+    )
+    assert row is not None
+    assert row["state"] == "released"
+    assert row["released_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_release_stale_runtime_assignments_preserves_live_execution(db_pool):
+    from api.agent import _release_stale_runtime_assignments
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state, updated_at"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active', "
+        "NOW() - INTERVAL '2 days')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, delivery, metadata"
+        ") VALUES ($1, $2, 1, 'exec-live', 'hash-live', 'running', '{}'::jsonb, '{}'::jsonb)",
+        f"exe-{uuid.uuid4().hex[:12]}",
+        thread_key,
+    )
+
+    backend = SimpleNamespace(status_by_id=AsyncMock(return_value="gone"))
+    released = await _release_stale_runtime_assignments(db_pool, backend)
+
+    assert released == 0
+    backend.status_by_id.assert_not_awaited()
+    state = await db_pool.fetchval(
+        "SELECT state FROM agent_runtime_assignments WHERE thread_key = $1",
+        thread_key,
+    )
+    assert state == "active"
+
+
+@pytest.mark.asyncio
+async def test_release_stale_runtime_assignments_preserves_undelivered_messages(db_pool):
+    from api.agent import _release_stale_runtime_assignments
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state, updated_at"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active', "
+        "NOW() - INTERVAL '2 days')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_message_requests ("
+        "thread_key, message_id, assignment_generation, request_hash, event_json, metadata"
+        ") VALUES ($1, 'msg-undelivered', 1, 'hash-msg', '{}'::jsonb, '{}'::jsonb)",
+        thread_key,
+    )
+
+    backend = SimpleNamespace(status_by_id=AsyncMock(return_value="gone"))
+    released = await _release_stale_runtime_assignments(db_pool, backend)
+
+    assert released == 0
+    backend.status_by_id.assert_not_awaited()
+    state = await db_pool.fetchval(
+        "SELECT state FROM agent_runtime_assignments WHERE thread_key = $1",
+        thread_key,
+    )
+    assert state == "active"
 
 
 @pytest.mark.asyncio
@@ -977,7 +1166,7 @@ async def test_worker_extends_silence_deadline_while_tool_is_running(db_pool):
         ),
         patch("api.runtime_control._stream_stdout", _tool_then_done_stream),
         patch("api.runtime_control.stop_session", stop_session_mock),
-        patch("api.runtime_control.EXECUTION_SILENCE_TIMEOUT_S", 0.05),
+        patch("api.runtime_control.EXECUTION_SILENCE_TIMEOUT_S", 1.0),
         patch("api.runtime_control.EXECUTION_TOOL_SILENCE_TIMEOUT_S", 0.2),
         patch("api.runtime_control.EXECUTION_WATCHDOG_POLL_S", 0.01),
     ):
@@ -1083,7 +1272,7 @@ async def test_worker_stops_session_when_cancel_requested_mid_stream(db_pool):
     assert execution["status"] == "cancelled"
     assert execution["terminal_reason"] == "cancel_requested"
     assert execution["error_text"] == "cancel_requested"
-    stop_session_mock.assert_awaited_once_with(thread_key)
+    stop_session_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1371,7 +1560,7 @@ async def test_worker_refreshes_silence_deadline_when_resuming_existing_turn(db_
             return_value=SimpleNamespace(turn_counter=1),
         ),
         patch("api.runtime_control._stream_stdout", _delayed_done_stream),
-        patch("api.runtime_control.EXECUTION_SILENCE_TIMEOUT_S", 0.05),
+        patch("api.runtime_control.EXECUTION_SILENCE_TIMEOUT_S", 1.0),
         patch("api.runtime_control.EXECUTION_WATCHDOG_POLL_S", 0.005),
     ):
         await _process_execution(db_pool, row)

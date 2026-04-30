@@ -23,6 +23,11 @@ from api.agent import (
     stop_session,
 )
 from api.deps import get_sandbox_claims, require_scope, verify_api_key
+from api.final_delivery import (
+    format_last_error,
+    requires_delivery_lease,
+    should_dead_letter_failure,
+)
 from api.runtime_control import (
     ControlPlaneError,
     append_message,
@@ -1077,6 +1082,8 @@ class MarkFinalFailedRequest(BaseModel):
     consumer_id: str | None = None
     error: str
     retry_after_seconds: int = 15
+    non_retryable: bool = False
+    error_class: str | None = None
 
 
 @router.post(
@@ -1090,46 +1097,74 @@ async def mark_final_failed(
 ):
     pool = request.app.state.db_pool
     delay = max(5, min(body.retry_after_seconds, 600))
-    owner_check = ""
-    params: list[Any] = [execution_id, delay, body.error]
-    if body.consumer_id:
-        owner_check = " AND lease_owner = $4"
-        params.append(body.consumer_id)
-    max_param = f"${len(params) + 1}"
-    params.append(FINAL_DELIVERY_MAX_ATTEMPTS)
-
-    row = await pool.fetchrow(
-        (
-            "UPDATE agent_final_delivery_outbox SET "
-            f"state = CASE WHEN attempt_count >= {max_param}"
-            " THEN 'dead_letter' ELSE 'pending' END, "
-            "last_error = $3, "
-            "next_attempt_at = NOW() + make_interval(secs => $2), "
-            "lease_owner = NULL, lease_expires_at = NULL, updated_at = NOW() "
-            "WHERE execution_id = $1"
-        )
-        + owner_check
-        + " RETURNING execution_id, thread_key, state, attempt_count",
-        *params,
+    last_error = format_last_error(body.error, body.error_class)
+    active_lease_required = requires_delivery_lease(
+        non_retryable=body.non_retryable,
+        error_class=body.error_class,
     )
-    if not row:
-        raise HTTPException(status_code=409, detail="delivery not claimable")
-    if row["state"] == "dead_letter":
+    if active_lease_required and not body.consumer_id:
+        raise HTTPException(status_code=409, detail="non-retryable delivery failures require an active lease")
+    owner_check = ""
+    params: list[Any] = [execution_id, last_error]
+    if body.consumer_id:
+        owner_check = " AND lease_owner = $3"
+        if active_lease_required:
+            owner_check += " AND state = 'sending' AND lease_expires_at > NOW()"
+        params.append(body.consumer_id)
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                (
+                    "UPDATE agent_final_delivery_outbox SET last_error = $2, updated_at = NOW() "
+                    "WHERE execution_id = $1"
+                )
+                + owner_check
+                + " RETURNING execution_id, thread_key, attempt_count, last_error",
+                *params,
+            )
+            if not row:
+                raise HTTPException(status_code=409, detail="delivery not claimable")
+            dead_letter = should_dead_letter_failure(
+                non_retryable=body.non_retryable,
+                error_class=body.error_class,
+                attempt_count=int(row["attempt_count"]),
+                max_attempts=FINAL_DELIVERY_MAX_ATTEMPTS,
+            )
+            update_row = await conn.fetchrow(
+                "UPDATE agent_final_delivery_outbox SET "
+                "state = $2::text, "
+                "next_attempt_at = CASE WHEN $2::text = 'dead_letter' THEN NULL "
+                "  ELSE NOW() + make_interval(secs => $3) END, "
+                "lease_owner = NULL, lease_expires_at = NULL, updated_at = NOW() "
+                "WHERE execution_id = $1 "
+                "RETURNING execution_id, thread_key, state, attempt_count, last_error",
+                execution_id,
+                "dead_letter" if dead_letter else "pending",
+                delay,
+            )
+            if not update_row:
+                raise HTTPException(status_code=409, detail="delivery not claimable")
+    if update_row["state"] == "dead_letter":
         log.warning(
             "final_delivery_dead_lettered",
             execution_id=execution_id,
-            thread_key=row["thread_key"],
-            attempt_count=row["attempt_count"],
-            last_error=body.error,
+            thread_key=update_row["thread_key"],
+            attempt_count=update_row["attempt_count"],
+            last_error=update_row["last_error"],
+            error_class=body.error_class,
+            non_retryable=body.non_retryable,
         )
     else:
         log.warning(
             "final_delivery_failed",
             execution_id=execution_id,
-            thread_key=row["thread_key"],
+            thread_key=update_row["thread_key"],
             consumer_id=body.consumer_id,
             retry_after_seconds=delay,
-            error=body.error,
+            error=update_row["last_error"],
+            error_class=body.error_class,
+            non_retryable=body.non_retryable,
         )
     return {"ok": True, "execution_id": execution_id}
 
