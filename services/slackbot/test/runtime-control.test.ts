@@ -256,6 +256,41 @@ describe("SlackBot runtime control", () => {
     ).toBe(true);
   });
 
+  it("suppresses the pre-start failure message when a live execution hits a Slack fallback error", async () => {
+    const client = createImmediateStreamClient();
+    client.getExecution = vi.fn(async () => ({ status: "running" }));
+
+    const post = vi.fn(async (content: AsyncGenerator<StreamChunk> | { markdown: string }) => {
+      if ("markdown" in content) {
+        throw new Error("fallback-post-failed");
+      }
+      throw new Error("message_not_in_streaming_state");
+    });
+
+    const thread: BotThread = {
+      id: "slack:C123:1700000000.000100",
+      async subscribe() {},
+      async startTyping() {},
+      async post(content) {
+        return post(content);
+      },
+    };
+
+    const bot = new SlackBot(client as any);
+
+    await bot.onSubscribedMessage(thread, userMessage("follow-up", {
+      id: "1700000000.000004",
+      isMention: true,
+    }));
+
+    expect(client.getExecution).toHaveBeenCalledWith("exe-new");
+    const markdownCalls = post.mock.calls
+      .map(([content]) => content)
+      .filter((content): content is { markdown: string } => "markdown" in content)
+      .map((content) => content.markdown);
+    expect(markdownCalls).not.toContain("Agent request failed before execution started. Please retry.");
+  });
+
   it("maps failed-permanent hydration to a friendly retry message", async () => {
     const client = createImmediateStreamClient();
     client.streamEvents = vi.fn(() => (async function* () {

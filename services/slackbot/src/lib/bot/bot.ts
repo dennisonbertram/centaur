@@ -156,6 +156,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function executionIdFromError(err: unknown): string {
+  if (!(err instanceof Error)) return "";
+  const executionId = (err as Error & { executionId?: unknown }).executionId;
+  return typeof executionId === "string" ? executionId : "";
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? value as Record<string, unknown> : {};
 }
@@ -397,11 +403,26 @@ export class SlackBot {
       await this.bufferAndExecute(thread, text, parts, delivery, promptSelectorOverride);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
+      const executionId = executionIdFromError(err);
       log.error("execute_start_failed", {
         thread_key: normalizeThreadKey(thread.id),
         error,
+        execution_id: executionId || undefined,
       });
       await thread.stopTyping?.();
+
+      const executionStatus = executionId
+        ? await this.getExecutionStatus(executionId)
+        : null;
+      if (executionStatus) {
+        log.warn("execute_start_failure_suppressed", {
+          thread_key: normalizeThreadKey(thread.id),
+          execution_id: executionId,
+          execution_status: executionStatus,
+        });
+        return;
+      }
+
       await thread.post({ markdown: "Agent request failed before execution started. Please retry." });
     }
   }
@@ -445,11 +466,17 @@ export class SlackBot {
         : "";
       throw new Error(errorText || "workflow did not enqueue an execution");
     }
-    await this.execute(thread, threadKey, {
-      executionId: accepted.execution_id,
-      userId: delivery.userId,
-      teamId: delivery.teamId,
-    });
+    try {
+      await this.execute(thread, threadKey, {
+        executionId: accepted.execution_id,
+        userId: delivery.userId,
+        teamId: delivery.teamId,
+      });
+    } catch (err) {
+      const wrapped = err instanceof Error ? err : new Error(String(err));
+      (wrapped as Error & { executionId?: string }).executionId = accepted.execution_id;
+      throw wrapped;
+    }
   }
 
   private async releaseForPromptSwitch(threadKey: string, messageId?: string): Promise<void> {
@@ -876,6 +903,16 @@ export class SlackBot {
         execution_id: executionId,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  }
+
+  private async getExecutionStatus(executionId: string): Promise<string | null> {
+    try {
+      const execution = await this.client.getExecution(executionId);
+      const status = typeof execution.status === "string" ? execution.status.trim() : "";
+      return status || "unknown";
+    } catch {
+      return null;
     }
   }
 
