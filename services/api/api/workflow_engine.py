@@ -239,11 +239,19 @@ class WorkflowContext:
 
     # ── Internal ──────────────────────────────────────────────────────
 
+    @staticmethod
+    def _format_step_name(name: str, count: int) -> str:
+        return name if count == 1 else f"{name}#{count}"
+
+    def _peek_resolved_name(self, name: str) -> str:
+        """Return the checkpoint name the next ``step(name, ...)`` will use."""
+        return self._format_step_name(name, self._step_counter.get(name, 0) + 1)
+
     def _resolve_name(self, name: str) -> str:
         """Auto-deduplicate step names for loops (name, name#2, …)."""
         count = self._step_counter.get(name, 0) + 1
         self._step_counter[name] = count
-        return name if count == 1 else f"{name}#{count}"
+        return self._format_step_name(name, count)
 
     async def _persist_checkpoint(
         self,
@@ -1026,6 +1034,8 @@ async def do_agent_turn(
             "do_agent_turn requires prompt or parts",
             422,
         )
+    checkpoint_name = ctx._peek_resolved_name("agent_turn")
+    step_id = f"wf:{ctx.run_id}:{checkpoint_name}"
 
     async def _dispatch() -> dict[str, Any]:
         effective_metadata = dict(metadata or run_in.get("metadata") or {})
@@ -1040,7 +1050,6 @@ async def do_agent_turn(
         else:
             effective_delivery = dict(run_in.get("delivery") or {})
         selector = _resolve_prompt_selector(prompt_selector)
-        step_id = f"wf:{ctx.run_id}:agent_turn"
 
         spawn = await spawn_assignment(
             ctx._pool,

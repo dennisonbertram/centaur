@@ -362,6 +362,80 @@ async def test_step_name_deduplication(db_pool):
 
 
 @pytest.mark.asyncio
+async def test_agent_turn_idempotency_ids_follow_deduped_step_names(db_pool):
+    from api.workflow_engine import SuspendWorkflow, WorkflowContext, do_agent_turn
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    thread_key = f"workflow:{run_id}:gap-analysis:chunk-4"
+    await db_pool.execute(
+        "INSERT INTO workflow_runs ("
+        "run_id, workflow_name, workflow_version, request_hash, root_run_id, "
+        "status, input_json, worker_id"
+        ") VALUES ($1, 'self_improve_daily', 'test-v1', 'hash', $1, 'running', '{}'::jsonb, 'w1')",
+        run_id,
+    )
+
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    enqueue_execution_mock = AsyncMock(side_effect=[
+        {"ok": True, "execution_id": "exe-first", "status": "queued"},
+        {"ok": True, "execution_id": "exe-second", "status": "queued"},
+    ])
+
+    with (
+        patch(
+            "api.workflow_engine.spawn_assignment",
+            new=AsyncMock(return_value={"assignment_generation": 1}),
+        ) as spawn_mock,
+        patch("api.workflow_engine.append_message", new=AsyncMock()),
+        patch("api.workflow_engine.enqueue_execution", new=enqueue_execution_mock),
+    ):
+        with pytest.raises(SuspendWorkflow):
+            await do_agent_turn(
+                ctx,
+                prompt="review batch",
+                thread_key=thread_key,
+                message_id=f"wf:{run_id}:batch_review:chunk-4",
+            )
+        with pytest.raises(SuspendWorkflow):
+            await do_agent_turn(
+                ctx,
+                prompt="repair batch",
+                thread_key=thread_key,
+                message_id=f"wf:{run_id}:batch_review:repair:chunk-4",
+            )
+
+    assert [
+        call.kwargs["spawn_id"] for call in spawn_mock.await_args_list
+    ] == [
+        f"wf:{run_id}:agent_turn:spawn",
+        f"wf:{run_id}:agent_turn#2:spawn",
+    ]
+    assert [
+        call.kwargs["execute_id"] for call in enqueue_execution_mock.await_args_list
+    ] == [
+        f"wf:{run_id}:agent_turn:execute",
+        f"wf:{run_id}:agent_turn#2:execute",
+    ]
+
+    rows = await db_pool.fetch(
+        "SELECT checkpoint_name, execution_id "
+        "FROM workflow_checkpoints WHERE run_id = $1 ORDER BY checkpoint_name",
+        run_id,
+    )
+    indexed = {str(row["checkpoint_name"]): row["execution_id"] for row in rows}
+    assert indexed == {
+        "agent_turn": "exe-first",
+        "agent_turn#2": "exe-second",
+    }
+
+
+@pytest.mark.asyncio
 async def test_step_only_auto_links_execution_ids_for_agent_turn_steps(db_pool):
     from api.workflow_engine import WorkflowContext
 
