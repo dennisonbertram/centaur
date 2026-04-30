@@ -41,6 +41,23 @@ const PROMPT_FLAG_ALIASES = new Map<string, string>([
   ["claude", "claude-code"],
   ["pi", "pi-mono"],
 ]);
+/**
+ * Exhaustive allowlist of valid prompt selectors (harnesses + personas + aliases).
+ * Only `--flag` tokens matching this set trigger persona/harness routing.
+ * Unrecognised flags (e.g. `--rpc-url`, `--installed`) are left in the message
+ * text as regular user content instead of causing an `unknown persona_id` error.
+ *
+ * Update this set when a new persona or harness is added.
+ */
+const KNOWN_PROMPT_SELECTORS = new Set([
+  // harnesses
+  ...EXECUTION_HARNESSES,
+  // aliases (pre-resolution)
+  ...PROMPT_FLAG_ALIASES.keys(),
+  // personas
+  "eng",
+  "invest",
+]);
 const STREAM_BOOTSTRAP_TEXT = "\u200b";
 
 type SlackRepoContext = {
@@ -143,25 +160,39 @@ const PROMPT_FLAG_RE = /(?:^|\s)--([a-z][a-z0-9-]*)(?=\s|$)/gi;
 const PROMPT_FLAG_SKIP = new Set(["engine", "model", "opus", "sonnet", "haiku"]);
 
 /**
- * Extract every `--flag` token. Returns the last matched selector (persona or
- * harness) plus the text with all flag tokens stripped so the LLM never sees
- * `--invest` in the prompt body. Persona/harness routing is flag-only by design:
- * never infer persona from channel, content, or attachments.
+ * Extract recognised `--flag` tokens for persona/harness routing.
+ *
+ * Only flags that match KNOWN_PROMPT_SELECTORS (after alias resolution and
+ * skip-list filtering) are treated as routing directives; all other `--word`
+ * tokens are left in the message text untouched. This prevents user content
+ * like `--rpc-url` or `--installed` from being misinterpreted as persona
+ * switches and causing `unknown persona_id` errors.
  */
 export function extractFlagSelector(text: string): { selector?: string; cleaned: string } {
   const re = new RegExp(PROMPT_FLAG_RE.source, PROMPT_FLAG_RE.flags);
   let selector: string | undefined;
+  const recognisedOffsets: Array<{ start: number; end: number }> = [];
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) !== null) {
     const flag = match[1].toLowerCase();
-    if (!PROMPT_FLAG_SKIP.has(flag)) {
-      selector = PROMPT_FLAG_ALIASES.get(flag) || flag;
+    if (PROMPT_FLAG_SKIP.has(flag)) {
+      recognisedOffsets.push({ start: match.index, end: match.index + match[0].length });
+      continue;
     }
+    const resolved = PROMPT_FLAG_ALIASES.get(flag) || flag;
+    if (KNOWN_PROMPT_SELECTORS.has(resolved) || KNOWN_PROMPT_SELECTORS.has(flag)) {
+      selector = resolved;
+      recognisedOffsets.push({ start: match.index, end: match.index + match[0].length });
+    }
+    // Unknown flags: leave in text, do not set selector
   }
-  const cleaned = text
-    .replace(new RegExp(PROMPT_FLAG_RE.source, PROMPT_FLAG_RE.flags), " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  // Strip only recognised flag tokens from the text
+  let cleaned = text;
+  for (let i = recognisedOffsets.length - 1; i >= 0; i--) {
+    const { start, end } = recognisedOffsets[i];
+    cleaned = cleaned.slice(0, start) + " " + cleaned.slice(end);
+  }
+  cleaned = cleaned.replace(/\s+/g, " ").trim();
   return { selector, cleaned };
 }
 

@@ -898,6 +898,24 @@ describe("extractFlagSelector — returns stripped text for the agent", () => {
     expect(selector).toBeUndefined();
     expect(cleaned).toBe("looking at this co https://docsend.com/view/s/abc");
   });
+
+  it("ignores unknown --flags and leaves them in text (prevents unknown persona_id errors)", () => {
+    const { selector, cleaned } = extractFlagSelector("set --rpc-url https://mainnet.infura.io");
+    expect(selector).toBeUndefined();
+    expect(cleaned).toBe("set --rpc-url https://mainnet.infura.io");
+  });
+
+  it("ignores --installed embedded in technical text", () => {
+    const { selector, cleaned } = extractFlagSelector("is foundry --installed on this machine?");
+    expect(selector).toBeUndefined();
+    expect(cleaned).toBe("is foundry --installed on this machine?");
+  });
+
+  it("strips known flags but preserves unknown flags in the same message", () => {
+    const { selector, cleaned } = extractFlagSelector("--invest check --rpc-url endpoint");
+    expect(selector).toBe("invest");
+    expect(cleaned).toBe("check --rpc-url endpoint");
+  });
 });
 
 describe("bareFlagGreeting (slackbot short-circuit for bare --invest)", () => {
@@ -926,8 +944,10 @@ describe("bareFlagGreeting (slackbot short-circuit for bare --invest)", () => {
     expect(bareFlagGreeting(selector, cleaned, 1)).toBeUndefined();
   });
 
-  it("returns undefined for non-invest flags (no canned greeting)", () => {
+  it("returns undefined for unknown flags (not in KNOWN_PROMPT_SELECTORS)", () => {
     const { selector, cleaned } = extractFlagSelector("--legal");
+    // --legal is not in the allowlist, so selector is undefined
+    expect(selector).toBeUndefined();
     expect(bareFlagGreeting(selector, cleaned, 0)).toBeUndefined();
   });
 
