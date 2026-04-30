@@ -31,6 +31,124 @@ async def _insert_assignment(db_pool, thread_key: str, generation: int = 1) -> N
 
 
 @pytest.mark.asyncio
+async def test_db_insert_session_initial_state_tracks_inflight_turn(db_pool):
+    from api.agent import _db_insert_session
+
+    idle_thread_key = f"slack:C-test:{uuid.uuid4().hex}:idle"
+    idle_session = SandboxSession(
+        sandbox_id=f"rt-{uuid.uuid4().hex[:8]}",
+        thread_key=idle_thread_key,
+        harness="amp",
+        engine="amp",
+    )
+
+    inserted = await _db_insert_session(idle_session, harness="amp", engine="amp")
+
+    assert inserted is True
+    idle_row = await db_pool.fetchrow(
+        "SELECT state, inflight_turn_id FROM sandbox_sessions WHERE thread_key = $1",
+        idle_thread_key,
+    )
+    assert idle_row is not None
+    assert idle_row["state"] == "idle"
+    assert idle_row["inflight_turn_id"] is None
+
+    running_thread_key = f"slack:C-test:{uuid.uuid4().hex}:running"
+    running_session = SandboxSession(
+        sandbox_id=f"rt-{uuid.uuid4().hex[:8]}",
+        thread_key=running_thread_key,
+        harness="amp",
+        engine="amp",
+    )
+
+    inserted = await _db_insert_session(
+        running_session,
+        harness="amp",
+        engine="amp",
+        inflight_turn_id="turn-live",
+        inflight_turn_input={
+            "message": {
+                "role": "user",
+                "content": [{"type": "text", "text": "hello"}],
+            }
+        },
+        inflight_attempts=1,
+    )
+
+    assert inserted is True
+    running_row = await db_pool.fetchrow(
+        "SELECT state, inflight_turn_id, inflight_attempts FROM sandbox_sessions WHERE thread_key = $1",
+        running_thread_key,
+    )
+    assert running_row is not None
+    assert running_row["state"] == "running"
+    assert running_row["inflight_turn_id"] == "turn-live"
+    assert running_row["inflight_attempts"] == 1
+
+
+@pytest.mark.asyncio
+async def test_reconcile_tick_reaps_only_stale_running_sessions_without_activity(db_pool):
+    from api.agent import reconcile_tick
+
+    stale_thread_key = f"slack:C-test:{uuid.uuid4().hex}:stale"
+    active_thread_key = f"slack:C-test:{uuid.uuid4().hex}:active"
+    stale_runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+    active_runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions ("
+        "thread_key, sandbox_id, harness, engine, state, started_at, updated_at"
+        ") VALUES ($1, $2, 'amp', 'amp', 'running', NOW() - INTERVAL '25 hours', NOW() - INTERVAL '25 hours')",
+        stale_thread_key,
+        stale_runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions ("
+        "thread_key, sandbox_id, harness, engine, state, started_at, updated_at"
+        ") VALUES ($1, $2, 'amp', 'amp', 'running', NOW() - INTERVAL '25 hours', NOW() - INTERVAL '25 hours')",
+        active_thread_key,
+        active_runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, delivery, metadata"
+        ") VALUES ($1, $2, 1, 'exec-live', 'hash-live', 'queued', '{}'::jsonb, '{}'::jsonb)",
+        f"exe-{uuid.uuid4().hex[:12]}",
+        active_thread_key,
+    )
+
+    backend = SimpleNamespace(
+        status_by_id=AsyncMock(return_value="running"),
+        stop=AsyncMock(),
+        list_containers=AsyncMock(return_value=[]),
+    )
+    with (
+        patch("api.agent.get_backend", return_value=backend),
+        patch("api.agent._drop_runtime") as drop_runtime,
+    ):
+        await reconcile_tick()
+
+    stale_row = await db_pool.fetchrow(
+        "SELECT state FROM sandbox_sessions WHERE thread_key = $1",
+        stale_thread_key,
+    )
+    active_row = await db_pool.fetchrow(
+        "SELECT state FROM sandbox_sessions WHERE thread_key = $1",
+        active_thread_key,
+    )
+    assert stale_row is not None
+    assert stale_row["state"] == "suspended"
+    assert active_row is not None
+    assert active_row["state"] == "running"
+
+    stopped_threads = {
+        call.args[0].thread_key for call in backend.stop.await_args_list
+    }
+    assert stopped_threads == {stale_thread_key}
+    drop_runtime.assert_called_once_with(stale_runtime_id)
+
+
+@pytest.mark.asyncio
 async def test_message_requires_active_assignment(client, api_key: str):
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"
     res = await client.post(

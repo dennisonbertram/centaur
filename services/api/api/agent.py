@@ -184,20 +184,25 @@ async def _db_insert_session(
 ) -> bool:
     """Insert a session row. Returns True if we won the insert race."""
     pool = _get_pool()
+    # Sandbox session state tracks whether a turn is active, not just whether
+    # the container process exists. Fresh spawns with no in-flight turn should
+    # enter the normal idle TTL path.
+    initial_state = "running" if inflight_turn_id else "idle"
     row = await pool.fetchrow(
         "INSERT INTO sandbox_sessions ("
         "thread_key, sandbox_id, harness, engine, state, started_at, "
         "agent_thread_id, last_delivered_id, inflight_turn_id, inflight_turn_input, "
         "inflight_started_at, inflight_attempts, last_result, last_result_at"
-        ") VALUES ($1, $2, $3, $4, 'running', NOW(), $5, $6, $7::text, $8::jsonb, "
-        "CASE WHEN $7::text IS NULL THEN NULL ELSE NOW() END, $9, $10, "
-        "CASE WHEN $10::text = '' THEN NULL ELSE NOW() END) "
+        ") VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8::text, $9::jsonb, "
+        "CASE WHEN $8::text IS NULL THEN NULL ELSE NOW() END, $10, $11, "
+        "CASE WHEN $11::text = '' THEN NULL ELSE NOW() END) "
         "ON CONFLICT (thread_key) DO NOTHING "
         "RETURNING thread_key",
         session.thread_key,
         session.sandbox_id,
         harness,
         engine,
+        initial_state,
         agent_thread_id or None,
         last_delivered_id or None,
         inflight_turn_id or None,
@@ -1294,9 +1299,14 @@ async def reconcile_tick() -> None:
 
         # Step B: Idle TTL enforcement
         idle_rows = await pool.fetch(
-            "SELECT thread_key, sandbox_id FROM sandbox_sessions "
-            "WHERE state = 'idle' "
-            "AND updated_at < NOW() - make_interval(secs => $1::double precision)",
+            "SELECT ss.thread_key, ss.sandbox_id FROM sandbox_sessions ss "
+            "WHERE ss.state = 'idle' "
+            "AND ss.updated_at < NOW() - make_interval(secs => $1::double precision) "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM agent_execution_requests er "
+            "  WHERE er.thread_key = ss.thread_key "
+            "    AND er.status IN ('queued', 'running', 'retry_wait', 'cancel_requested')"
+            ")",
             float(IDLE_TTL_S),
         )
         for row in idle_rows:
@@ -1322,14 +1332,58 @@ async def reconcile_tick() -> None:
                     exc_info=True,
                 )
 
-        # Step C: Clean old terminated rows
+        # Step C: Reap old rows that are still marked running but have no live
+        # wire, turn, or execution activity left to drive them.
+        stale_running_rows = await pool.fetch(
+            "SELECT ss.thread_key, ss.sandbox_id, ss.state "
+            "FROM sandbox_sessions ss "
+            "WHERE ss.state IN ('running', 'delivering', 'error') "
+            "AND ss.updated_at < NOW() - make_interval(secs => $1::double precision) "
+            "AND ss.wire_lease_id IS NULL "
+            "AND ss.inflight_turn_id IS NULL "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM agent_execution_requests er "
+            "  WHERE er.thread_key = ss.thread_key "
+            "    AND er.status IN ('queued', 'running', 'retry_wait', 'cancel_requested')"
+            ")",
+            float(IDLE_TTL_S),
+        )
+        for row in stale_running_rows:
+            thread_key = row["thread_key"]
+            sandbox_id = row["sandbox_id"]
+            try:
+                log.info(
+                    "inactive_running_ttl_expired",
+                    thread_key=thread_key,
+                    sandbox=sandbox_id[:12],
+                    state=row["state"],
+                )
+                session = SandboxSession(
+                    sandbox_id=sandbox_id,
+                    thread_key=thread_key,
+                    harness="",
+                    engine="",
+                )
+                with contextlib.suppress(Exception):
+                    await backend.stop(session)
+                await _mark_inactive(thread_key)
+                _drop_runtime(sandbox_id)
+            except Exception:
+                log.warning(
+                    "reconcile_inactive_running_row_error",
+                    thread_key=thread_key,
+                    sandbox=sandbox_id[:12],
+                    exc_info=True,
+                )
+
+        # Step D: Clean old terminated rows
         await pool.execute(
             "DELETE FROM sandbox_sessions "
             "WHERE state IN ('gone', 'stopped') "
             "AND updated_at < NOW() - INTERVAL '1 hour'"
         )
 
-        # Step D: Clean orphan DinD sidecars
+        # Step E: Clean orphan DinD sidecars
         try:
             dind_containers = await backend.list_containers({"ai2.dind": "true"})
             sandbox_containers = await backend.list_containers(
