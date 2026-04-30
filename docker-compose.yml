@@ -164,6 +164,7 @@ services:
     volumes:
       - ./tools:/app/tools
       - ./workflows:/app/workflows
+      - ./.agents/skills:/app/.agents/skills:ro
       - ${CENTAUR_OVERLAY_HOST_DIR:-${HOME}/centaur-overlay}:/app/overlay/org
       - firewall-certs:/firewall-certs:ro
     healthcheck:
