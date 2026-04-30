@@ -1,11 +1,11 @@
 ---
 name: planning-content-launches
-description: "Builds a launch brief for Paradigm content, including preflight feedback, channel decisions, asset checklists, amplification sequencing, and postmortems. Use when asked to pressure-test a draft, plan a launch, decide what channels or formats to use, or improve the reach of an announcement, essay, policy paper, program, event, or data release."
+description: "Builds a launch brief for Paradigm content, including preflight feedback, channel decisions, asset checklists, amplification sequencing, creative direction, format teardowns, and postmortems. Use when asked to pressure-test a draft, plan a launch, review a recap or recurring series, assess virality, shape a video or creative direction, decide what channels or formats to use, or improve the reach of an announcement, essay, policy paper, program, event, or data release."
 ---
 
 # Planning Content Launches
 
-Turns a draft, memo, announcement, essay, event, or product launch into a concrete launch brief that improves reach without diluting Paradigm's substance-first brand.
+Turns a draft, memo, announcement, essay, recap, event, launch video, or product launch into a concrete brief that improves reach without diluting Paradigm's substance-first brand.
 
 ## What This Skill Does
 
@@ -16,13 +16,33 @@ Use this skill to help a team answer:
 - What supporting assets make this materially stronger?
 - Who should post first, and what should happen next?
 - How should the team measure success after launch?
+- Is this format strong enough to repeat, or is it fighting the message?
+- What creative direction would make this piece more memorable and more watchable?
+- What should the team explicitly learn from this format for the next launch?
 
-This skill supports three modes:
+This skill supports five modes:
 - `Preflight`: pressure-test the content before it ships
 - `Launch Plan`: create the full launch brief and amplification plan
+- `Creative Direction`: shape the concept, hook, structure, and visual treatment for a content asset, especially video or high-leverage creative packaging
+- `Format Teardown`: diagnose whether a recap, summary, thread, or recurring format is likely to travel, where it loses people, and what to keep, change, or stop doing
 - `Postmortem`: review what happened and recommend what to reuse next time
 
 If the user does not specify a mode, default to `Launch Plan`.
+
+Route into the closest mode when the ask is implicit:
+- virality, recap review, recurring-series feedback, format critique, or "what should survive into the next version?" -> `Format Teardown`
+- creative direction, concepting, video review, edit feedback, or packaging direction -> `Creative Direction`
+- launch planning, channel mix, sequencing, or amplification -> `Launch Plan`
+- pre-ship feedback on a draft -> `Preflight`
+- after-action review or "what should we reuse?" -> `Postmortem`
+
+## Response Style
+
+Default to:
+- clean inline hyperlinks instead of pasted raw URLs when links are needed
+- readable prose with short, decision-oriented lists instead of fragmented bullet spam
+- direct judgments about what is strong, weak, missing, or mismatched
+- an explicit `Learnings To Reuse` section whenever the task involves format design, recap analysis, creative direction, or postmortem work
 
 ## Paradigm Principles
 
@@ -100,6 +120,15 @@ Extract and evaluate:
 - what tension or contrarian edge makes the piece memorable
 
 If the thesis is soft, say so directly and rewrite it more sharply.
+
+### 4.5 Diagnose The Format Mechanics
+
+When the ask involves virality, recap quality, readability, or format performance, evaluate:
+- the opening hook and whether it earns attention fast enough
+- pacing, structure, and whether the format makes the audience work too hard
+- how clearly the format signals novelty, stakes, or payoff
+- whether the chosen container helps the idea travel or buries it
+- what element is reusable versus one-off
 
 ### 5. Choose The Distribution Shape
 
@@ -280,6 +309,22 @@ Prioritize:
 - timeline and deadline clarity
 - reminder ladder before the close date
 
+### Recap Or Summary Format
+
+Prioritize:
+- a clear angle, not just a compressed transcript
+- fast orientation on why the audience should care
+- scannability without flattening the substance
+- explicit decisions about what belongs in-link versus inline
+
+### Video Or Motion Asset
+
+Prioritize:
+- a strong opening beat in the first few seconds
+- visual proof, not just narrated claims
+- format-native pacing for the intended channel
+- clear cutdown opportunities for distribution after launch
+
 ## Output Format
 
 When in `Launch Plan` mode, return a `Launch Brief` with these sections in order:
@@ -304,12 +349,31 @@ When in `Preflight` mode, keep the output shorter and focus on:
 - channel fit
 - top three improvements before launch
 
+When in `Creative Direction` mode, return:
+- creative objective
+- target audience reaction
+- concept direction
+- opening hook or first-beat recommendation
+- structure, pacing, and visual treatment notes
+- asset or cutdown recommendations
+- risks and what to avoid
+- learnings to reuse
+
+When in `Format Teardown` mode, return:
+- format diagnosis
+- what helps it travel
+- what slows it down or makes it less readable
+- keep, change, and remove recommendations
+- one to three experiments worth running next
+- learnings to reuse
+
 When in `Postmortem` mode, return:
 - what shipped
 - what worked
 - what underperformed
 - what surprised the team
 - what to standardize next time
+- learnings to reuse
 
 ## Research Guidance
 
