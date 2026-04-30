@@ -2,11 +2,13 @@
 
 Queries agent_execution_events (Postgres) for tool/skill/user/team data
 and nginx access logs (VictoriaLogs) for app traffic. Writes aggregated
-stats to the usage_stats table as a single JSONB blob.
+stats to the usage_stats table as a single JSONB blob, with separate
+aggregations per time window (all, 30d, 7d, 1d).
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import logging
 import re
@@ -65,6 +67,16 @@ USER_MAP = {
     "UGX1TH8TS": ("Dan Robinson", "dan"),
     "UGZCSQTPE": ("Matt Huang", "matt"),
     "UJ34LKUH0": ("Arjun Balaji", "arjun"),
+    "UUR0BJKL7": ("Holly Morgan-Winsdale", "holly"),
+    "U03059PNULX": ("Ben Hinshaw", "ben"),
+    "U04851Q6TPF": ("Alex Popescu", "apopescu"),
+    "U04URB3CX1B": ("Josh Waitzkin", "josh.waitzkin"),
+    "U06K61QT4DB": ("Katie Shia", "kshia"),
+    "U06T8RJ6B4M": ("Chentai Kao", "chentai"),
+    "U087U0PNB2P": ("Nicki Lardieri", "nicki"),
+    "U08NYJ0CFGW": ("Shogo Nakai", "shogo"),
+    "U0924CKNXB5": ("Liz Khussein", "lkhussein"),
+    "U0AQR2ABDHC": ("Flor Romero", "flor"),
 }
 
 TEAM_MAP = {
@@ -89,6 +101,11 @@ TEAM_MAP = {
     "U03T8NE9JQH": "Admin", "U04BXMURWB0": "Admin",
     "U07F8P45GE4": "Admin", "U03SDG6C6TC": "Admin",
     "U045TR9PGAZ": "Engineering", "U0A5X8LFC10": "Engineering",
+    "UUR0BJKL7": "Admin", "U03059PNULX": "Legal",
+    "U04851Q6TPF": "Legal", "U04URB3CX1B": "Other",
+    "U06K61QT4DB": "Engineering", "U06T8RJ6B4M": "Engineering",
+    "U087U0PNB2P": "Admin", "U08NYJ0CFGW": "Engineering",
+    "U0924CKNXB5": "Admin", "U0AQR2ABDHC": "Admin",
 }
 
 TEAM_EMOJIS = {
@@ -127,6 +144,23 @@ APP_EMOJIS = {
     "touchpoint-bot": "\U0001F916",
 }
 
+WORKFLOW_EMOJIS = {
+    "slack_thread_turn": "\U0001F4AC",
+    "policy_news_monitor": "\U0001F4F0",
+    "self_improve_daily": "\U0001F504",
+    "agent_turn": "\U0001F916",
+    "paradigm_pulse_daily": "\U0001F4E1",
+    "eth_morning_brief": "\u2615",
+    "investment_pipeline_weekly": "\U0001F4BC",
+    "daily_checklist_digest": "\u2705",
+    "morning_market_brief": "\U0001F4C8",
+    "room_conflict_monitor": "\U0001F3E2",
+    "agent_loop": "\U0001F501",
+    "usage_stats": "\U0001F4CA",
+    "multi_step_demo": "\U0001F9EA",
+    "self_improve_deploy_notifier": "\U0001F680",
+}
+
 NOISE_WORDS = frozenset({
     "it", "on", "in", "to", "at", "or", "an", "is", "be", "do",
     "him", "her", "out", "them", "through", "and", "parity", "tool",
@@ -147,6 +181,8 @@ STATIC_EXTS = frozenset({
 
 CALL_RE = re.compile(r"call\s+([a-z][a-z0-9_-]*)\s+([a-z][a-z0-9_-]*)")
 CURL_RE = re.compile(r"/tools/([a-z][a-z0-9_-]+)/([a-z][a-z0-9_-]+)")
+
+WINDOWS = {"all": None, "30d": 30, "7d": 7, "1d": 1}
 
 
 def _thread_to_slack_url(thread_key: str) -> str | None:
@@ -187,10 +223,11 @@ async def _get_thread_users(pool) -> dict[str, str]:
     return {r["thread_key"]: r["user_id"] for r in rows}
 
 
-async def _extract_tools_and_users(
-    pool, thread_users: dict[str, str],
-) -> tuple[list[dict], list[dict]]:
-    """Single pass over shell_command events to build both tool and user stats."""
+# ── Raw event parsing (query once, aggregate per window) ─────────
+
+
+async def _fetch_tool_events(pool, thread_users: dict[str, str]) -> list[dict]:
+    """Fetch and parse all shell_command events into flat records."""
     rows = await pool.fetch(
         "SELECT thread_key, created_at, event_json::text as ej "
         "FROM agent_execution_events "
@@ -199,10 +236,7 @@ async def _extract_tools_and_users(
         "  AND event_json::text LIKE '%shell_command%'"
         "  AND created_at > NOW() - INTERVAL '90 days'"
     )
-
-    tool_stats: dict[str, dict] = {}
-    user_stats: dict[str, dict] = {}
-
+    events = []
     for row in rows:
         ej = json.loads(row["ej"])
         for block in ej.get("message", {}).get("content", []):
@@ -210,54 +244,91 @@ async def _extract_tools_and_users(
                 continue
             if block.get("name") != "shell_command":
                 continue
-            cmd = block.get("input", {}).get("command", "")
-            parsed = _parse_tool_call(cmd)
-            if not parsed:
+            parsed = _parse_tool_call(block.get("input", {}).get("command", ""))
+            if not parsed or parsed[0] in NOISE_WORDS:
                 continue
-            tool, method = parsed
-            if tool in NOISE_WORDS:
-                continue
+            events.append({
+                "tool": parsed[0],
+                "method": parsed[1],
+                "uid": thread_users.get(row["thread_key"], "unknown"),
+                "thread": row["thread_key"],
+                "day": row["created_at"].strftime("%Y-%m-%d"),
+                "ts": row["created_at"].isoformat(),
+            })
+    return events
 
-            uid = thread_users.get(row["thread_key"], "unknown")
-            day = row["created_at"].strftime("%Y-%m-%d")
 
-            # Tool stats
-            if tool not in tool_stats:
-                tool_stats[tool] = {
-                    "count": 0, "threads": set(), "users": Counter(),
-                    "methods": Counter(), "first": "9999", "last": "0000",
-                    "first_thread": None, "last_thread": None,
-                }
-            ts = tool_stats[tool]
-            ts["count"] += 1
-            ts["threads"].add(row["thread_key"])
-            ts["users"][uid] += 1
-            ts["methods"][method] += 1
-            if day < ts["first"]:
-                ts["first"] = day
-                ts["first_thread"] = row["thread_key"]
-            if day >= ts["last"]:
-                ts["last"] = day
-                ts["last_thread"] = row["thread_key"]
+async def _fetch_skill_events(pool, thread_users: dict[str, str]) -> list[dict]:
+    rows = await pool.fetch(
+        "SELECT e.thread_key, e.created_at, "
+        "  elem->'input'->>'name' as skill_name "
+        "FROM agent_execution_events e, "
+        "  jsonb_array_elements(e.event_json->'message'->'content') elem "
+        "WHERE e.event_kind = 'amp_raw_event' "
+        "  AND e.event_json->>'type' = 'assistant' "
+        "  AND elem->>'type' = 'tool_use' "
+        "  AND elem->>'name' = 'skill' "
+        "  AND elem->'input'->>'name' IS NOT NULL"
+        "  AND e.created_at > NOW() - INTERVAL '90 days'"
+    )
+    return [{
+        "skill": row["skill_name"],
+        "uid": thread_users.get(row["thread_key"], "unknown"),
+        "thread": row["thread_key"],
+        "day": row["created_at"].strftime("%Y-%m-%d"),
+        "ts": row["created_at"].isoformat(),
+    } for row in rows]
 
-            # User stats
-            if uid not in user_stats:
-                user_stats[uid] = {
-                    "count": 0, "threads": set(), "tools": set(),
-                    "top_tools": Counter(),
-                }
-            us = user_stats[uid]
-            us["count"] += 1
-            us["threads"].add(row["thread_key"])
-            us["tools"].add(tool)
-            us["top_tools"][tool] += 1
 
-    # Build tool rows
-    tool_rows = []
-    for tool in sorted(tool_stats, key=lambda t: len(tool_stats[t]["threads"]), reverse=True):
-        s = tool_stats[tool]
+async def _fetch_workflow_events(pool) -> list[dict]:
+    rows = await pool.fetch(
+        "SELECT workflow_name, status, "
+        "  created_at, started_at, completed_at "
+        "FROM workflow_runs "
+        "WHERE created_at > NOW() - INTERVAL '90 days'"
+    )
+    return [{
+        "workflow": row["workflow_name"],
+        "status": row["status"],
+        "ts": row["created_at"].isoformat(),
+        "day": row["created_at"].strftime("%Y-%m-%d"),
+        "duration_s": (
+            float((row["completed_at"] - row["started_at"]).total_seconds())
+            if row["completed_at"] and row["started_at"] else None
+        ),
+    } for row in rows]
+
+
+# ── Aggregation (runs per window on pre-fetched events) ──────────
+
+
+def _aggregate_tools(events: list[dict]) -> list[dict]:
+    stats: dict[str, dict] = {}
+    for e in events:
+        tool = e["tool"]
+        if tool not in stats:
+            stats[tool] = {
+                "count": 0, "threads": set(), "users": Counter(),
+                "methods": Counter(), "first": "9999", "last": "0000",
+                "first_thread": None, "last_thread": None,
+            }
+        s = stats[tool]
+        s["count"] += 1
+        s["threads"].add(e["thread"])
+        s["users"][e["uid"]] += 1
+        s["methods"][e["method"]] += 1
+        if e["day"] < s["first"]:
+            s["first"] = e["day"]
+            s["first_thread"] = e["thread"]
+        if e["day"] >= s["last"]:
+            s["last"] = e["day"]
+            s["last_thread"] = e["thread"]
+
+    result = []
+    for tool in sorted(stats, key=lambda t: len(stats[t]["threads"]), reverse=True):
+        s = stats[tool]
         top = s["methods"].most_common(3)
-        tool_rows.append({
+        result.append({
             "tool": tool,
             "calls": s["count"],
             "threads": len(s["threads"]),
@@ -273,19 +344,30 @@ async def _extract_tools_and_users(
             "last_url": _thread_to_slack_url(s["last_thread"] or ""),
             "icon": "centaur.png" if tool in INTERNAL_TOOLS else f"icons/{tool}.png",
         })
+    return result
 
-    # Build user rows
-    user_rows = []
-    for uid in sorted(user_stats, key=lambda u: user_stats[u]["count"], reverse=True):
-        s = user_stats[uid]
+
+def _aggregate_users(events: list[dict]) -> list[dict]:
+    stats: dict[str, dict] = {}
+    for e in events:
+        uid = e["uid"]
+        if uid not in stats:
+            stats[uid] = {"count": 0, "threads": set(), "tools": set(), "top_tools": Counter()}
+        s = stats[uid]
+        s["count"] += 1
+        s["threads"].add(e["thread"])
+        s["tools"].add(e["tool"])
+        s["top_tools"][e["tool"]] += 1
+
+    result = []
+    for uid in sorted(stats, key=lambda u: stats[u]["count"], reverse=True):
+        s = stats[uid]
         name_handle = USER_MAP.get(uid, ("Centaur", "\u2014") if uid == "unknown" else (uid, uid))
         name, handle = name_handle
         team = TEAM_MAP.get(uid, "Centaur" if uid == "unknown" else "Other")
         top = s["top_tools"].most_common(3)
-        user_rows.append({
-            "name": name,
-            "handle": handle,
-            "team": team,
+        result.append({
+            "name": name, "handle": handle, "team": team,
             "team_emoji": TEAM_EMOJIS.get(team, ""),
             "calls": s["count"],
             "threads": len(s["threads"]),
@@ -295,49 +377,33 @@ async def _extract_tools_and_users(
             "tool2": f"{top[1][0]} ({top[1][1]:,})" if len(top) > 1 else "",
             "tool3": f"{top[2][0]} ({top[2][1]:,})" if len(top) > 2 else "",
         })
+    return result
 
-    return tool_rows, user_rows
 
-
-async def _extract_skills(pool, thread_users: dict[str, str]) -> list[dict]:
-    rows = await pool.fetch(
-        "SELECT e.thread_key, e.created_at, "
-        "  elem->'input'->>'name' as skill_name "
-        "FROM agent_execution_events e, "
-        "  jsonb_array_elements(e.event_json->'message'->'content') elem "
-        "WHERE e.event_kind = 'amp_raw_event' "
-        "  AND e.event_json->>'type' = 'assistant' "
-        "  AND elem->>'type' = 'tool_use' "
-        "  AND elem->>'name' = 'skill' "
-        "  AND elem->'input'->>'name' IS NOT NULL"
-        "  AND e.created_at > NOW() - INTERVAL '90 days'"
-    )
-
-    skill_stats: dict[str, dict] = {}
-    for row in rows:
-        skill = row["skill_name"]
-        uid = thread_users.get(row["thread_key"], "unknown")
-        day = row["created_at"].strftime("%Y-%m-%d")
-        if skill not in skill_stats:
-            skill_stats[skill] = {
+def _aggregate_skills(events: list[dict]) -> list[dict]:
+    stats: dict[str, dict] = {}
+    for e in events:
+        skill = e["skill"]
+        if skill not in stats:
+            stats[skill] = {
                 "count": 0, "threads": set(), "users": Counter(),
                 "first": "9999", "last": "0000",
                 "first_thread": None, "last_thread": None,
             }
-        s = skill_stats[skill]
+        s = stats[skill]
         s["count"] += 1
-        s["threads"].add(row["thread_key"])
-        s["users"][uid] += 1
-        if day < s["first"]:
-            s["first"] = day
-            s["first_thread"] = row["thread_key"]
-        if day >= s["last"]:
-            s["last"] = day
-            s["last_thread"] = row["thread_key"]
+        s["threads"].add(e["thread"])
+        s["users"][e["uid"]] += 1
+        if e["day"] < s["first"]:
+            s["first"] = e["day"]
+            s["first_thread"] = e["thread"]
+        if e["day"] >= s["last"]:
+            s["last"] = e["day"]
+            s["last_thread"] = e["thread"]
 
     result = []
-    for skill in sorted(skill_stats, key=lambda k: len(skill_stats[k]["threads"]), reverse=True):
-        s = skill_stats[skill]
+    for skill in sorted(stats, key=lambda k: len(stats[k]["threads"]), reverse=True):
+        s = stats[skill]
         top_users = s["users"].most_common(3)
         result.append({
             "skill": skill,
@@ -372,10 +438,8 @@ def _build_teams(user_rows: list[dict]) -> list[dict]:
         t = teams[name]
         n = len(t["members"])
         result.append({
-            "team": name,
-            "members": n,
-            "calls": t["calls"],
-            "threads": t["threads_sum"],
+            "team": name, "members": n,
+            "calls": t["calls"], "threads": t["threads_sum"],
             "calls_per_member": round(t["calls"] / n, 1) if n else 0,
             "threads_per_member": round(t["threads_sum"] / n, 1) if n else 0,
             "member_list": ", ".join(sorted(t["members"])),
@@ -384,8 +448,53 @@ def _build_teams(user_rows: list[dict]) -> list[dict]:
     return result
 
 
+def _aggregate_workflows(events: list[dict]) -> list[dict]:
+    stats: dict[str, dict] = {}
+    for e in events:
+        name = e["workflow"]
+        if name not in stats:
+            stats[name] = {
+                "completed": 0, "failed": 0, "other": 0, "total": 0,
+                "first": None, "last": None, "durations": [],
+            }
+        s = stats[name]
+        s["total"] += 1
+        if e["status"] == "completed":
+            s["completed"] += 1
+            if e["duration_s"] is not None:
+                s["durations"].append(e["duration_s"])
+        elif e["status"] == "failed":
+            s["failed"] += 1
+        else:
+            s["other"] += 1
+        if not s["first"] or e["day"] < s["first"]:
+            s["first"] = e["day"]
+        if not s["last"] or e["day"] >= s["last"]:
+            s["last"] = e["day"]
+
+    result = []
+    for name in sorted(stats, key=lambda n: stats[n]["total"], reverse=True):
+        s = stats[name]
+        avg_d = round(sum(s["durations"]) / len(s["durations"]), 1) if s["durations"] else None
+        result.append({
+            "workflow": name,
+            "total": s["total"],
+            "completed": s["completed"],
+            "failed": s["failed"],
+            "other": s["other"],
+            "success_rate": round(s["completed"] / s["total"] * 100, 1) if s["total"] > 0 else 0,
+            "avg_duration_s": avg_d,
+            "first_seen": s["first"] or "",
+            "last_seen": s["last"] or "",
+            "emoji": WORKFLOW_EMOJIS.get(name, "\u2699\uFE0F"),
+        })
+    return result
+
+
+# ── VictoriaLogs (app traffic) ───────────────────────────────────
+
+
 async def _vlogs_stats(client: httpx.AsyncClient, query: str) -> dict[str, int]:
-    """Run a VictoriaLogs stats_query and return {label: count}."""
     resp = await client.get(
         "http://victorialogs:9428/select/logsql/stats_query",
         params={"query": query},
@@ -406,19 +515,18 @@ async def _vlogs_stats(client: httpx.AsyncClient, query: str) -> dict[str, int]:
     return result
 
 
-async def _extract_apps(pool) -> list[dict]:
-    app_rows = await pool.fetch(
-        "SELECT name, status FROM apps ORDER BY name"
-    )
+async def _extract_apps(pool, window_label: str) -> list[dict]:
+    app_rows = await pool.fetch("SELECT name, status FROM apps ORDER BY name")
     app_status = {r["name"]: r["status"] for r in app_rows}
 
+    time_filter = "_time:1y" if window_label == "all" else f"_time:{window_label}"
     views: dict[str, int] = {}
     requests: dict[str, int] = {}
     visitors: dict[str, int] = {}
     errors: dict[str, int] = {}
 
     static_filter = " AND NOT _msg:.css AND NOT _msg:.js AND NOT _msg:.png AND NOT _msg:.ico AND NOT _msg:.json AND NOT _msg:.svg AND NOT _msg:.woff AND NOT _msg:.map AND NOT _msg:.webp"
-    base = '_time:1y AND _msg:/apps/ AND _msg:"HTTP/1.1" AND NOT _msg:INFO'
+    base = f'{time_filter} AND _msg:/apps/ AND _msg:"HTTP/1.1" AND NOT _msg:INFO'
     extract_app = '| extract "GET /apps/<app>/" from _msg'
     extract_app_any = '| extract "/apps/<app>/" from _msg'
     extract_ip = '| extract "\\"<ip>\\"" from _msg'
@@ -453,8 +561,7 @@ async def _extract_apps(pool) -> list[dict]:
             continue
         result.append({
             "app": app,
-            "views": v,
-            "requests": r,
+            "views": v, "requests": r,
             "visitors": visitors.get(app, 0),
             "errors": errors.get(app, 0),
             "error_rate": round(errors.get(app, 0) / r * 100, 1) if r > 0 else 0,
@@ -464,79 +571,42 @@ async def _extract_apps(pool) -> list[dict]:
     return result
 
 
-WORKFLOW_EMOJIS = {
-    "slack_thread_turn": "\U0001F4AC",
-    "policy_news_monitor": "\U0001F4F0",
-    "self_improve_daily": "\U0001F504",
-    "agent_turn": "\U0001F916",
-    "paradigm_pulse_daily": "\U0001F4E1",
-    "eth_morning_brief": "\u2615",
-    "investment_pipeline_weekly": "\U0001F4BC",
-    "daily_checklist_digest": "\u2705",
-    "morning_market_brief": "\U0001F4C8",
-    "room_conflict_monitor": "\U0001F3E2",
-    "agent_loop": "\U0001F501",
-    "usage_stats": "\U0001F4CA",
-    "multi_step_demo": "\U0001F9EA",
-    "self_improve_deploy_notifier": "\U0001F680",
-}
+# ── Window filtering ─────────────────────────────────────────────
 
 
-async def _extract_workflows(pool) -> list[dict]:
-    rows = await pool.fetch(
-        "SELECT workflow_name, status, count(*) as cnt, "
-        "  min(created_at) as first_run, max(created_at) as last_run, "
-        "  avg(EXTRACT(EPOCH FROM (completed_at - started_at))) as avg_duration_s "
-        "FROM workflow_runs "
-        "WHERE created_at > NOW() - INTERVAL '90 days' "
-        "GROUP BY workflow_name, status "
-        "ORDER BY workflow_name"
-    )
+def _filter_by_window(events: list[dict], days: int | None) -> list[dict]:
+    if days is None:
+        return events
+    cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).isoformat()
+    return [e for e in events if e["ts"] >= cutoff]
 
-    wf_stats: dict[str, dict] = {}
-    for row in rows:
-        name = row["workflow_name"]
-        if name not in wf_stats:
-            wf_stats[name] = {
-                "completed": 0, "failed": 0, "other": 0, "total": 0,
-                "first": None, "last": None, "avg_duration_s": None,
-            }
-        s = wf_stats[name]
-        cnt = row["cnt"]
-        status = row["status"]
-        s["total"] += cnt
-        if status == "completed":
-            s["completed"] += cnt
-            s["avg_duration_s"] = round(float(row["avg_duration_s"]), 1) if row["avg_duration_s"] else None
-        elif status == "failed":
-            s["failed"] += cnt
-        else:
-            s["other"] += cnt
 
-        first = row["first_run"]
-        last = row["last_run"]
-        if first and (not s["first"] or first < s["first"]):
-            s["first"] = first
-        if last and (not s["last"] or last > s["last"]):
-            s["last"] = last
+def _build_window(
+    tool_events: list[dict],
+    skill_events: list[dict],
+    workflow_events: list[dict],
+    days: int | None,
+) -> dict[str, list[dict]]:
+    te = _filter_by_window(tool_events, days)
+    se = _filter_by_window(skill_events, days)
+    we = _filter_by_window(workflow_events, days)
 
-    result = []
-    for name in sorted(wf_stats, key=lambda n: wf_stats[n]["total"], reverse=True):
-        s = wf_stats[name]
-        total = s["total"]
-        result.append({
-            "workflow": name,
-            "total": total,
-            "completed": s["completed"],
-            "failed": s["failed"],
-            "other": s["other"],
-            "success_rate": round(s["completed"] / total * 100, 1) if total > 0 else 0,
-            "avg_duration_s": s["avg_duration_s"],
-            "first_seen": s["first"].strftime("%Y-%m-%d") if s["first"] else "",
-            "last_seen": s["last"].strftime("%Y-%m-%d") if s["last"] else "",
-            "emoji": WORKFLOW_EMOJIS.get(name, "\u2699\uFE0F"),
-        })
-    return result
+    tools = _aggregate_tools(te)
+    users = _aggregate_users(te)
+    skills = _aggregate_skills(se)
+    teams = _build_teams(users)
+    workflows = _aggregate_workflows(we)
+
+    return {
+        "tools": tools,
+        "skills": skills,
+        "users": users,
+        "teams": teams,
+        "workflows": workflows,
+    }
+
+
+# ── Handler ──────────────────────────────────────────────────────
 
 
 async def handler(_inp: dict[str, Any], ctx: WorkflowContext) -> dict[str, Any]:
@@ -548,45 +618,41 @@ async def handler(_inp: dict[str, Any], ctx: WorkflowContext) -> dict[str, Any]:
         step_kind="gather",
     )
 
-    tools_and_users = await ctx.step(
-        "extract_tools_and_users",
-        lambda: _extract_tools_and_users(pool, thread_users),
-        step_kind="gather",
-    )
-    tools, users = tools_and_users
-
-    skills = await ctx.step(
-        "extract_skills",
-        lambda: _extract_skills(pool, thread_users),
+    tool_events = await ctx.step(
+        "fetch_tool_events",
+        lambda: _fetch_tool_events(pool, thread_users),
         step_kind="gather",
     )
 
-    teams = await ctx.step(
-        "build_teams",
-        lambda: _build_teams(users),
-        step_kind="transform",
-    )
-
-    apps = await ctx.step(
-        "extract_apps",
-        lambda: _extract_apps(pool),
+    skill_events = await ctx.step(
+        "fetch_skill_events",
+        lambda: _fetch_skill_events(pool, thread_users),
         step_kind="gather",
     )
 
-    workflows = await ctx.step(
-        "extract_workflows",
-        lambda: _extract_workflows(pool),
+    workflow_events = await ctx.step(
+        "fetch_workflow_events",
+        lambda: _fetch_workflow_events(pool),
         step_kind="gather",
     )
 
-    data = {
-        "tools": tools,
-        "skills": skills,
-        "users": users,
-        "teams": teams,
-        "apps": apps,
-        "workflows": workflows,
-    }
+    windowed = {}
+    for label, days in WINDOWS.items():
+        windowed[label] = await ctx.step(
+            f"build_window_{label}",
+            lambda d=days: _build_window(tool_events, skill_events, workflow_events, d),
+            step_kind="transform",
+        )
+
+    # Apps use VictoriaLogs with its own time filter
+    for label in WINDOWS:
+        windowed[label]["apps"] = await ctx.step(
+            f"extract_apps_{label}",
+            lambda lbl=label: _extract_apps(pool, lbl),
+            step_kind="gather",
+        )
+
+    data = {"windows": windowed}
 
     await ctx.step(
         "write_stats",
@@ -599,22 +665,18 @@ async def handler(_inp: dict[str, Any], ctx: WorkflowContext) -> dict[str, Any]:
         step_kind="persist",
     )
 
+    all_w = windowed.get("all", {})
     ctx.log(
         "usage_stats_generated",
-        tools=len(tools),
-        skills=len(skills),
-        users=len(users),
-        teams=len(teams),
-        apps=len(apps),
-        workflows=len(workflows),
+        tools=len(all_w.get("tools", [])),
+        skills=len(all_w.get("skills", [])),
+        users=len(all_w.get("users", [])),
+        teams=len(all_w.get("teams", [])),
+        apps=len(all_w.get("apps", [])),
+        workflows=len(all_w.get("workflows", [])),
     )
 
     return {
         "status": "ok",
-        "tools": len(tools),
-        "skills": len(skills),
-        "users": len(users),
-        "teams": len(teams),
-        "apps": len(apps),
-        "workflows": len(workflows),
+        "windows": {k: {dk: len(dv) for dk, dv in v.items()} for k, v in windowed.items()},
     }
