@@ -684,19 +684,21 @@ class SlackClient:
         return ""
 
 
-    def send_message(self, 
+    def send_message(self,
         channel: str,
         text: str,
         thread_ts: str | None = None,
         no_attribution: bool = False,
+        blocks: list | None = None,
     ) -> dict:
         """Send a message to a channel.
 
         Args:
             channel: Channel name (with or without #) or channel ID
-            text: Message text to send
+            text: Message text to send (also used as fallback for blocks)
             thread_ts: Optional thread timestamp to reply in thread
             no_attribution: If True, skip adding requester attribution
+            blocks: Optional Slack Block Kit blocks for rich formatting
 
         Returns:
             Dict with channel, ts, permalink
@@ -713,6 +715,8 @@ class SlackClient:
             kwargs = {"channel": channel_id, "text": message_text}
             if thread_ts:
                 kwargs["thread_ts"] = thread_ts
+            if blocks:
+                kwargs["blocks"] = blocks
             response = self._client.chat_postMessage(**kwargs)
             return {
                 "channel": channel_id,
