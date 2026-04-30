@@ -183,7 +183,7 @@ async def test_ensure_clients_disables_proxy_env(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_create_requires_repos_pvc_for_repo(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_requires_repo_cache_volume_for_repo(monkeypatch: pytest.MonkeyPatch) -> None:
     backend = KubernetesExecutorBackend()
 
     monkeypatch.setenv("AGENT_API_URL", "http://api:8000")
@@ -195,7 +195,7 @@ async def test_create_requires_repos_pvc_for_repo(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
 
-    with pytest.raises(ValueError, match="KUBERNETES_REPOS_PVC_NAME"):
+    with pytest.raises(ValueError, match="REPOS_PATH is required"):
         await backend.create(
             "slack:C123:123.456",
             "amp",
@@ -213,7 +213,7 @@ async def test_create_builds_pod_and_prompt_secret(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
     monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
     monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
-    monkeypatch.setenv("KUBERNETES_REPOS_PVC_NAME", "repos-pvc")
+    monkeypatch.setenv("REPOS_PATH", "/var/lib/centaur/repos")
     monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
     monkeypatch.setenv("KUBERNETES_SANDBOX_RUNTIME_CLASS_NAME", "gvisor")
     monkeypatch.setenv("KUBERNETES_SANDBOX_SERVICE_ACCOUNT_NAME", "sandbox-runner")
@@ -284,7 +284,10 @@ async def test_create_builds_pod_and_prompt_secret(monkeypatch: pytest.MonkeyPat
     assert env["AGENT_PERSONA"] == "eng"
     assert env["AGENT_REPO"] == "paradigmxyz/centaur"
     assert pod_body["metadata"]["annotations"]["centaur.ai/thread-key"] == "slack:C123:123.456"
-    assert any(volume["name"] == "repos" for volume in pod_body["spec"]["volumes"])
+    assert {
+        "name": "repos",
+        "hostPath": {"path": "/var/lib/centaur/repos", "type": "Directory"},
+    } in pod_body["spec"]["volumes"]
     assert any(volume["name"] == "overlay-root" for volume in pod_body["spec"]["volumes"])
     assert pod_body["spec"]["initContainers"] == [
         {
@@ -323,6 +326,62 @@ async def test_create_builds_pod_and_prompt_secret(monkeypatch: pytest.MonkeyPat
         mount["name"] == "overlay-root" and mount["mountPath"] == "/home/agent/overlay"
         for mount in container["volumeMounts"]
     )
+
+
+@pytest.mark.asyncio
+async def test_create_mounts_repo_cache_host_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    backend._core = fake_core
+
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("REPOS_PATH", "/var/lib/centaur/repos")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._prompt_bundle",
+        lambda persona: f"prompt:{persona}",
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._container_env",
+        lambda *_args, **_kwargs: [
+            "CENTAUR_API_URL=http://api.internal:8000",
+            "CENTAUR_API_KEY=sandbox-token",
+        ],
+    )
+    monkeypatch.setattr("api.sandbox.kubernetes._build_harness_cmd", lambda *_args: ["amp-wrapper"])
+    monkeypatch.setattr("api.sandbox.kubernetes._image", lambda: "centaur-agent:test")
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    async def fake_wait_ready(_pod_name: str) -> float:
+        return 0.01
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
+
+    await backend.create(
+        "slack:C123:123.456",
+        "amp",
+        "amp",
+        repo="paradigmxyz/centaur",
+    )
+
+    pod_body = fake_core.created_pods[0][1]
+    container = pod_body["spec"]["containers"][0]
+
+    assert any(
+        mount["name"] == "repos"
+        and mount["mountPath"] == "/home/agent/github"
+        and mount["readOnly"] is True
+        for mount in container["volumeMounts"]
+    )
+    assert {
+        "name": "repos",
+        "hostPath": {"path": "/var/lib/centaur/repos", "type": "Directory"},
+    } in pod_body["spec"]["volumes"]
 
 
 @pytest.mark.asyncio

@@ -83,8 +83,8 @@ def _service_account_name() -> str | None:
     return value or None
 
 
-def _repos_pvc_name() -> str | None:
-    value = (os.getenv("KUBERNETES_REPOS_PVC_NAME") or "").strip()
+def _repos_path() -> str | None:
+    value = (os.getenv("REPOS_PATH") or "").strip()
     return value or None
 
 
@@ -370,8 +370,9 @@ class KubernetesExecutorBackend(SandboxBackend):
         _ensure_kubernetes_env()
         await self._ensure_clients()
 
-        if repo and not _repos_pvc_name():
-            raise ValueError("KUBERNETES_REPOS_PVC_NAME is required when AGENT_REPO is set")
+        repos_path = _repos_path()
+        if repo and not repos_path:
+            raise ValueError("REPOS_PATH is required when AGENT_REPO is set")
 
         pod_name = _resource_name("centaur-sandbox", thread_key)
         secret_name = _prompt_secret_name(pod_name)
@@ -463,8 +464,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                 }
             )
 
-        repos_pvc = _repos_pvc_name()
-        if repos_pvc:
+        if repos_path:
             volume_mounts.append(
                 {
                     "name": "repos",
@@ -475,7 +475,10 @@ class KubernetesExecutorBackend(SandboxBackend):
             volumes.append(
                 {
                     "name": "repos",
-                    "persistentVolumeClaim": {"claimName": repos_pvc},
+                    "hostPath": {
+                        "path": repos_path,
+                        "type": "Directory",
+                    },
                 }
             )
 
