@@ -20,7 +20,7 @@ from api.workflow_engine import WorkflowContext
 log = logging.getLogger(__name__)
 
 WORKFLOW_NAME = "usage_stats"
-INTERVAL = 300  # every 5 minutes
+SCHEDULE = {"interval_seconds": 300, "no_delivery": True}
 
 USER_MAP = {
     "U016MDTJM4J": ("Georgios Konstantopoulos", "georgios"),

@@ -1357,6 +1357,8 @@ def _registered_schedule_specs() -> list[ScheduleSpec]:
       used as delivery channel when no thread_key
     - ``input`` — extra fields merged into the handler Input
     - ``catchup_policy`` — ``"skip"`` (default) or ``"catch_up"``
+    - ``no_delivery`` — skip the destination requirement (for workflows
+      that write to DB instead of posting to Slack)
     """
     specs: list[ScheduleSpec] = []
     for wf_name, reg in _WORKFLOW_HANDLERS.items():
@@ -1394,8 +1396,8 @@ def _registered_schedule_specs() -> list[ScheduleSpec]:
         ).strip().lstrip("#")
 
         # If both thread_key and slack_channel are empty, skip —
-        # the workflow has nowhere to deliver results.
-        if not thread_key and not slack_channel:
+        # unless the workflow explicitly opts out of delivery.
+        if not thread_key and not slack_channel and not sched.get("no_delivery"):
             log.info(
                 "workflow_schedule_skip_no_destination",
                 workflow_name=wf_name,

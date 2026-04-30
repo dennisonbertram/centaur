@@ -597,6 +597,34 @@ async def test_sync_registered_workflow_schedules_disables_removed_rows(
 
 
 @pytest.mark.asyncio
+async def test_no_delivery_workflow_is_scheduled(db_pool, monkeypatch, tmp_path):
+    from api.workflow_engine import (
+        discover_workflow_handlers,
+        sync_registered_workflow_schedules,
+    )
+
+    wf_file = tmp_path / "db_only.py"
+    wf_file.write_text(
+        "WORKFLOW_NAME = 'db_only'\n"
+        "SCHEDULE = {'interval_seconds': 300, 'no_delivery': True}\n"
+        "async def handler(inp, ctx):\n"
+        "    return {'status': 'ok'}\n"
+    )
+    monkeypatch.setenv("WORKFLOW_DIRS", str(tmp_path))
+    discover_workflow_handlers()
+
+    await sync_registered_workflow_schedules(db_pool)
+
+    row = await db_pool.fetchrow(
+        "SELECT enabled, interval_seconds FROM workflow_schedules "
+        "WHERE schedule_id = 'db_only'",
+    )
+    assert row is not None
+    assert row["enabled"] is True
+    assert row["interval_seconds"] == 300
+
+
+@pytest.mark.asyncio
 async def test_handler_discovery(db_pool, monkeypatch, tmp_path):
     from api.workflow_engine import (
         discover_workflow_handlers,
