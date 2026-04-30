@@ -189,8 +189,9 @@ class TranscriberClient:
 
         return self._model_cache[model_name]
 
-    def transcribe_audio(self, path: Path, model: str, language: Optional[str] = None) -> str:
+    def transcribe_audio(self, path: Path | str, model: str = DEFAULT_MODEL, language: Optional[str] = None) -> str:
         """Transcribe audio file."""
+        path = Path(path)
         cached = self.get_whisper_model(model)
 
         if cached[0] == "mlx":
@@ -214,8 +215,9 @@ class TranscriberClient:
 
         return "" if self.is_hallucination(text) else text
 
-    def transcribe_file(self, path: Path, model: str, language: Optional[str] = None) -> str:
+    def transcribe_file(self, path: Path | str, model: str = DEFAULT_MODEL, language: Optional[str] = None) -> str:
         """Higher-level file transcription with validation."""
+        path = Path(path)
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
         return self.transcribe_audio(path, model, language)

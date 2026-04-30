@@ -922,6 +922,10 @@ class ToolManager:
             for name, p in pm.tools.items():
                 if not check_scope(key_info, "tools", name):
                     continue
+                if p.secrets_keys:
+                    resolved = await _resolve_secrets(p.secrets_keys)
+                    if len(resolved) < len(p.secrets_keys):
+                        continue
                 result[name] = {
                     "description": p.description,
                     "methods": [m.method_name for m in p.methods],
@@ -969,6 +973,11 @@ class ToolManager:
         @router.get("/{tool_name}")
         async def describe_tool(tool_name: str, request: Request) -> dict:
             _require_tool_scope(request, tool_name)
+            p = pm.tools.get(tool_name)
+            if p and p.secrets_keys:
+                resolved = await _resolve_secrets(p.secrets_keys)
+                if len(resolved) < len(p.secrets_keys):
+                    raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' is not available (missing secrets)")
             return pm.describe_tool(tool_name)
 
         @router.post("/{tool_name}/{method_name}")
