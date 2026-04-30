@@ -259,25 +259,6 @@ centaur/
 └── docker-compose.yml    # Full stack
 ```
 
-## Debugging
-
-**Always check logs first.** When debugging any issue with the deployed stack (agent misbehavior, tool failures, request errors), your first step should be querying VictoriaLogs on the deploy box — not guessing, reading source code, or theorizing. Logs tell you what actually happened.
-
-```bash
-# Look up logs for a specific Slack thread
-ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -s 'http://victorialogs:9428/select/logsql/query' \
-  --data-urlencode 'query=thread_key:<THREAD_KEY>' --data-urlencode 'limit=50'"
-
-# API errors in the last hour
-ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -s 'http://victorialogs:9428/select/logsql/query' \
-  --data-urlencode 'query=_stream:{service=\"api\"} AND level:error' --data-urlencode 'limit=20'"
-
-# Sandbox container logs (agent harness output)
-ssh ubuntu@206.223.235.69 "docker logs <container_id> 2>&1 | tail -100"
-```
-
-Only after reviewing logs should you dig into source code or try to reproduce locally.
-
 ## Terminology
 
 - **Chat SDK** always refers to the [Vercel Chat SDK](https://github.com/vercel/chat) (`~/github/vercel/chat`). When you need to understand how the Chat SDK or `@chat-adapter/*` packages work, **always read the source at `~/github/vercel/chat`** — never dig through `node_modules`.
@@ -295,8 +276,7 @@ For tool changes: tools hot-reload, so just verify via `curl -X POST http://loca
 
 ## Local-First Testing — Never Touch the Deploy Box
 
-**All testing and E2E validation MUST happen on the local stack** (`docker compose up` on this machine). Never SSH into the deploy box (`206.223.235.69`) to run tests, rebuild services, or make ad-hoc changes unless explicitly told to do so by the user.
-
+**All testing and E2E validation MUST happen on the local stack** (`docker compose up` on this machine). 
 The deploy box is **production**. Changes reach it via `git push` → GitHub Actions auto-deploy. The only reasons to SSH into it are:
 - Checking logs (`docker logs`, VictoriaLogs queries) for debugging production issues
 - Emergency manual intervention — **only when the user explicitly asks**
@@ -529,24 +509,6 @@ Sandbox containers never see real API keys. The firewall (`services/firewall/add
 
 All API authentication uses **DB-backed keys** stored in the `api_keys` Postgres table. Keys are managed via the admin API (localhost-only, or requires `admin` scope).
 
-### Getting a valid API key for testing
-
-From the deploy box (localhost bypass):
-
-```bash
-# List all keys (shows name, prefix, scopes — never the key itself)
-ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -s http://localhost:8000/admin/api-keys" | jq
-
-# Create a new key
-ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -s -X POST http://localhost:8000/admin/api-keys \
-  -H 'Content-Type: application/json' \
-  -d '{\"name\": \"my-test-key\", \"scopes\": [\"*\"]}'" | jq
-# → returns the plaintext key (only shown once!)
-
-# Revoke a key
-ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -s -X DELETE http://localhost:8000/admin/api-keys/<key-id>"
-```
-
 ### Key types
 
 | Type | Prefix | Issued by | Used by | Scopes |
@@ -628,28 +590,6 @@ Services must write single-line JSON to stdout with these fields:
 | `thread_key` | No | Thread identifier (when applicable) |
 
 > **Never log secret values, auth headers, or raw tokens.**
-
-## Deployment
-
-The deploy box (self-hosted GitHub Actions runner) is accessible via SSH:
-
-```bash
-ssh ubuntu@206.223.235.69
-```
-
-The canonical checkout lives at `/home/ubuntu/github/<owner>/<repo>` on the box.
-
-All deploys happen automatically via GitHub Actions on merge to `main`.
-
-| Change | Deploy action |
-|--------|--------------|
-| `tools/**` or `workflows/**` only | Zero-downtime hot-reload (file watcher auto-detects, no restart) |
-| `services/api/**` | `docker compose up -d --build api` |
-| `services/slackbot/**` | `docker compose up -d --build slackbot` |
-| `services/sandbox/**` | `docker compose build sandbox` |
-| `docker-compose.yml`, `services/api/Dockerfile` | Rebuild API |
-
-**Tool & workflow hot-reload:** The API watches bind-mounted `tools/` and `workflows/` directories via `watchfiles`. When plugin files change, the API auto-reloads within seconds — no container restart needed.
 
 ## E2E Testing (without Slack)
 
