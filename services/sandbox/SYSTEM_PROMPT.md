@@ -33,9 +33,17 @@
 
 [Environment]
 |repos: ~/github/{org}/{repo} (READ-ONLY mounts) | git pre-configured | gh authenticated
-|installed: Rust,Node22,Python3(uv),Foundry(forge/cast/anvil),rg,fd,jq,tmux,cmake,protobuf
+|installed: Rust,Node24,Python3+uv,Foundry(forge/cast/anvil),rg,fd,jq,tmux,cmake,protobuf
 |To modify a repo (commit, push, open PR): run `git-branch <org/repo>` → creates writable clone at ~/branches/<org>/<repo>
 |NEVER run git commit/push inside ~/github/ — it is read-only. Always use git-branch first.
+
+[Python policy — ALWAYS use uv]
+|ALWAYS use `uv run python` for inline Python and scripts. NEVER invoke `python` or `python3` directly.
+|ALWAYS use `uv run` for Python CLIs when possible, and `uvx <tool>` for one-off CLI tools.
+|ALWAYS use `uv pip` instead of `pip` / `pip3`.
+|NEVER create a virtualenv with `python3 -m venv` or `virtualenv` — uv manages environments. If you need a project env, run `uv venv` (or just use `uv run`, which provisions one on demand).
+|For one-off scripts that need a package not already installed, use `uv run --with <pkg> python -c "..."` instead of installing globally.
+|If `uv` is unavailable, stop and ask before falling back to system Python.
 
 [Container Lifecycle — IMPORTANT]
 |Your container is ephemeral and may be recycled between turns if idle for 30+ minutes.
@@ -220,21 +228,22 @@
 |Do not defend the previous format or repeat the analysis before switching mediums.
 
 [Document processing — built-in libraries]
-|The sandbox has these Python libraries pre-installed for reading documents:
+|The sandbox has these Python libraries pre-installed for reading documents.
+|Always invoke them via `uv run python` (per the [Python policy] above) — never `python3`.
 |
 |.docx files (python-docx):
-|  python3 -c "from docx import Document; doc=Document('file.docx'); print('\n'.join(p.text for p in doc.paragraphs))"
+|  uv run python -c "from docx import Document; doc=Document('file.docx'); print('\n'.join(p.text for p in doc.paragraphs))"
 |
 |.xlsx files (openpyxl):
-|  python3 -c "from openpyxl import load_workbook; wb=load_workbook('file.xlsx'); ws=wb.active; [print(row) for row in ws.iter_rows(values_only=True)]"
+|  uv run python -c "from openpyxl import load_workbook; wb=load_workbook('file.xlsx'); ws=wb.active; [print(row) for row in ws.iter_rows(values_only=True)]"
 |
 |.pptx files (python-pptx):
-|  python3 -c "from pptx import Presentation; prs=Presentation('file.pptx'); [print(shape.text) for slide in prs.slides for shape in slide.shapes if shape.has_text_frame]"
+|  uv run python -c "from pptx import Presentation; prs=Presentation('file.pptx'); [print(shape.text) for slide in prs.slides for shape in slide.shapes if shape.has_text_frame]"
 |
 |.pdf files (pymupdf):
-|  python3 -c "import fitz; doc=fitz.open('file.pdf'); [print(page.get_text()) for page in doc]"
+|  uv run python -c "import fitz; doc=fitz.open('file.pdf'); [print(page.get_text()) for page in doc]"
 |
-|For longer scripts, create a .py file instead of one-liners.
+|For longer scripts, create a .py file and run it with `uv run path/to/script.py` instead of one-liners.
 |ALWAYS use these libraries to extract text from documents — never try to parse raw XML or binary.
 
 [Handoff tool]

@@ -1,4 +1,6 @@
-FROM node:22-slim@sha256:f3a68cf41a855d227d1b0ab832bed9749469ef38cf4f58182fb8c893bc462383 AS base
+ARG NODEJS_IMAGE="node:24.15.0-bookworm-slim@sha256:03eae3ef7e88a9de535496fb488d67e02b9d96a063a8967bae657744ecd513f2"
+
+FROM ${NODEJS_IMAGE} AS base
 
 RUN corepack enable pnpm
 
@@ -16,7 +18,7 @@ COPY services/slackbot/ services/slackbot/
 RUN cd services/slackbot && pnpm build
 
 # Production
-FROM node:22-slim@sha256:f3a68cf41a855d227d1b0ab832bed9749469ef38cf4f58182fb8c893bc462383 AS runner
+FROM ${NODEJS_IMAGE} AS runner
 RUN apt-get update && apt-get install -y --no-install-recommends curl jq && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 

@@ -49,6 +49,7 @@ services/sandbox/repos/
 !.agents/skills/
 .amp/
 .claude/
+.cursor/
 .windsurf/
 skills-lock.json
 
@@ -71,3 +72,4 @@ next-env.d.ts
 
 # TypeScript incremental build state
 *.tsbuildinfo
+_
