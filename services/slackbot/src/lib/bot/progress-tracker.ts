@@ -191,7 +191,7 @@ export class ProgressTracker {
     const isError = event.exit_code !== undefined && event.exit_code !== 0;
     const status: TaskStatus = isError ? "error" : "complete";
     const friendly = friendlyCommand(event.command, isError);
-    const output = event.aggregated_output ? truncate(event.aggregated_output, 200) : undefined;
+    const output = event.aggregated_output || undefined;
     this.tasks.set(id, { title: friendly.title, status });
     yield taskChunk(id, friendly.title, status, { details: friendly.details, output });
   }
@@ -215,29 +215,29 @@ function toolDetails(name: string, input: Record<string, unknown>): string | und
   const str = (key: string) => (typeof input[key] === "string" ? (input[key] as string) : "");
   switch (name) {
     case "Read":
-      return str("path") ? `Reading \`${shortPath(str("path"))}\`` : undefined;
+      return str("path") ? `Reading \`${str("path")}\`` : undefined;
     case "edit_file":
-      return str("path") ? `Editing \`${shortPath(str("path"))}\`` : undefined;
+      return str("path") ? `Editing \`${str("path")}\`` : undefined;
     case "create_file":
-      return str("path") ? `Creating \`${shortPath(str("path"))}\`` : undefined;
+      return str("path") ? `Creating \`${str("path")}\`` : undefined;
     case "Bash":
-      return str("cmd") ? `\`${truncate(str("cmd"), 120)}\`` : undefined;
+      return str("cmd") ? `\`${str("cmd")}\`` : undefined;
     case "Grep":
-      return str("pattern") ? `Pattern: \`${truncate(str("pattern"), 80)}\`` : undefined;
+      return str("pattern") ? `Pattern: \`${str("pattern")}\`` : undefined;
     case "finder":
-      return str("query") ? truncate(str("query"), 150) : undefined;
+      return str("query") ? str("query") : undefined;
     case "librarian":
-      return str("query") ? truncate(str("query"), 200) : undefined;
+      return str("query") ? str("query") : undefined;
     case "oracle":
-      return str("task") ? truncate(str("task"), 200) : undefined;
+      return str("task") ? str("task") : undefined;
     case "web_search":
-      return str("objective") ? truncate(str("objective"), 150) : undefined;
+      return str("objective") ? str("objective") : undefined;
     case "read_web_page":
       return str("url") || undefined;
     case "Task":
-      return str("description") || str("prompt") ? truncate(str("description") || str("prompt"), 200) : undefined;
+      return str("description") || str("prompt") ? (str("description") || str("prompt")) : undefined;
     case "look_at":
-      return [str("path") && `File: \`${shortPath(str("path"))}\``, str("objective")].filter(Boolean).join("\n") || undefined;
+      return [str("path") && `File: \`${str("path")}\``, str("objective")].filter(Boolean).join("\n") || undefined;
     case "skill":
       return str("name") ? `Loading skill: ${str("name")}` : undefined;
     default:
@@ -401,13 +401,13 @@ function humanizeToolArgs(tool: string, _method: string, args: Record<string, un
   const meaningful = args.query ?? args.search ?? args.prompt ?? args.message ?? args.q;
   if (typeof meaningful === "string" && meaningful.length > 0) {
     const friendly = TOOL_FRIENDLY_NAMES[tool] || tool;
-    return `${friendly}: ${truncate(meaningful, 120)}`;
+    return `${friendly}: ${meaningful}`;
   }
   // Fallback: show all string values
   const parts: string[] = [];
   for (const [key, val] of Object.entries(args)) {
     if (typeof val === "string" && val.length > 0) {
-      parts.push(`${key}: ${truncate(val, 60)}`);
+      parts.push(`${key}: ${val}`);
     }
   }
   return parts.length > 0 ? parts.join(", ") : undefined;
