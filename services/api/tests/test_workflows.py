@@ -99,6 +99,41 @@ async def test_create_slack_thread_turn_workflow_eager_start(
     assert enqueue_execution_mock.await_args.kwargs["metadata"]["user_id"] == "U123"
 
 
+def test_recovery_command_paraphrases_are_recognized():
+    """Real Slack utterances observed in production should trigger recovery
+    hydration, not just the canonical 'retry' / 'continue' commands."""
+    from api.workflows.slack_thread_turn import _is_recovery_turn
+
+    paraphrases_observed_in_prod = [
+        "retry",
+        "continue",
+        "finish the job",
+        "look at the root of this thread",
+        "look at the root of this thread and try again",
+        "look at the root of this thread, and try again",
+        "Look at the root of this thread!",
+        "reread the thread",
+        "go again",
+        "do it again",
+    ]
+    for text in paraphrases_observed_in_prod:
+        assert _is_recovery_turn([{"type": "text", "text": text}]), (
+            f"Expected recovery hydration for utterance: {text!r}"
+        )
+
+    not_recovery = [
+        "retry the failing test in test_workflows.py",
+        "continue editing the document",
+        "look at the root cause of this bug",
+        "let's go again to the office",
+        "do it again but with the new params",
+    ]
+    for text in not_recovery:
+        assert not _is_recovery_turn([{"type": "text", "text": text}]), (
+            f"Did not expect recovery hydration for utterance: {text!r}"
+        )
+
+
 @pytest.mark.asyncio
 async def test_slack_thread_turn_hydrates_retry_with_last_substantive_user_ask(db_pool):
     from api.workflow_engine import WorkflowContext
