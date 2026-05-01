@@ -12,6 +12,7 @@ app.use(express.static(__dirname))
 const CENTAUR_API = process.env.CENTAUR_API_URL || 'https://svc-ai.dayno.xyz'
 const CENTAUR_KEY = process.env.CENTAUR_API_KEY || ''
 const CENTAUR_HARNESS = process.env.CENTAUR_HARNESS || 'amp'
+const CENTAUR_APP_NAME = process.env.CENTAUR_APP_NAME || 'venue-scout'
 const THREAD_KEY = process.env.CENTAUR_THREAD_KEY || ''
 
 function centaurHeaders(json = false) {
@@ -19,6 +20,10 @@ function centaurHeaders(json = false) {
   if (json) headers['Content-Type'] = 'application/json'
   if (CENTAUR_KEY) headers['X-Api-Key'] = CENTAUR_KEY
   return headers
+}
+
+function isSandboxThreadScopeError(error) {
+  return error?.message?.includes('Sandbox token is scoped to a different thread')
 }
 
 async function centaurFetch(path, { method = 'GET', body } = {}) {
@@ -36,7 +41,15 @@ async function centaurFetch(path, { method = 'GET', body } = {}) {
   return data
 }
 
-function nextThreadKey(prefix) {
+function nextThreadKey(prefix, { exactAppThread = false } = {}) {
+  // App containers get sandbox tokens scoped to app:<name>. Prefer child
+  // threads for request isolation, but allow an exact app-thread fallback while
+  // the API-side namespace support rolls out.
+  if (CENTAUR_KEY.startsWith('sbx1.') && CENTAUR_APP_NAME) {
+    if (exactAppThread) return `app:${CENTAUR_APP_NAME}`
+    return `app:${CENTAUR_APP_NAME}:${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  }
+
   if (THREAD_KEY && CENTAUR_KEY) return THREAD_KEY
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -46,14 +59,29 @@ function sleep(ms) {
 }
 
 async function runAgentPrompt(prompt, prefix = 'venue-scout-web') {
-  const threadKey = nextThreadKey(prefix)
-  const spawn = await centaurFetch('/agent/spawn', {
-    method: 'POST',
-    body: {
-      thread_key: threadKey,
-      harness: CENTAUR_HARNESS,
-    },
-  })
+  let threadKey = nextThreadKey(prefix)
+  let spawn
+
+  try {
+    spawn = await centaurFetch('/agent/spawn', {
+      method: 'POST',
+      body: {
+        thread_key: threadKey,
+        harness: CENTAUR_HARNESS,
+      },
+    })
+  } catch (error) {
+    if (!isSandboxThreadScopeError(error)) throw error
+
+    threadKey = nextThreadKey(prefix, { exactAppThread: true })
+    spawn = await centaurFetch('/agent/spawn', {
+      method: 'POST',
+      body: {
+        thread_key: threadKey,
+        harness: CENTAUR_HARNESS,
+      },
+    })
+  }
 
   await centaurFetch('/agent/message', {
     method: 'POST',

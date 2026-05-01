@@ -192,6 +192,21 @@ def get_sandbox_claims(request: Request) -> dict[str, str] | None:
     return claims if isinstance(claims, dict) else None
 
 
+def sandbox_thread_in_scope(allowed_thread_key: str | None, requested_thread_key: str) -> bool:
+    """Return whether a sandbox token may access the requested thread.
+
+    App containers are scoped to `app:<name>` and may open child threads under
+    that namespace so public web apps can isolate individual requests.
+    """
+    if not allowed_thread_key:
+        return True
+    if allowed_thread_key == requested_thread_key:
+        return True
+    if allowed_thread_key.startswith("app:"):
+        return requested_thread_key.startswith(f"{allowed_thread_key}:")
+    return False
+
+
 def require_scope(scope: str) -> Callable:
     """Return a FastAPI dependency that checks the caller has the given scope.
 

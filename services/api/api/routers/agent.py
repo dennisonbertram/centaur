@@ -22,7 +22,12 @@ from api.agent import (
     get_status,
     stop_session,
 )
-from api.deps import get_sandbox_claims, require_scope, verify_api_key
+from api.deps import (
+    get_sandbox_claims,
+    require_scope,
+    sandbox_thread_in_scope,
+    verify_api_key,
+)
 from api.final_delivery import (
     format_last_error,
     requires_delivery_lease,
@@ -61,7 +66,7 @@ def _enforce_sandbox_thread_scope(request: Request, thread_key: str) -> None:
     if claims is None:
         return
     allowed = claims.get("thread_key")
-    if allowed and allowed != thread_key:
+    if not sandbox_thread_in_scope(allowed, thread_key):
         raise HTTPException(status_code=403, detail="Sandbox token is scoped to a different thread")
 
 

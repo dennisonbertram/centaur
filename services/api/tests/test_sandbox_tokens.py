@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pytest
 
-from api.deps import mint_sandbox_token, verify_sandbox_token
+from api.deps import mint_sandbox_token, sandbox_thread_in_scope, verify_sandbox_token
 
 _TEST_SECRET = "test-secret-key-for-unit-tests"
 
@@ -92,3 +92,10 @@ class TestDifferentKey:
         token = mint_sandbox_token("thread:1", "ctr-abc")
         monkeypatch.setenv("API_SECRET_KEY", "different-secret-key")
         assert verify_sandbox_token(token) is None
+
+
+class TestSandboxThreadScope:
+    def test_app_scoped_tokens_allow_child_threads(self):
+        assert sandbox_thread_in_scope("app:venue-scout", "app:venue-scout:search-123")
+        assert not sandbox_thread_in_scope("app:venue-scout", "app:another-app:search-123")
+        assert not sandbox_thread_in_scope("thread:1", "thread:1:child")
