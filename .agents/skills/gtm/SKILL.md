@@ -114,7 +114,39 @@ When the user says **"pipeline [company]"**:
 1. Show chronological meeting timeline with the company
 
 When the user says **"search [query]"**:
-1. Search across meetings and documents:
+1. Classify the intent before searching:
+   - If the user says "this doc", "that doc", "this document", "that document", "this Google Doc", "inside the doc", "search within", or gives a document title while asking to search inside it, treat it as a document-content search.
+   - If the user asks to "find docs/documents named X" or "look up the doc titled X", treat it as a title lookup.
+   - Otherwise, run the normal cross-source search.
+2. For any doc-specific request, first inspect the current gsuite tool contract:
+```
+call discover gsuite
+```
+3. For "search inside this document":
+   - If the user gave a Google Doc link or file ID, inspect that file first:
+```
+call gsuite drive_get '{"file_id": "<doc_id>"}'
+call gsuite docs_get_text '{"document_id": "<doc_id>"}'
+```
+   - If the user references "this doc" by title instead of link, resolve the document by title before answering:
+```
+call gsuite drive_search '{"query": "<document title>", "max_results": 10}'
+```
+   - Prefer exact title matches. If there are multiple plausible matches, ask a short clarifying question. If there is one clear match, read it before replying.
+   - Use `docs_get_text` for Google Docs. For other Drive file types, use `drive_export` or `drive_download` to read the contents before answering.
+```
+call gsuite drive_export '{"file_id": "<file_id>", "export_format": "txt"}'
+```
+   - Answer the content question from the document itself. Do not satisfy a content-search request with title matches or generic Drive hits.
+   - Only ask for a link after title lookup fails or the matches remain ambiguous.
+4. For "find documents named X":
+   - Use Google Drive title lookup first:
+```
+call gsuite drive_search '{"query": "<document title>", "max_results": 10}'
+```
+   - Return the matching files with enough metadata to disambiguate them.
+   - Do not imply you searched inside the documents unless you actually read them.
+5. For general search requests that are not doc-specific, search across meetings and messages:
 ```
 call granola search_notes '{"query": "<query>", "limit": 10}'
 call slack search_messages '{"query": "<query>", "max_results": 10}'
