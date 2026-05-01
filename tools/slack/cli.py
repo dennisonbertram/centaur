@@ -1,5 +1,7 @@
 """CLI for Slack search and analysis."""
 
+import json
+
 import typer
 from dotenv import load_dotenv
 from rich.console import Console
@@ -9,6 +11,7 @@ load_dotenv()
 
 app = typer.Typer(name="slack", help="Slack CLI for AI agents")
 console = Console()
+stderr_console = Console(stderr=True)
 
 
 @app.command()
@@ -105,17 +108,61 @@ def channel(
     name: str = typer.Argument(..., help="Channel name (without #)"),
     limit: int = typer.Option(50, "--limit", "-n", help="Max messages"),
     full: bool = typer.Option(False, "--full", "-f", help="Show full message text"),
+    cursor: str = typer.Option(None, "--cursor", help="Slack pagination cursor for the next page"),
+    oldest: str = typer.Option(
+        None,
+        "--oldest",
+        help="Oldest timestamp boundary: Slack ts, epoch, ISO datetime, or YYYY-MM-DD",
+    ),
+    latest: str = typer.Option(
+        None,
+        "--latest",
+        help="Latest timestamp boundary: Slack ts, epoch, ISO datetime, or YYYY-MM-DD",
+    ),
+    inclusive: bool = typer.Option(
+        False,
+        "--inclusive",
+        help="Include messages exactly on the oldest/latest boundary",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output full page metadata as JSON"),
 ):
-    """Get recent messages from a channel."""
-    from .client import get_channel_history
+    """Get recent messages from a channel or a bounded history window."""
+    import sys
 
-    messages = get_channel_history(name, limit=limit)
+    from .client import get_channel_history_page
+
+    try:
+        page = get_channel_history_page(
+            name,
+            limit=limit,
+            cursor=cursor,
+            oldest=oldest,
+            latest=latest,
+            inclusive=inclusive,
+        )
+    except (RuntimeError, ValueError) as e:
+        stderr_console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
+
+    messages = page["messages"]
 
     if not messages:
         console.print("[yellow]No messages found.[/]")
         raise typer.Exit()
 
-    console.print(f"[bold]#{name}[/] - {len(messages)} messages\n")
+    if json_output:
+        print(json.dumps(page, indent=2, ensure_ascii=False), file=sys.stdout)
+        raise typer.Exit()
+
+    header = f"[bold]#{page['channel']}[/] - {len(messages)} messages"
+    if page.get("has_more"):
+        header += " [dim](more available)[/]"
+    console.print(f"{header}\n")
+
+    if page["window"]["oldest"] or page["window"]["latest"] or page.get("next_cursor"):
+        console.print(
+            f"[dim]window oldest={page['window']['oldest']} latest={page['window']['latest']} next_cursor={page.get('next_cursor')}[/]\n"
+        )
 
     for msg in messages:
         text = msg["text"] if full else msg["text"][:120].replace("\n", " ")
@@ -129,6 +176,19 @@ def channel(
 @app.command()
 def thread(
     permalink: str = typer.Argument(..., help="Slack permalink or 'channel_id:timestamp'"),
+    limit: int = typer.Option(100, "--limit", "-n", help="Max messages to return from the thread"),
+    cursor: str = typer.Option(None, "--cursor", help="Slack pagination cursor for the next page"),
+    oldest: str = typer.Option(
+        None,
+        "--oldest",
+        help="Oldest timestamp boundary: Slack ts, epoch, ISO datetime, or YYYY-MM-DD",
+    ),
+    latest: str = typer.Option(
+        None,
+        "--latest",
+        help="Latest timestamp boundary: Slack ts, epoch, ISO datetime, or YYYY-MM-DD",
+    ),
+    inclusive: bool = typer.Option(True, "--inclusive/--exclusive", help="Include the boundary timestamps"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ):
     """Get all replies in a thread.
@@ -138,11 +198,10 @@ def thread(
         slack thread "C01234567:1234567890.123456"
         slack thread "https://..." --json
     """
-    import json
     import re
     import sys
 
-    from .client import get_thread_replies
+    from .client import get_thread_replies_page
 
     if permalink.startswith("https://"):
         match = re.search(r"/archives/([A-Z0-9]+)/p(\d+)", permalink)
@@ -158,17 +217,40 @@ def thread(
         console.print("[red]Provide a Slack permalink or 'channel_id:timestamp'[/]")
         raise typer.Exit(1)
 
-    messages = get_thread_replies(channel_id, thread_ts)
+    try:
+        page = get_thread_replies_page(
+            channel_id,
+            thread_ts,
+            limit=limit,
+            cursor=cursor,
+            oldest=oldest,
+            latest=latest,
+            inclusive=inclusive,
+        )
+    except (RuntimeError, ValueError) as e:
+        stderr_console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
+
+    messages = page["messages"]
 
     if not messages:
         console.print("[yellow]No messages found in thread.[/]")
         raise typer.Exit()
 
     if json_output:
-        print(json.dumps(messages, indent=2, ensure_ascii=False), file=sys.stdout)
+        print(json.dumps(page, indent=2, ensure_ascii=False), file=sys.stdout)
         raise typer.Exit()
 
-    console.print(f"\n[bold]Thread ({len(messages)} messages)[/]\n")
+    header = f"\n[bold]Thread ({len(messages)} messages)[/]"
+    if page.get("has_more"):
+        header += " [dim](more available)[/]"
+    console.print(f"{header}\n")
+
+    if page["window"]["oldest"] or page["window"]["latest"] or page.get("next_cursor"):
+        console.print(
+            f"[dim]window oldest={page['window']['oldest']} latest={page['window']['latest']} next_cursor={page.get('next_cursor')}[/]\n"
+        )
+
     for i, msg in enumerate(messages):
         prefix = "[bold]>[/]" if i == 0 else "  "
         user = f"[cyan]@{msg['user']}[/]"
@@ -176,16 +258,90 @@ def thread(
         console.print(f"{prefix} {user}: {text}\n")
 
 
+@app.command("sync-history")
+def sync_history(
+    channel: str = typer.Argument(..., help="Channel name (without #) or channel ID"),
+    limit: int = typer.Option(200, "--limit", "-n", help="Max messages to fetch this run"),
+    lookback_days: int = typer.Option(
+        30,
+        "--lookback-days",
+        help="Re-read this trailing window on each sync to catch edits and deletes",
+    ),
+    state_file: str = typer.Option(
+        None,
+        "--state-file",
+        help="JSON file containing prior sync state; updated in place on success",
+    ),
+    oldest: str = typer.Option(
+        None,
+        "--oldest",
+        help="Override the oldest boundary: Slack ts, epoch, ISO datetime, or YYYY-MM-DD",
+    ),
+    latest: str = typer.Option(
+        None,
+        "--latest",
+        help="Override the latest boundary: Slack ts, epoch, ISO datetime, or YYYY-MM-DD",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Output the sync payload as JSON"),
+):
+    """Run an incremental channel-history sync suitable for ETL jobs."""
+    from pathlib import Path
+    import sys
+
+    from .client import sync_channel_history
+
+    state = None
+    state_path = Path(state_file) if state_file else None
+    if state_path and state_path.exists():
+        state = json.loads(state_path.read_text())
+
+    try:
+        result = sync_channel_history(
+            channel,
+            state=state,
+            limit=limit,
+            lookback_days=lookback_days,
+            oldest=oldest,
+            latest=latest,
+        )
+    except (RuntimeError, ValueError) as e:
+        stderr_console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
+
+    if state_path:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(result["sync_state"], indent=2, ensure_ascii=False))
+
+    if json_output:
+        print(json.dumps(result, indent=2, ensure_ascii=False), file=sys.stdout)
+        raise typer.Exit()
+
+    console.print(
+        f"[bold]#{result['channel']}[/] fetched {result['count']} messages"
+        + (" [dim](more available)[/]" if result.get("has_more") else "")
+    )
+    console.print(f"[dim]next_cursor={result.get('next_cursor')}[/]")
+    console.print(f"[dim]sync_state={json.dumps(result['sync_state'], ensure_ascii=False)}[/]")
+
+
 @app.command()
 def channels(
     include_private: bool = typer.Option(False, "--private", "-p", help="Include private channels"),
     limit: int = typer.Option(100, "--limit", "-n", help="Max channels"),
     query: str = typer.Option(None, "--query", "-q", help="Filter by name"),
+    bot_member_only: bool = typer.Option(
+        False,
+        "--bot-member-only",
+        help="Only list channels the bot can actually read history from",
+    ),
 ):
     """List all Slack channels."""
-    from .client import list_channels
+    from .client import list_bot_channels, list_channels
 
-    results = list_channels(include_private=include_private, limit=limit)
+    if bot_member_only:
+        results = list_bot_channels(include_private=include_private, limit=limit)
+    else:
+        results = list_channels(include_private=include_private, limit=limit)
 
     if query:
         results = [c for c in results if query.lower() in c["name"].lower()]

@@ -1,11 +1,13 @@
 """Slack API client - bot token only (no user token required)."""
 
+from datetime import datetime, timezone
 import json
 import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any, Callable
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -22,6 +24,9 @@ class SlackClient:
     _USER_CACHE_FILE = _CACHE_DIR / "users.json"
     _CHANNEL_CACHE_TTL = 300  # 5 minutes
     _USER_CACHE_TTL = 600  # 10 minutes
+    _MAX_PAGE_SIZE = 200
+    _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    _NUMERIC_TS_RE = re.compile(r"^\d+(?:\.\d+)?$")
 
     def __init__(self, bot_token: str | None = None):
         token = bot_token or os.environ.get("SLACK_BOT_TOKEN", "")
@@ -33,6 +38,7 @@ class SlackClient:
         self.token = token
         self._client = WebClient(token=token)
         self._user_cache: dict[str, str] = {}
+        self._ratelimit_deadlines: dict[str, float] = {}
 
     def __getattr__(self, name: str):
         """Proxy raw Slack SDK methods when the higher-level wrapper does not define them."""
@@ -40,19 +46,167 @@ class SlackClient:
 
 
 
-    def _retry_on_ratelimit(self, func, *args, max_retries: int = 3, **kwargs):
-        """Retry a function on rate limit errors with exponential backoff."""
+    def _is_ratelimit_error(self, error: SlackApiError) -> bool:
+        """Detect Slack rate limit responses from either payload or status code."""
+        status_code = getattr(error.response, "status_code", None)
+        return status_code == 429 or error.response.get("error") == "ratelimited"
+
+    def _retry_on_ratelimit(
+        self,
+        func,
+        *args,
+        method_key: str | None = None,
+        max_retries: int = 6,
+        **kwargs,
+    ):
+        """Retry a function on rate limit errors while honoring Retry-After."""
+        key = method_key or getattr(func, "__name__", "slack_api_call")
         for attempt in range(max_retries):
+            blocked_until = self._ratelimit_deadlines.get(key, 0.0)
+            remaining = blocked_until - time.time()
+            if remaining > 0:
+                time.sleep(remaining)
+
             try:
                 return func(*args, **kwargs)
             except SlackApiError as e:
-                if e.response.get("error") == "ratelimited":
-                    retry_after = int(e.response.headers.get("Retry-After", 5))
+                if self._is_ratelimit_error(e):
+                    retry_after = self._parse_retry_after(
+                        getattr(e.response, "headers", {}).get("Retry-After"),
+                        default=max(1, 2**attempt),
+                    )
+                    self._ratelimit_deadlines[key] = time.time() + retry_after
                     if attempt < max_retries - 1:
                         time.sleep(retry_after)
                         continue
                 raise
         raise RuntimeError("Max retries exceeded")
+
+    def _parse_retry_after(self, value: str | None, default: int = 5) -> float:
+        """Return a Retry-After delay with a small safety buffer."""
+        try:
+            seconds = float(value) if value is not None else float(default)
+        except (TypeError, ValueError):
+            seconds = float(default)
+        return max(seconds, 1.0) + 0.25
+
+    def _format_ts(self, value: float) -> str:
+        """Format epoch seconds in Slack timestamp format."""
+        return f"{value:.6f}"
+
+    def _normalize_ts(self, value: str | int | float | None) -> str | None:
+        """Accept Slack timestamps, epoch seconds, or ISO/date strings."""
+        if value in (None, ""):
+            return None
+
+        if isinstance(value, (int, float)):
+            seconds = float(value)
+            if seconds >= 1_000_000_000_000:
+                seconds /= 1000.0
+            return self._format_ts(seconds)
+
+        raw = str(value).strip()
+        if not raw:
+            return None
+
+        if self._NUMERIC_TS_RE.fullmatch(raw):
+            seconds = float(raw)
+            if "." not in raw and len(raw) >= 13:
+                seconds /= 1000.0
+            return self._format_ts(seconds)
+
+        if self._DATE_ONLY_RE.fullmatch(raw):
+            parsed = datetime.fromisoformat(f"{raw}T00:00:00+00:00")
+            return self._format_ts(parsed.timestamp())
+
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(
+                f"Unsupported timestamp format '{value}'. Use Slack ts, epoch seconds, ISO datetime, or YYYY-MM-DD."
+            ) from exc
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return self._format_ts(parsed.timestamp())
+
+    def _message_permalink(self, channel_id: str, ts: str) -> str:
+        """Build a Slack permalink from channel and timestamp."""
+        return f"https://slack.com/archives/{channel_id}/p{ts.replace('.', '')}"
+
+    def _resolve_channel_name(self, channel: str, channel_id: str) -> str:
+        """Resolve a human-readable channel name when callers passed an ID."""
+        normalized = channel.lstrip("#")
+        if normalized != channel_id:
+            return normalized
+
+        for item in self.list_bot_channels(limit=1000):
+            if item["id"] == channel_id:
+                return item["name"]
+        return channel_id
+
+    def _serialize_message(
+        self,
+        msg: dict[str, Any],
+        channel_id: str,
+        user_cache: dict[str, str],
+        *,
+        channel_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Normalize Slack API message payloads into a stable shape."""
+        user_id = msg.get("user") or msg.get("bot_id", "")
+        username = user_cache.get(user_id, msg.get("username", user_id))
+        if not username:
+            username = msg.get("bot_profile", {}).get("name", "") or user_id
+
+        ts = msg.get("ts", "")
+        message = {
+            "user": username,
+            "user_id": user_id,
+            "text": self._resolve_mentions(msg.get("text", ""), user_cache),
+            "timestamp": ts,
+            "permalink": self._message_permalink(channel_id, ts),
+            "channel_id": channel_id,
+            "thread_ts": msg.get("thread_ts"),
+            "reply_count": msg.get("reply_count", 0),
+            "reply_users": msg.get("reply_users", []),
+            "latest_reply": msg.get("latest_reply"),
+            "type": msg.get("type", "message"),
+            "subtype": msg.get("subtype"),
+            "parent_user_id": msg.get("parent_user_id"),
+            "bot_id": msg.get("bot_id"),
+        }
+        if channel_name is not None:
+            message["channel"] = channel_name
+        return message
+
+    def _collect_cursor_pages(
+        self,
+        fetch_page: Callable[[str | None, int], dict[str, Any]],
+        *,
+        result_key: str,
+        limit: int,
+        cursor: str | None = None,
+    ) -> tuple[list[dict[str, Any]], str | None, bool]:
+        """Collect paginated Slack responses up to a caller-provided limit."""
+        remaining = max(limit, 0)
+        next_cursor = cursor
+        items: list[dict[str, Any]] = []
+
+        while remaining > 0:
+            batch_limit = min(remaining, self._MAX_PAGE_SIZE)
+            response = fetch_page(next_cursor, batch_limit)
+            batch = response.get(result_key, []) or []
+            items.extend(batch)
+
+            next_cursor = response.get("response_metadata", {}).get("next_cursor") or None
+            has_more = bool(next_cursor or response.get("has_more"))
+            if not has_more or not batch:
+                return items, next_cursor, has_more
+
+            remaining = limit - len(items)
+
+        return items, next_cursor, bool(next_cursor)
 
 
     def _resolve_channel(self, channel: str) -> str:
@@ -222,6 +376,7 @@ class SlackClient:
         try:
             response = self._retry_on_ratelimit(
                 self._client.conversations_history,
+                method_key="conversations.history",
                 channel=channel_id,
                 limit=limit,
             )
@@ -230,23 +385,13 @@ class SlackClient:
 
         messages = []
         for msg in response.get("messages", []):
-            user_id = msg.get("user", "")
-            username = user_cache.get(user_id, user_id)
-            text = msg.get("text", "")
-            ts = msg.get("ts", "")
-
             messages.append(
-                {
-                    "channel": channel_name,
-                    "channel_id": channel_id,
-                    "user": username,
-                    "user_id": user_id,
-                    "text": text,
-                    "timestamp": ts,
-                    "permalink": f"https://slack.com/archives/{channel_id}/p{ts.replace('.', '')}",
-                    "thread_ts": msg.get("thread_ts"),
-                    "reply_count": msg.get("reply_count", 0),
-                }
+                self._serialize_message(
+                    msg,
+                    channel_id,
+                    user_cache,
+                    channel_name=channel_name,
+                )
             )
 
         return messages
@@ -352,6 +497,7 @@ class SlackClient:
         response = self._retry_on_ratelimit(
             self._client.api_call,
             "search.messages",
+            method_key="search.messages",
             params={"query": query, "count": max_results, "sort": "timestamp"},
         )
 
@@ -371,17 +517,19 @@ class SlackClient:
             ts = m.get("ts", "")
             text = self._resolve_mentions(m.get("text", ""), user_cache)
 
-            results.append({
-                "channel": channel_name,
-                "channel_id": channel_id,
-                "user": username,
-                "user_id": user_id,
-                "text": text,
-                "timestamp": ts,
-                "permalink": m.get("permalink", ""),
-                "thread_ts": m.get("thread_ts"),
-                "reply_count": m.get("reply_count", 0),
-            })
+            results.append(
+                {
+                    "channel": channel_name,
+                    "channel_id": channel_id,
+                    "user": username,
+                    "user_id": user_id,
+                    "text": text,
+                    "timestamp": ts,
+                    "permalink": m.get("permalink", ""),
+                    "thread_ts": m.get("thread_ts"),
+                    "reply_count": m.get("reply_count", 0),
+                }
+            )
 
         return results
 
@@ -457,73 +605,235 @@ class SlackClient:
         return scored_results[:max_results]
 
 
-    def get_channel_history(self, channel: str, limit: int = 50) -> list[dict]:
-        """Get recent messages from a channel.
+    def get_channel_history_page(
+        self,
+        channel: str,
+        limit: int = 200,
+        cursor: str | None = None,
+        oldest: str | int | float | None = None,
+        latest: str | int | float | None = None,
+        inclusive: bool = False,
+    ) -> dict[str, Any]:
+        """Fetch a resumable page of channel history for ETL-style backfills.
 
-        Args:
-            channel: Channel name (without #) or channel ID
-            limit: Maximum number of messages to return
-
-        Returns:
-            List of message dicts
+        This follows Slack's cursor pagination model and accepts explicit date
+        windows, which is the pattern Slack recommends for large historical
+        exports. Use `next_cursor` to continue a backfill without rescanning
+        the same date range.
         """
         user_cache = self._get_user_cache()
         channel_id = self._resolve_channel(channel)
+        channel_name = self._resolve_channel_name(channel, channel_id)
+        normalized_oldest = self._normalize_ts(oldest)
+        normalized_latest = self._normalize_ts(latest)
 
-        try:
-            response = self._client.conversations_history(channel=channel_id, limit=limit)
-        except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
-
-        messages = []
-        for msg in response.get("messages", []):
-            user_id = msg.get("user", "")
-            text = self._resolve_mentions(msg.get("text", ""), user_cache)
-            ts = msg.get("ts", "")
-
-            messages.append(
-                {
-                    "user": user_cache.get(user_id, user_id),
-                    "text": text,
-                    "timestamp": ts,
-                    "permalink": f"https://slack.com/archives/{channel_id}/p{ts.replace('.', '')}",
-                    "channel_id": channel_id,
-                    "thread_ts": msg.get("thread_ts"),
-                    "reply_count": msg.get("reply_count", 0),
-                }
+        def fetch_page(next_cursor: str | None, batch_limit: int) -> dict[str, Any]:
+            kwargs: dict[str, Any] = {
+                "channel": channel_id,
+                "limit": batch_limit,
+            }
+            if next_cursor:
+                kwargs["cursor"] = next_cursor
+            if normalized_oldest is not None:
+                kwargs["oldest"] = normalized_oldest
+            if normalized_latest is not None:
+                kwargs["latest"] = normalized_latest
+            if normalized_oldest is not None or normalized_latest is not None:
+                kwargs["inclusive"] = inclusive
+            return self._retry_on_ratelimit(
+                self._client.conversations_history,
+                method_key="conversations.history",
+                **kwargs,
             )
 
-        return messages
-
-
-    def get_thread_replies(self, channel_id: str, thread_ts: str, limit: int = 100) -> list[dict]:
-        """Get all replies in a thread."""
-        user_cache = self._get_user_cache()
-
         try:
-            response = self._retry_on_ratelimit(
-                self._client.conversations_replies,
-                channel=channel_id,
-                ts=thread_ts,
+            raw_messages, next_cursor, has_more = self._collect_cursor_pages(
+                fetch_page,
+                result_key="messages",
                 limit=limit,
-                inclusive=True,
+                cursor=cursor,
             )
         except SlackApiError as e:
             raise RuntimeError(f"Slack API error: {e.response['error']}")
 
-        messages = []
-        for msg in response.get("messages", []):
-            user_id = msg.get("user", "")
-            text = self._resolve_mentions(msg.get("text", ""), user_cache)
-            messages.append(
-                {
-                    "user": user_cache.get(user_id, user_id),
-                    "text": text,
-                    "timestamp": msg.get("ts", ""),
-                }
+        messages = [self._serialize_message(msg, channel_id, user_cache) for msg in raw_messages]
+
+        return {
+            "channel": channel_name,
+            "channel_id": channel_id,
+            "messages": messages,
+            "count": len(messages),
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+            "window": {
+                "oldest": normalized_oldest,
+                "latest": normalized_latest,
+                "inclusive": inclusive,
+            },
+            "order": "desc",
+        }
+
+    def get_channel_history(
+        self,
+        channel: str,
+        limit: int = 50,
+        cursor: str | None = None,
+        oldest: str | int | float | None = None,
+        latest: str | int | float | None = None,
+        inclusive: bool = False,
+    ) -> list[dict]:
+        """Get recent messages from a channel or a bounded history window."""
+        return self.get_channel_history_page(
+            channel=channel,
+            limit=limit,
+            cursor=cursor,
+            oldest=oldest,
+            latest=latest,
+            inclusive=inclusive,
+        )["messages"]
+
+    def get_thread_replies_page(
+        self,
+        channel: str,
+        thread_ts: str,
+        limit: int = 200,
+        cursor: str | None = None,
+        oldest: str | int | float | None = None,
+        latest: str | int | float | None = None,
+        inclusive: bool = True,
+    ) -> dict[str, Any]:
+        """Fetch a resumable page of thread replies for ETL-style sync jobs."""
+        user_cache = self._get_user_cache()
+        channel_id = self._resolve_channel(channel)
+        normalized_oldest = self._normalize_ts(oldest)
+        normalized_latest = self._normalize_ts(latest)
+        normalized_thread_ts = self._normalize_ts(thread_ts)
+
+        if normalized_thread_ts is None:
+            raise ValueError("thread_ts is required")
+
+        def fetch_page(next_cursor: str | None, batch_limit: int) -> dict[str, Any]:
+            kwargs: dict[str, Any] = {
+                "channel": channel_id,
+                "ts": normalized_thread_ts,
+                "limit": batch_limit,
+                "inclusive": inclusive,
+            }
+            if next_cursor:
+                kwargs["cursor"] = next_cursor
+            if normalized_oldest is not None:
+                kwargs["oldest"] = normalized_oldest
+            if normalized_latest is not None:
+                kwargs["latest"] = normalized_latest
+            return self._retry_on_ratelimit(
+                self._client.conversations_replies,
+                method_key="conversations.replies",
+                **kwargs,
             )
 
-        return messages
+        try:
+            raw_messages, next_cursor, has_more = self._collect_cursor_pages(
+                fetch_page,
+                result_key="messages",
+                limit=limit,
+                cursor=cursor,
+            )
+        except SlackApiError as e:
+            raise RuntimeError(f"Slack API error: {e.response['error']}")
+
+        messages = [self._serialize_message(msg, channel_id, user_cache) for msg in raw_messages]
+
+        return {
+            "channel_id": channel_id,
+            "thread_ts": normalized_thread_ts,
+            "messages": messages,
+            "count": len(messages),
+            "has_more": has_more,
+            "next_cursor": next_cursor,
+            "window": {
+                "oldest": normalized_oldest,
+                "latest": normalized_latest,
+                "inclusive": inclusive,
+            },
+            "order": "asc",
+        }
+
+    def get_thread_replies(
+        self,
+        channel_id: str,
+        thread_ts: str,
+        limit: int = 100,
+        cursor: str | None = None,
+        oldest: str | int | float | None = None,
+        latest: str | int | float | None = None,
+        inclusive: bool = True,
+    ) -> list[dict]:
+        """Get replies in a thread, optionally within a bounded time window."""
+        return self.get_thread_replies_page(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            limit=limit,
+            cursor=cursor,
+            oldest=oldest,
+            latest=latest,
+            inclusive=inclusive,
+        )["messages"]
+
+    def sync_channel_history(
+        self,
+        channel: str,
+        state: dict[str, Any] | None = None,
+        limit: int = 200,
+        lookback_days: int = 30,
+        oldest: str | int | float | None = None,
+        latest: str | int | float | None = None,
+    ) -> dict[str, Any]:
+        """Run a Fivetran-style incremental history sync.
+
+        The first run defaults to a bounded lookback window. Later runs accept a
+        `state` payload, reuse its watermark, and re-read the trailing window to
+        catch edits or deletes without forcing a full rescan.
+        """
+        sync_state = dict(state or {})
+        cursor = sync_state.get("cursor")
+        watermark = self._normalize_ts(sync_state.get("watermark"))
+        normalized_oldest = self._normalize_ts(oldest) or sync_state.get("oldest")
+        normalized_latest = self._normalize_ts(latest) or sync_state.get("latest")
+
+        if cursor is None and normalized_oldest is None:
+            if watermark is not None:
+                lookback_seconds = max(lookback_days, 0) * 86400
+                normalized_oldest = self._format_ts(max(float(watermark) - lookback_seconds, 0.0))
+            elif lookback_days > 0:
+                normalized_oldest = self._format_ts(max(time.time() - (lookback_days * 86400), 0.0))
+
+        page = self.get_channel_history_page(
+            channel=channel,
+            limit=limit,
+            cursor=cursor,
+            oldest=normalized_oldest,
+            latest=normalized_latest,
+            inclusive=True,
+        )
+
+        latest_seen = watermark
+        if page["messages"]:
+            latest_seen = self._format_ts(
+                max(float(message["timestamp"]) for message in page["messages"])
+            )
+
+        next_state: dict[str, Any] = {
+            "cursor": page["next_cursor"] if page["has_more"] else None,
+            "watermark": latest_seen or watermark,
+            "lookback_days": lookback_days,
+            "oldest": page["window"]["oldest"] if page["has_more"] else None,
+            "latest": page["window"]["latest"] if page["has_more"] else None,
+        }
+
+        return {
+            **page,
+            "sync_state": next_state,
+        }
 
 
     def list_channels(self, include_private: bool = False, limit: int = 200) -> list[dict]:
@@ -1000,6 +1310,10 @@ class SlackClient:
         channel_name: str,
         limit: int = 500,
         min_replies: int = 0,
+        cursor: str | None = None,
+        oldest: str | int | float | None = None,
+        latest: str | int | float | None = None,
+        replies_limit: int = 200,
     ) -> dict:
         """Dump full channel history with all thread replies expanded.
 
@@ -1011,80 +1325,54 @@ class SlackClient:
         Returns:
             Dict with channel info, messages (with replies inline), and stats
         """
-        user_cache = self._get_user_cache()
-        channel_id = self._resolve_channel(channel_name)
+        page = self.get_channel_history_page(
+            channel_name,
+            limit=limit,
+            cursor=cursor,
+            oldest=oldest,
+            latest=latest,
+            inclusive=True,
+        )
+        channel_id = page["channel_id"]
 
         all_messages = []
-        cursor = None
+        for msg in page["messages"]:
+            ts = msg["timestamp"]
+            reply_count = msg.get("reply_count", 0)
+            thread_ts = msg.get("thread_ts") or ts
 
-        while len(all_messages) < limit:
-            try:
-                response = self._retry_on_ratelimit(
-                    self._client.conversations_history,
-                    channel=channel_id,
-                    limit=min(limit - len(all_messages), 200),
-                    cursor=cursor,
-                )
-            except SlackApiError as e:
-                raise RuntimeError(f"Slack API error: {e.response['error']}")
+            message_data = {
+                **msg,
+                "replies": [],
+                "replies_has_more": False,
+                "replies_next_cursor": None,
+            }
 
-            for msg in response.get("messages", []):
-                user_id = msg.get("user", "")
-                username = user_cache.get(user_id, user_id)
-                text = self._resolve_mentions(msg.get("text", ""), user_cache)
-                ts = msg.get("ts", "")
-                reply_count = msg.get("reply_count", 0)
-                thread_ts = msg.get("thread_ts")
+            if reply_count > 0 and (min_replies == 0 or reply_count >= min_replies):
+                try:
+                    thread_page = self.get_thread_replies_page(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        limit=replies_limit,
+                    )
+                    message_data["replies"] = thread_page["messages"][1:]
+                    message_data["replies_has_more"] = thread_page["has_more"]
+                    message_data["replies_next_cursor"] = thread_page["next_cursor"]
+                except RuntimeError:
+                    pass
 
-                message_data = {
-                    "user": username,
-                    "user_id": user_id,
-                    "text": text,
-                    "timestamp": ts,
-                    "permalink": f"https://slack.com/archives/{channel_id}/p{ts.replace('.', '')}",
-                    "reply_count": reply_count,
-                    "replies": [],
-                }
-
-                if reply_count > 0 and (min_replies == 0 or reply_count >= min_replies):
-                    try:
-                        thread_response = self._retry_on_ratelimit(
-                            self._client.conversations_replies,
-                            channel=channel_id,
-                            ts=thread_ts or ts,
-                            limit=200,
-                        )
-                        for reply in thread_response.get("messages", [])[1:]:
-                            reply_user_id = reply.get("user", "")
-                            reply_username = user_cache.get(reply_user_id, reply_user_id)
-                            reply_text = self._resolve_mentions(reply.get("text", ""), user_cache)
-                            reply_ts = reply.get("ts", "")
-
-                            message_data["replies"].append(
-                                {
-                                    "user": reply_username,
-                                    "user_id": reply_user_id,
-                                    "text": reply_text,
-                                    "timestamp": reply_ts,
-                                    "permalink": f"https://slack.com/archives/{channel_id}/p{reply_ts.replace('.', '')}?thread_ts={ts}",
-                                }
-                            )
-                    except SlackApiError:
-                        pass
-
-                all_messages.append(message_data)
-
-            cursor = response.get("response_metadata", {}).get("next_cursor")
-            if not cursor:
-                break
+            all_messages.append(message_data)
 
         threads_with_replies = sum(1 for m in all_messages if m["replies"])
         total_replies = sum(len(m["replies"]) for m in all_messages)
 
         return {
-            "channel": channel_name,
+            "channel": page["channel"],
             "channel_id": channel_id,
             "messages": all_messages,
+            "has_more": page["has_more"],
+            "next_cursor": page["next_cursor"],
+            "window": page["window"],
             "stats": {
                 "total_messages": len(all_messages),
                 "threads_fetched": threads_with_replies,
@@ -1131,12 +1419,24 @@ def search_messages(*args, **kwargs):
     return _client().search_messages(*args, **kwargs)
 
 
+def get_channel_history_page(*args, **kwargs):
+    return _client().get_channel_history_page(*args, **kwargs)
+
+
 def get_channel_history(*args, **kwargs):
     return _client().get_channel_history(*args, **kwargs)
 
 
+def get_thread_replies_page(*args, **kwargs):
+    return _client().get_thread_replies_page(*args, **kwargs)
+
+
 def get_thread_replies(*args, **kwargs):
     return _client().get_thread_replies(*args, **kwargs)
+
+
+def sync_channel_history(*args, **kwargs):
+    return _client().sync_channel_history(*args, **kwargs)
 
 
 def list_channels(*args, **kwargs):
