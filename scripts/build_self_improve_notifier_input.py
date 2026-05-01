@@ -211,6 +211,7 @@ def _maybe_redeploy_venue_scout(before_sha: str, after_sha: str) -> None:
             "name": "venue-scout",
             "repo_url": "https://github.com/paradigmxyz/centaur",
             "port": 3000,
+            "is_public": True,
             "build_cmd": "cd apps/venue-scout && npm install --no-package-lock && npm run build",
             "start_cmd": "cd apps/venue-scout && npm start",
             "created_by": "self-improve-deploy-notifier",
