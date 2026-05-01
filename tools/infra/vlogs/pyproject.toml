@@ -21,4 +21,3 @@ build-backend = "hatchling.build"
 [tool.ai-v2]
 module = "client.py"
 hosts = []
-secrets = ["VICTORIALOGS_URL"]
