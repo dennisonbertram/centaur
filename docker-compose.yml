@@ -162,6 +162,7 @@ services:
       - backend_net
       - control_net
     volumes:
+      - ./services/api/db:/app/db
       - ./tools:/app/tools
       - ./workflows:/app/workflows
       - ./.agents/skills:/app/.agents/skills:ro

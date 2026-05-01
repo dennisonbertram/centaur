@@ -172,6 +172,12 @@ docker compose up -d           # start the stack
 docker compose build sandbox
 ```
 
+## Database Migrations
+
+Use `./scripts/dbmate new add_agent_leases` to create the next numbered migration in `services/api/db/migrations`.
+
+Use `./scripts/dbmate up`, `./scripts/dbmate status`, or any other `dbmate` subcommand to run migrations against the same `DATABASE_URL` the API service uses. If `DATABASE_URL` is not set in your shell, the wrapper reads it from the running `api` container.
+
 ## Contributing
 
 Centaur is built by open source contributors like you, thank you for improving the project!

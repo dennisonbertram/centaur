@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+COMPOSE_FILE="$REPO_ROOT/docker-compose.yml"
+SERVICE_NAME="${CENTAUR_MIGRATIONS_SERVICE:-api}"
+MIGRATIONS_HOST_DIR="${CENTAUR_MIGRATIONS_HOST_DIR:-$REPO_ROOT/services/api/db/migrations}"
+MIGRATIONS_CONTAINER_DIR="${CENTAUR_MIGRATIONS_CONTAINER_DIR:-/app/db/migrations}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./scripts/dbmate new <name>     Create the next numbered migration file.
+  ./scripts/dbmate <dbmate args>  Run dbmate inside the API container.
+
+Examples:
+  ./scripts/dbmate new add_usage_rollups
+  ./scripts/dbmate status
+  ./scripts/dbmate up
+  ./scripts/dbmate rollback
+
+When DATABASE_URL is not set in the host shell, the wrapper reuses the value
+from the running api container.
+EOF
+}
+
+die() {
+  printf 'error: %s\n' "$1" >&2
+  exit 1
+}
+
+compose() {
+  docker compose -f "$COMPOSE_FILE" "$@"
+}
+
+normalize_name() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//; s/_+/_/g'
+}
+
+next_migration_number() {
+  mkdir -p "$MIGRATIONS_HOST_DIR"
+
+  local latest
+  latest="$({
+    find "$MIGRATIONS_HOST_DIR" -maxdepth 1 -type f -name '*.sql' -printf '%f\n' 2>/dev/null \
+      | sed -nE 's/^([0-9]+)_.+\.sql$/\1/p' \
+      | sort -n
+  } | tail -n 1)"
+
+  if [[ -z "$latest" ]]; then
+    printf '001'
+    return
+  fi
+
+  local width next
+  width=${#latest}
+  next=$((10#$latest + 1))
+  printf "%0${width}d" "$next"
+}
+
+create_migration() {
+  local raw_name="$1"
+  local slug path number
+
+  slug="$(normalize_name "$raw_name")"
+  [[ -n "$slug" ]] || die "migration name must contain letters or numbers"
+
+  number="$(next_migration_number)"
+  path="$MIGRATIONS_HOST_DIR/${number}_${slug}.sql"
+  [[ ! -e "$path" ]] || die "migration already exists: $path"
+
+  cat > "$path" <<'EOF'
+-- migrate:up
+
+-- migrate:down
+EOF
+
+  printf 'created %s\n' "$path"
+}
+
+resolve_database_url() {
+  if [[ -n "${DATABASE_URL:-}" ]]; then
+    printf '%s' "$DATABASE_URL"
+    return
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    die "docker is required unless DATABASE_URL is already set"
+  fi
+
+  local database_url
+  if ! database_url="$(compose exec -T "$SERVICE_NAME" printenv DATABASE_URL 2>/dev/null | tr -d '\r')"; then
+    die "could not read DATABASE_URL from the running $SERVICE_NAME container; start it with 'docker compose up -d $SERVICE_NAME' or set DATABASE_URL"
+  fi
+  [[ -n "$database_url" ]] || die "DATABASE_URL is empty in the running $SERVICE_NAME container"
+  printf '%s' "$database_url"
+}
+
+run_dbmate() {
+  command -v docker >/dev/null 2>&1 || die "docker is required to run dbmate commands"
+
+  local database_url dbmate_url sep
+  database_url="$(resolve_database_url)"
+  dbmate_url="$database_url"
+  if [[ "$dbmate_url" != *sslmode=* ]]; then
+    sep='?'
+    [[ "$dbmate_url" == *\?* ]] && sep='&'
+    dbmate_url+="${sep}sslmode=disable"
+  fi
+
+  exec compose exec -T \
+    -e DATABASE_URL="$dbmate_url" \
+    "$SERVICE_NAME" \
+    dbmate \
+    --url "$dbmate_url" \
+    --migrations-dir "$MIGRATIONS_CONTAINER_DIR" \
+    --no-dump-schema \
+    "$@"
+}
+
+case "${1:-}" in
+  ""|help|-h|--help)
+    usage
+    ;;
+  new)
+    shift
+    [[ $# -gt 0 ]] || die "usage: ./scripts/dbmate new <name>"
+    create_migration "$*"
+    ;;
+  *)
+    run_dbmate "$@"
+    ;;
+esac

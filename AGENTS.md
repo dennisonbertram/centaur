@@ -41,6 +41,16 @@ docker compose up -d
 docker compose build sandbox
 ```
 
+### Database migrations
+
+```bash
+./scripts/dbmate new add_agent_leases
+./scripts/dbmate status
+./scripts/dbmate up
+```
+
+`./scripts/dbmate` creates the next numbered SQL file in `services/api/db/migrations` and runs `dbmate` inside the `api` container for apply/status/rollback flows. If `DATABASE_URL` is not set in your shell, it reuses the `api` container's configured value.
+
 ### 3. Test
 
 From inside the API container (localhost bypass — no key needed):
