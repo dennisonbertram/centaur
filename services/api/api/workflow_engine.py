@@ -1002,6 +1002,7 @@ async def do_agent_turn(
     prompt: str | None = None,
     thread_key: str | None = None,
     parts: list[dict[str, Any]] | None = None,
+    history_messages: list[dict[str, Any]] | None = None,
     message_id: str | None = None,
     user_id: str | None = None,
     metadata: dict[str, Any] | None = None,
@@ -1050,6 +1051,7 @@ async def do_agent_turn(
         else:
             effective_delivery = dict(run_in.get("delivery") or {})
         selector = _resolve_prompt_selector(prompt_selector)
+        effective_history = history_messages or run_in.get("history_messages") or []
 
         spawn = await spawn_assignment(
             ctx._pool,
@@ -1061,6 +1063,69 @@ async def do_agent_turn(
             agents_md_override=agents_md_override,
         )
         ag = int(spawn["assignment_generation"])
+
+        if isinstance(effective_history, list):
+            backfilled = 0
+            skipped = 0
+            for item in effective_history:
+                if not isinstance(item, dict):
+                    skipped += 1
+                    continue
+                history_message_id = str(
+                    item.get("message_id") or item.get("messageId") or "",
+                ).strip()
+                if not history_message_id or history_message_id == message_id:
+                    skipped += 1
+                    continue
+                history_parts = item.get("parts")
+                if not isinstance(history_parts, list):
+                    skipped += 1
+                    continue
+                history_parts = [p for p in history_parts if isinstance(p, dict)]
+                if not history_parts:
+                    skipped += 1
+                    continue
+                raw_history_metadata = item.get("metadata")
+                history_metadata = dict(raw_history_metadata) if isinstance(
+                    raw_history_metadata, dict,
+                ) else {}
+                history_metadata.setdefault("history_backfill", True)
+                history_metadata.setdefault("workflow_run_id", ctx.run_id)
+                history_user_id = item.get("user_id") or item.get("userId")
+                if history_user_id and not history_metadata.get("user_id"):
+                    history_metadata["user_id"] = history_user_id
+                history_event = {
+                    "type": "user",
+                    "message": {"role": "user", "content": history_parts},
+                }
+                try:
+                    await append_message(
+                        ctx._pool,
+                        thread_key=effective_thread_key,
+                        assignment_generation=ag,
+                        message_id=history_message_id,
+                        event=history_event,
+                        metadata=history_metadata,
+                    )
+                    backfilled += 1
+                except ControlPlaneError as exc:
+                    skipped += 1
+                    log.warn(
+                        "workflow_history_backfill_skipped",
+                        workflow_run_id=ctx.run_id,
+                        thread_key=effective_thread_key,
+                        message_id=history_message_id,
+                        code=exc.code,
+                        error=exc.message,
+                    )
+            if backfilled or skipped:
+                log.info(
+                    "workflow_history_backfilled",
+                    workflow_run_id=ctx.run_id,
+                    thread_key=effective_thread_key,
+                    backfilled=backfilled,
+                    skipped=skipped,
+                )
 
         event = {
             "type": "user",
@@ -1529,8 +1594,11 @@ def _schedule_due_occurrences(
 def _workflow_request_hash(
     workflow_name: str, run_input: dict[str, Any],
 ) -> str:
+    hash_input = dict(run_input)
+    if workflow_name == "slack_thread_turn":
+        hash_input.pop("history_messages", None)
     return request_hash(
-        {"workflow_name": workflow_name, "input": run_input},
+        {"workflow_name": workflow_name, "input": hash_input},
     )
 
 

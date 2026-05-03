@@ -101,7 +101,7 @@ function createSlackAdapter(overrides?: Partial<SlackAdapter>): SlackAdapter {
 describe("SlackBot runtime control", () => {
   const normalizedThreadKey = "C123:1700000000.000100";
 
-  it("uses stable Slack message IDs for history backfill and the current message", async () => {
+  it("passes whole-thread history to the workflow and uses the current message ID as trigger", async () => {
     const client = createImmediateStreamClient();
     const slack = createSlackAdapter({
       fetchMessages: async () => ({
@@ -116,12 +116,41 @@ describe("SlackBot runtime control", () => {
 
     await bot.onNewMention(thread, userMessage("<@bot> please help", { id: "1700000000.000002" }));
 
-    expect(client.message).toHaveBeenCalledTimes(1);
-    expect(client.message.mock.calls[0][0].messageId).toBe("slack:1700000000.000001");
+    expect(client.message).not.toHaveBeenCalled();
     expect(client.startWorkflowRun).toHaveBeenCalledTimes(1);
     expect(client.startWorkflowRun.mock.calls[0][0].triggerKey).toBe(
       `slack-thread-turn:${normalizedThreadKey}:slack:1700000000.000002`,
     );
+    expect(client.startWorkflowRun.mock.calls[0][0].input.history_messages).toEqual([
+      {
+        message_id: "slack:1700000000.000001",
+        parts: [{ type: "text", text: "prior context" }],
+        user_id: "U123",
+        metadata: { platform: "slack", history_backfill: true },
+      },
+    ]);
+  });
+
+  it("excludes the current mention from workflow history by stable ID", async () => {
+    const client = createImmediateStreamClient();
+    const slack = createSlackAdapter({
+      fetchMessages: async () => ({
+        messages: [
+          userMessage("<@bot> raw mention text", { id: "1700000000.000002" }) as any,
+          userMessage("prior context", { id: "1700000000.000001" }) as any,
+        ],
+      }),
+    });
+    const bot = new SlackBot(client as any, "", slack);
+    const { thread } = createThread();
+
+    await bot.onNewMention(thread, userMessage("<@bot> cleaned mention text", { id: "1700000000.000002" }));
+
+    expect(client.message).not.toHaveBeenCalled();
+    expect(client.startWorkflowRun.mock.calls[0][0].input.message_id).toBe("slack:1700000000.000002");
+    expect(client.startWorkflowRun.mock.calls[0][0].input.history_messages.map((m: any) => m.message_id)).toEqual([
+      "slack:1700000000.000001",
+    ]);
   });
 
   it("releases the active assignment before an explicit persona switch", async () => {

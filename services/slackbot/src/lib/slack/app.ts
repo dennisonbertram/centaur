@@ -171,19 +171,38 @@ class WebClientSlackAdapter implements SlackAdapter {
     options?: { direction?: "forward" | "backward"; limit?: number },
   ): Promise<{ messages: SlackHistoryMessage[] }> {
     const { channel, threadTs } = splitSlackThreadId(threadId);
-    const limit = options?.limit || 100;
-    const response = await this.call<{ messages?: SlackMessageEvent[] }>("conversations.replies", {
-      channel,
-      ts: threadTs,
-      limit,
-    });
+    const allMessages: SlackMessageEvent[] = [];
+    const cappedForwardLimit = options?.direction === "backward" ? undefined : options?.limit;
+    let cursor = "";
+    while (true) {
+      const remaining = cappedForwardLimit === undefined
+        ? undefined
+        : cappedForwardLimit - allMessages.length;
+      if (remaining !== undefined && remaining <= 0) break;
+
+      const response = await this.call<{
+        messages?: SlackMessageEvent[];
+        response_metadata?: { next_cursor?: string };
+      }>("conversations.replies", {
+        channel,
+        ts: threadTs,
+        limit: Math.min(remaining ?? 200, 200),
+        ...(cursor ? { cursor } : {}),
+      });
+      allMessages.push(...(response.messages || []));
+
+      cursor = response.response_metadata?.next_cursor || "";
+      if (!cursor) break;
+    }
 
     const messages = await Promise.all(
-      (response.messages || []).map((message) => this.toBotMessage(threadId, message, { skipSelfMention: false })),
+      allMessages.map((message) => this.toBotMessage(threadId, message, { skipSelfMention: false })),
     ) as SlackHistoryMessage[];
 
     return {
-      messages: options?.direction === "backward" ? messages.slice(-limit) : messages,
+      messages: options?.direction === "backward" && options.limit
+        ? messages.slice(-options.limit)
+        : messages,
     };
   }
 

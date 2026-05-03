@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 import re
 from typing import Any
 
@@ -46,6 +47,7 @@ class Input:
     message_id: str | None = None
     user_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    history_messages: list[dict[str, Any]] = field(default_factory=list)
     delivery: Delivery = field(default_factory=Delivery)
     prompt_selector: str | None = None
     agents_md_override: str | None = None
@@ -69,6 +71,11 @@ def _normalize_recovery_command(text: str) -> str:
 
 
 def _extract_text_parts(parts: Any) -> str | None:
+    if isinstance(parts, str):
+        try:
+            parts = json.loads(parts)
+        except json.JSONDecodeError:
+            return None
     if not isinstance(parts, list):
         return None
     snippets = [
@@ -89,6 +96,34 @@ def _is_recovery_turn(parts: list[dict[str, Any]]) -> bool:
     if text is None or len(parts) != 1:
         return False
     return _normalize_recovery_command(text) in _RECOVERY_COMMANDS
+
+
+def _lookup_last_unresolved_ask_from_history(
+    history_messages: list[dict[str, Any]],
+    *,
+    user_id: str | None,
+    current_message_id: str | None,
+) -> tuple[str | None, dict[str, Any]]:
+    for item in reversed(history_messages):
+        if not isinstance(item, dict):
+            continue
+        message_id = str(item.get("message_id") or item.get("messageId") or "").strip()
+        if current_message_id and message_id == current_message_id:
+            continue
+        history_user_id = item.get("user_id") or item.get("userId")
+        if user_id and history_user_id and history_user_id != user_id:
+            continue
+        text = _extract_text_parts(item.get("parts"))
+        if not text:
+            continue
+        if _normalize_recovery_command(text) in _RECOVERY_COMMANDS:
+            continue
+        return text, {
+            "hydrated_from_message_id": message_id or None,
+            "hydrated_from_user_id": history_user_id,
+            "hydrated_from_source": "workflow_history",
+        }
+    return None, {}
 
 
 async def _lookup_last_unresolved_ask(
@@ -159,16 +194,23 @@ async def _hydrate_recovery_turn(
     user_id: str | None,
     message_id: str | None,
     metadata: dict[str, Any],
+    history_messages: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     if not _is_recovery_turn(parts):
         return parts
 
-    prior_ask, provenance = await _lookup_last_unresolved_ask(
-        ctx,
-        thread_key=thread_key,
+    prior_ask, provenance = _lookup_last_unresolved_ask_from_history(
+        history_messages or [],
         user_id=user_id,
-        before_message_id=message_id,
+        current_message_id=message_id,
     )
+    if prior_ask is None:
+        prior_ask, provenance = await _lookup_last_unresolved_ask(
+            ctx,
+            thread_key=thread_key,
+            user_id=user_id,
+            before_message_id=message_id,
+        )
     if not prior_ask:
         return parts
 
@@ -200,12 +242,14 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         user_id=inp.user_id,
         message_id=inp.message_id,
         metadata=inp.metadata,
+        history_messages=inp.history_messages,
     )
 
     return await do_agent_turn(
         ctx,
         thread_key=thread_key,
         parts=parts,
+        history_messages=inp.history_messages,
         message_id=inp.message_id,
         user_id=inp.user_id,
         metadata=inp.metadata,

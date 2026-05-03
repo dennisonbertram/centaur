@@ -35,7 +35,20 @@ async def test_create_slack_thread_turn_workflow_eager_start(
         "input": {
             "thread_key": thread_key,
             "parts": [{"type": "text", "text": "hello from workflow"}],
+            "message_id": "slack:current",
             "user_id": "U123",
+            "history_messages": [
+                {
+                    "message_id": "slack:prior",
+                    "parts": [{"type": "text", "text": "prior context"}],
+                    "user_id": "U123",
+                },
+                {
+                    "message_id": "slack:current",
+                    "parts": [{"type": "text", "text": "duplicate current should be skipped"}],
+                    "user_id": "U123",
+                },
+            ],
             "delivery": {
                 "platform": "slack",
                 "channel": "C-test",
@@ -95,7 +108,11 @@ async def test_create_slack_thread_turn_workflow_eager_start(
     )
     assert cp_row is not None
     assert cp_row["execution_id"] == "exe-workflow-1"
-    assert append_message_mock.await_args.kwargs["metadata"]["user_id"] == "U123"
+    assert append_message_mock.await_count == 2
+    assert append_message_mock.await_args_list[0].kwargs["message_id"] == "slack:prior"
+    assert append_message_mock.await_args_list[0].kwargs["metadata"]["history_backfill"] is True
+    assert append_message_mock.await_args_list[1].kwargs["message_id"] == "slack:current"
+    assert append_message_mock.await_args_list[1].kwargs["metadata"]["user_id"] == "U123"
     assert enqueue_execution_mock.await_args.kwargs["metadata"]["user_id"] == "U123"
 
 
@@ -132,6 +149,48 @@ def test_recovery_command_paraphrases_are_recognized():
         assert not _is_recovery_turn([{"type": "text", "text": text}]), (
             f"Did not expect recovery hydration for utterance: {text!r}"
         )
+
+
+def test_workflow_idempotency_hash_ignores_history_messages():
+    from api.workflow_engine import _workflow_request_hash
+
+    base = {
+        "thread_key": "slack:C:1",
+        "message_id": "slack:1",
+        "parts": [{"type": "text", "text": "current"}],
+    }
+
+    assert _workflow_request_hash("slack_thread_turn", {
+        **base,
+        "history_messages": [{"message_id": "slack:0", "parts": []}],
+    }) == _workflow_request_hash("slack_thread_turn", {
+        **base,
+        "history_messages": [{"message_id": "slack:other", "parts": [{"type": "text", "text": "changed"}]}],
+    })
+
+
+def test_recovery_hydration_reads_workflow_history_messages():
+    from api.workflows.slack_thread_turn import _lookup_last_unresolved_ask_from_history
+
+    prior_ask, provenance = _lookup_last_unresolved_ask_from_history(
+        [
+            {
+                "message_id": "slack:ask",
+                "parts": [{"type": "text", "text": "Original ask from Slack history"}],
+                "user_id": "U1",
+            },
+            {
+                "message_id": "slack:retry-1",
+                "parts": [{"type": "text", "text": "retry"}],
+                "user_id": "U1",
+            },
+        ],
+        user_id="U1",
+        current_message_id="slack:retry-2",
+    )
+
+    assert prior_ask == "Original ask from Slack history"
+    assert provenance["hydrated_from_message_id"] == "slack:ask"
 
 
 @pytest.mark.asyncio

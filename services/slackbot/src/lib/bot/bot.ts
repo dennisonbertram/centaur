@@ -156,6 +156,13 @@ type FinalDeliveryRecord = {
   final_payload?: Record<string, unknown> | null;
 };
 
+type SlackHistoryWorkflowMessage = {
+  message_id: string;
+  parts: InputContentBlock[];
+  user_id?: string;
+  metadata?: Record<string, unknown>;
+};
+
 const PROMPT_FLAG_RE = /(?:^|\s)--([a-z][a-z0-9-]*)(?=\s|$)/gi;
 const PROMPT_FLAG_SKIP = new Set(["engine", "model", "opus", "sonnet", "haiku"]);
 
@@ -455,15 +462,15 @@ export class SlackBot {
       return;
     }
 
-    // Buffer prior thread messages as context before the mentioning message
-    await this.backfillThreadHistory(thread.id, promptSelector);
+    const messageId = stableSlackMessageId(msg);
+    const historyMessages = await this.collectThreadHistory(thread.id, messageId);
 
     const parts = await this.toParts(agentText, attachments);
     await this.bufferAndExecuteSafely(thread, agentText, parts, {
-      messageId: stableSlackMessageId(msg),
+      messageId,
       userId: msg.author.userId,
       teamId: slackTeamId(msg),
-    }, promptSelector);
+    }, promptSelector, historyMessages);
   }
 
   async onSubscribedMessage(thread: BotThread, msg: BotMessage) {
@@ -525,9 +532,10 @@ export class SlackBot {
     parts: InputContentBlock[],
     delivery: DeliveryContext,
     promptSelectorOverride?: string,
+    historyMessages?: SlackHistoryWorkflowMessage[],
   ) {
     try {
-      await this.bufferAndExecute(thread, text, parts, delivery, promptSelectorOverride);
+      await this.bufferAndExecute(thread, text, parts, delivery, promptSelectorOverride, historyMessages);
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
       const executionId = executionIdFromError(err);
@@ -562,6 +570,7 @@ export class SlackBot {
     parts: InputContentBlock[],
     delivery: DeliveryContext,
     promptSelectorOverride?: string,
+    historyMessages?: SlackHistoryWorkflowMessage[],
   ) {
     const threadKey = normalizeThreadKey(thread.id);
     await this.cancelInflightExecution(threadKey);
@@ -575,6 +584,7 @@ export class SlackBot {
       parts,
       user_id: delivery.userId,
       message_id: delivery.messageId,
+      history_messages: historyMessages || [],
       prompt_selector: promptSelector,
       delivery: {
         channel,
@@ -1412,36 +1422,35 @@ export class SlackBot {
     }
   }
 
-  /** Fetch prior thread messages and buffer them to the API so the agent has full context. */
-  private async backfillThreadHistory(threadId: string, promptSelector?: string) {
-    if (!this.slack) return;
+  /** Fetch prior thread messages for workflow-owned durable backfill. */
+  private async collectThreadHistory(threadId: string, currentMessageId?: string): Promise<SlackHistoryWorkflowMessage[]> {
+    if (!this.slack) return [];
     const threadKey = normalizeThreadKey(threadId);
-    const state = await this.ensureAssignment(threadKey, promptSelector);
     try {
-      const { messages } = await this.slack.fetchMessages(threadId, { direction: "forward", limit: 50 });
-      // Skip the last message (the mention itself — it gets buffered by the caller)
-      const prior = messages.filter((m) => !m.author.isMe && !m.author.isBot);
-      if (!prior.length) return;
-      // Drop the last non-bot message since it's the mentioning message buffered by bufferAndExecute
-      const history = prior.slice(0, -1);
-      for (const m of history) {
+      const { messages } = await this.slack.fetchMessages(threadId, { direction: "forward" });
+      const history: SlackHistoryWorkflowMessage[] = [];
+      for (const m of messages) {
+        if (m.author.isMe || m.author.isBot) continue;
+        const messageId = stableSlackMessageId(m);
+        if (!messageId || messageId === currentMessageId) continue;
         const text = richTextFromMessage(m);
         const attachments = m.attachments || [];
         if (!text && !attachments.length) continue;
         const parts = await this.toParts(text || "Shared attachment in thread.", attachments);
-        await this.client.message({
-          threadKey,
-          assignmentGeneration: state.assignmentGeneration,
-          messageId: stableSlackMessageId(m),
+        history.push({
+          message_id: messageId,
           parts,
-          userId: m.author.userId,
+          user_id: m.author.userId,
+          metadata: { platform: "slack", history_backfill: true },
         });
       }
       if (history.length) {
-        log.info("thread_history_backfilled", { thread_key: threadKey, count: history.length });
+        log.info("thread_history_collected", { thread_key: threadKey, count: history.length });
       }
+      return history;
     } catch (err) {
-      log.warn("thread_history_backfill_failed", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
+      log.warn("thread_history_collect_failed", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
+      return [];
     }
   }
 
