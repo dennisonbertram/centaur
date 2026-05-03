@@ -589,7 +589,7 @@ export class BoltSlackApp {
   ): Promise<void> {
     if (event.type !== "message" && event.type !== "app_mention") return;
     if (isIgnoredMessageSubtype(event.subtype)) return;
-    if (event.bot_id || event.user === this.adapter.getBotUserId()) return;
+    if (event.user === this.adapter.getBotUserId()) return;
 
     const isPolicyTouchpoint = Boolean(event.channel === POLICY_TOUCHPOINT_CHANNEL_ID && POLICY_TOUCHPOINT_PATTERN.test(event.text || ""));
     const isDirectMessage = event.channel_type === "im";
