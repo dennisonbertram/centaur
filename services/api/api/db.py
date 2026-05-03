@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import asyncpg
@@ -9,7 +11,10 @@ import structlog
 
 log = structlog.get_logger()
 
-MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "db" / "migrations"
+BASE_MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "db" / "migrations"
+BASE_MIGRATIONS_TABLE = "schema_migrations"
+OVERLAY_MIGRATIONS_TABLE = "schema_migrations_overlay"
+OVERLAY_MIGRATIONS_RELATIVE_DIR = Path("services") / "api" / "db" / "migrations"
 
 REQUIRED_SANDBOX_SESSION_STATES = frozenset(
     {
@@ -50,6 +55,46 @@ REQUIRED_MIGRATIONS = frozenset(
 )
 
 
+@dataclass(frozen=True, slots=True)
+class MigrationSet:
+    name: str
+    migrations_dir: Path
+    migrations_table: str
+
+
+def get_migration_sets() -> tuple[MigrationSet, ...]:
+    migration_sets = [
+        MigrationSet(
+            name="core",
+            migrations_dir=BASE_MIGRATIONS_DIR,
+            migrations_table=BASE_MIGRATIONS_TABLE,
+        )
+    ]
+
+    overlay_root = (os.getenv("CENTAUR_OVERLAY_DIR") or "").strip()
+    if overlay_root:
+        overlay_migrations_dir = Path(overlay_root) / OVERLAY_MIGRATIONS_RELATIVE_DIR
+        if overlay_migrations_dir.exists():
+            migration_sets.append(
+                MigrationSet(
+                    name="overlay",
+                    migrations_dir=overlay_migrations_dir,
+                    migrations_table=OVERLAY_MIGRATIONS_TABLE,
+                )
+            )
+
+    return tuple(migration_sets)
+
+
+def _dbmate_url(database_url: str) -> str:
+    # dbmate's Go pq driver requires explicit sslmode for non-SSL connections.
+    if "sslmode=" in database_url:
+        return database_url
+
+    sep = "&" if "?" in database_url else "?"
+    return f"{database_url}{sep}sslmode=disable"
+
+
 async def create_pool(database_url: str) -> asyncpg.Pool:
     run_migrations(database_url)
     pool = await asyncpg.create_pool(
@@ -68,40 +113,58 @@ async def close_pool(pool: asyncpg.Pool) -> None:
 
 def run_migrations(database_url: str) -> None:
     """Run pending dbmate migrations. Idempotent — safe to call on every startup."""
-    if not MIGRATIONS_DIR.exists():
-        log.warning("migrations_dir_missing", path=str(MIGRATIONS_DIR))
-        return
-    # dbmate's Go pq driver requires explicit sslmode for non-SSL connections
-    dbmate_url = database_url
-    if "sslmode=" not in dbmate_url:
-        sep = "&" if "?" in dbmate_url else "?"
-        dbmate_url += f"{sep}sslmode=disable"
+    dbmate_url = _dbmate_url(database_url)
+    migration_sets = get_migration_sets()
+
     try:
-        result = subprocess.run(
-            [
-                "dbmate",
-                "--url",
-                dbmate_url,
-                "--migrations-dir",
-                str(MIGRATIONS_DIR),
-                "--no-dump-schema",
-                "up",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            log.error(
-                "dbmate_failed",
-                stderr=result.stderr.strip(),
-                returncode=result.returncode,
+        applied_any = False
+        for migration_set in migration_sets:
+            if not migration_set.migrations_dir.exists():
+                log.warning(
+                    "migrations_dir_missing",
+                    set_name=migration_set.name,
+                    path=str(migration_set.migrations_dir),
+                )
+                continue
+
+            applied_any = True
+            result = subprocess.run(
+                [
+                    "dbmate",
+                    "--url",
+                    dbmate_url,
+                    "--migrations-dir",
+                    str(migration_set.migrations_dir),
+                    "--migrations-table",
+                    migration_set.migrations_table,
+                    "--no-dump-schema",
+                    "up",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
-            raise RuntimeError(f"dbmate migration failed: {result.stderr.strip()}")
-        if result.stderr.strip():
-            for line in result.stderr.strip().splitlines():
-                log.info("dbmate", output=line)
-        log.info("migrations_applied")
+            if result.returncode != 0:
+                log.error(
+                    "dbmate_failed",
+                    set_name=migration_set.name,
+                    migrations_table=migration_set.migrations_table,
+                    stderr=result.stderr.strip(),
+                    returncode=result.returncode,
+                )
+                raise RuntimeError(
+                    "dbmate migration failed "
+                    f"for {migration_set.name}: {result.stderr.strip()}"
+                )
+            if result.stderr.strip():
+                for line in result.stderr.strip().splitlines():
+                    log.info("dbmate", set_name=migration_set.name, output=line)
+
+        if not applied_any:
+            log.warning("migrations_skipped", reason="no_migration_sets_found")
+            return
+
+        log.info("migrations_applied", migration_sets=[ms.name for ms in migration_sets])
     except FileNotFoundError:
         log.warning(
             "dbmate_not_found", msg="dbmate binary not in PATH, skipping migrations"
@@ -155,7 +218,9 @@ async def check_schema_compatibility(pool: asyncpg.Pool) -> dict[str, object]:
         report["errors"].append(f"column_check_failed:{exc}")
 
     try:
-        migration_rows = await pool.fetch("SELECT version FROM schema_migrations")
+        migration_rows = await pool.fetch(
+            f"SELECT version FROM {BASE_MIGRATIONS_TABLE}"
+        )
         applied = {r["version"] for r in migration_rows}
         report["required_migrations_missing"] = sorted(REQUIRED_MIGRATIONS - applied)
     except Exception as exc:

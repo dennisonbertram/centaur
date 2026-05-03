@@ -45,11 +45,12 @@ docker compose build sandbox
 
 ```bash
 ./scripts/dbmate new add_agent_leases
+./scripts/dbmate --set overlay new add_org_tables
 ./scripts/dbmate status
 ./scripts/dbmate up
 ```
 
-`./scripts/dbmate` creates the next numbered SQL file in `services/api/db/migrations` and runs `dbmate` inside the `api` container for apply/status/rollback flows. If `DATABASE_URL` is not set in your shell, it reuses the `api` container's configured value.
+`./scripts/dbmate` creates the next numbered SQL file in `services/api/db/migrations` by default, or in `services/api/db/migrations` inside the mounted overlay when you pass `--set overlay`. `up`, `migrate`, and `status` run against both the core and overlay migration sets unless you pin a specific set. Each set has its own dbmate migrations table so overlay repos can extend the shared Postgres database without version collisions. If `DATABASE_URL` is not set in your shell, the wrapper reuses the `api` container's configured value.
 
 ### 3. Test
 

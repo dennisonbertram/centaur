@@ -40,6 +40,7 @@ async def test_schema_compatibility_ok() -> None:
                 {"version": "009"},
                 {"version": "010"},
                 {"version": "011"},
+                {"version": "016"},
             ],
         ]
     )
@@ -82,7 +83,7 @@ async def test_schema_compatibility_detects_missing_state_column_and_migration()
             ],
             [
                 {"version": "005"},
-                # 006/007/008/009/010/011 intentionally missing
+                # 006/007/008/009/010/011/016 intentionally missing
             ],
         ]
     )
@@ -98,6 +99,7 @@ async def test_schema_compatibility_detects_missing_state_column_and_migration()
     assert "009" in report["required_migrations_missing"]
     assert "010" in report["required_migrations_missing"]
     assert "011" in report["required_migrations_missing"]
+    assert "016" in report["required_migrations_missing"]
 
 
 @pytest.mark.asyncio
