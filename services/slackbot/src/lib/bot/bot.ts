@@ -798,8 +798,7 @@ export class SlackBot {
       if (streamedReply) {
         const streamedMarkdown = await this.renderStreamedExecutionMarkdown(threadKey, finalText, tracker.repoContext);
         const streamedBlocks = renderMarkdownForSlack(streamedMarkdown).blocks;
-        const containsTableBlock = Boolean(streamedBlocks?.some((block) => block.type === "table"));
-        if (containsTableBlock && tracker.overflowChunks.length === 0) {
+        if (streamedBlocks && tracker.overflowChunks.length === 0) {
           try {
             await streamedReply.edit({ markdown: streamedMarkdown });
           } catch (err) {
