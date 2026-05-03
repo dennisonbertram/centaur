@@ -1450,14 +1450,21 @@ export class SlackBot {
     if (msg.attachments?.length) return [...msg.attachments];
     const ts = msg.id || msg.raw?.ts || "";
     if (!ts || !this.slack) return [];
-    try {
-      const refetched = await this.slack.fetchMessage(threadId, ts);
-      if (refetched?.attachments?.length) {
-        log.info("mention_files_refetched", { thread_key: normalizeThreadKey(threadId), count: refetched.attachments.length });
-        return [...refetched.attachments];
+    // Slack's app_mention event doesn't include files. The file may not be
+    // available on the message immediately, so retry with backoff to allow
+    // Slack to finish processing the upload.
+    const delays = [1_000, 2_000];
+    for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+      if (attempt > 0) await sleep(delays[attempt - 1]);
+      try {
+        const refetched = await this.slack.fetchMessage(threadId, ts);
+        if (refetched?.attachments?.length) {
+          log.info("mention_files_refetched", { thread_key: normalizeThreadKey(threadId), count: refetched.attachments.length, attempt: attempt + 1 });
+          return [...refetched.attachments];
+        }
+      } catch (err) {
+        log.warn("mention_files_refetch_failed", { thread_key: normalizeThreadKey(threadId), error: err instanceof Error ? err.message : String(err), attempt: attempt + 1 });
       }
-    } catch (err) {
-      log.warn("mention_files_refetch_failed", { thread_key: normalizeThreadKey(threadId), error: err instanceof Error ? err.message : String(err) });
     }
     return [];
   }
