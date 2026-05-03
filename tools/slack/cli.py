@@ -1080,39 +1080,41 @@ def user_info(
     user_id: str = typer.Argument(..., help="Slack user ID (e.g., U123ABC)"),
     output: str = typer.Option("text", "-o", "--output", help="Output format: text or json"),
 ):
-    """Get user information including email by Slack user ID.
+    """Get full user profile including email, phone, title, status, and custom fields.
 
     Examples:
         slack user-info U123ABC
         slack user-info U123ABC -o json
     """
     import json
-    from .client import get_slack_client
+    from .client import get_user_profile
 
     try:
-        client = get_slack_client()
-        result = client.users_info(user=user_id)
-        user = result.get("user", {})
-        email = user.get("profile", {}).get("email")
-        name = user.get("real_name") or user.get("name")
+        profile = get_user_profile(user_id)
 
         if output == "json":
-            print(
-                json.dumps(
-                    {
-                        "id": user_id,
-                        "name": name,
-                        "email": email,
-                        "display_name": user.get("profile", {}).get("display_name"),
-                    }
-                )
-            )
+            print(json.dumps(profile, indent=2, ensure_ascii=False))
         else:
-            console.print(f"[bold]User:[/] {name}")
-            if email:
-                console.print(f"[bold]Email:[/] {email}")
+            console.print(f"[bold]Name:[/] {profile['real_name'] or profile['name']}")
+            if profile["display_name"]:
+                console.print(f"[bold]Display Name:[/] {profile['display_name']}")
+            if profile["title"]:
+                console.print(f"[bold]Title:[/] {profile['title']}")
+            if profile["email"]:
+                console.print(f"[bold]Email:[/] {profile['email']}")
             else:
                 console.print("[yellow]No email found[/]")
+            if profile["phone"]:
+                console.print(f"[bold]Phone:[/] {profile['phone']}")
+            if profile["status_text"]:
+                console.print(f"[bold]Status:[/] {profile['status_emoji']} {profile['status_text']}")
+            if profile["timezone"]:
+                console.print(f"[bold]Timezone:[/] {profile['tz_label']} ({profile['timezone']})")
+            if profile["skype"]:
+                console.print(f"[bold]Skype:[/] {profile['skype']}")
+            if profile["custom_fields"]:
+                for label, value in profile["custom_fields"].items():
+                    console.print(f"[bold]{label}:[/] {value}")
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
         raise typer.Exit(1)

@@ -982,6 +982,59 @@ class SlackClient:
         except SlackApiError:
             return None
 
+    def get_user_profile(self, user_id: str) -> dict:
+        """Get a user's full Slack profile by their user ID.
+
+        Returns profile fields including name, email, title, phone, status,
+        timezone, and custom profile fields (e.g. Telegram, Skype, pronouns).
+
+        Args:
+            user_id: Slack user ID (e.g., 'U123ABC')
+
+        Returns:
+            Dict with id, name, real_name, display_name, email, title, phone,
+            status_text, status_emoji, timezone, tz_label, image, skype,
+            and custom_fields (dict of label -> value for non-empty custom fields)
+        """
+        try:
+            response = self._retry_on_ratelimit(
+                self._client.users_info,
+                user=user_id,
+                method_key="users.info",
+            )
+        except SlackApiError as e:
+            raise RuntimeError(f"Slack API error: {e.response['error']}")
+
+        user = response.get("user", {})
+        profile = user.get("profile", {})
+
+        # Extract custom profile fields (Telegram, Skype, pronouns, etc.)
+        custom_fields: dict[str, str] = {}
+        for _field_id, field_data in (profile.get("fields") or {}).items():
+            label = field_data.get("label", "")
+            value = field_data.get("value", "")
+            if label and value:
+                custom_fields[label] = value
+
+        return {
+            "id": user.get("id", ""),
+            "name": user.get("name", ""),
+            "real_name": user.get("real_name", ""),
+            "display_name": profile.get("display_name", ""),
+            "email": profile.get("email", ""),
+            "title": profile.get("title", ""),
+            "phone": profile.get("phone", ""),
+            "status_text": profile.get("status_text", ""),
+            "status_emoji": profile.get("status_emoji", ""),
+            "timezone": user.get("tz", ""),
+            "tz_label": user.get("tz_label", ""),
+            "image": profile.get("image_192", ""),
+            "skype": profile.get("skype", ""),
+            "is_bot": user.get("is_bot", False),
+            "deleted": user.get("deleted", False),
+            "custom_fields": custom_fields,
+        }
+
 
     def _format_requester_attribution(self) -> str:
         """Get requester attribution from environment variables.
@@ -1508,3 +1561,7 @@ def search_files(*args, **kwargs):
 
 def search_users(*args, **kwargs):
     return _client().search_users(*args, **kwargs)
+
+
+def get_user_profile(*args, **kwargs):
+    return _client().get_user_profile(*args, **kwargs)
