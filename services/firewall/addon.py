@@ -9,10 +9,6 @@ Container env vars contain the key name as the value (e.g.
 ``Authorization: Bearer OPENAI_API_KEY`` the firewall replaces it with
 ``Authorization: Bearer sk-proj-real...``.
 
-Amp routes LLM calls through ampcode.com/api/provider/{provider}/... which
-requires a paid plan. To bypass this, the firewall rewrites these requests
-to go directly to the real API endpoint (e.g. api.anthropic.com) with
-key-name placeholders that the replacement logic resolves.
 """
 
 from __future__ import annotations
@@ -221,15 +217,6 @@ class _LRUCache:
             self._cache[key] = value
             if len(self._cache) > self._maxsize:
                 self._cache.popitem(last=False)
-
-# Amp provider proxy rewriting: ampcode.com/api/provider/{provider}/...
-# is rewritten to call the real API directly with key-name placeholders.
-# prefix_to_strip → (real_host, header_name, header_value_template)
-# Templates use the key name directly so the replacement logic resolves them.
-_PROVIDER_REWRITES: dict[str, tuple[str, str, str]] = {
-    "/api/provider/anthropic/": ("api.anthropic.com", "x-api-key", "ANTHROPIC_API_KEY"),
-    "/api/provider/openai/": ("api.openai.com", "authorization", "Bearer OPENAI_API_KEY"),
-}
 
 
 def _is_private_ip(addr: str) -> bool:
@@ -814,50 +801,6 @@ class CredentialInjector:
         return target_host
 
     # ------------------------------------------------------------------
-    # Provider rewriting
-    # ------------------------------------------------------------------
-
-    def _try_provider_rewrite(self, flow: http.HTTPFlow, host: str) -> bool:
-        """Rewrite amp provider proxy calls to go directly to the real API.
-
-        Sets headers with key-name placeholders — the replacement logic
-        resolves them afterward.
-
-        Returns True if the request was rewritten.
-        """
-        if host not in ("ampcode.com", "api.ampcode.com"):
-            return False
-
-        path = flow.request.path
-        for prefix, (real_host, header_name, header_value) in _PROVIDER_REWRITES.items():
-            if not path.startswith(prefix):
-                continue
-
-            # Rewrite: /api/provider/anthropic/v1/messages → /v1/messages
-            new_path = path[len(prefix) - 1 :]  # keep the leading /
-            flow.request.host = real_host
-            flow.request.port = 443
-            flow.request.scheme = "https"
-            flow.request.path = new_path
-            flow.request.headers["host"] = real_host
-            flow.request.headers[header_name] = header_value
-
-            # Remove amp-specific auth header since we're going direct
-            if header_name != "authorization" and "authorization" in flow.request.headers:
-                del flow.request.headers["authorization"]
-
-            log.info(
-                "provider rewrite: %s%s → %s%s",
-                host,
-                path,
-                real_host,
-                new_path,
-            )
-            return True
-
-        return False
-
-    # ------------------------------------------------------------------
     # Outbound header sanitization
     # ------------------------------------------------------------------
 
@@ -1063,28 +1006,15 @@ class CredentialInjector:
         if self._block_private_ip(flow, host):
             return
 
-        # 5. Check for amp provider proxy rewrite (before method filtering
-        #    so ampcode.com POSTs can be rewritten to LLM API hosts)
-        provider_rewritten = self._try_provider_rewrite(flow, host)
-
-        # Re-read host after potential provider rewrite
-        host = flow.request.pretty_host.lower().rstrip(".")
-
-        # 5b. Re-check SSRF after provider rewrite — the rewritten host
-        # could resolve to a private IP
-        if provider_rewritten and self._block_private_ip(flow, host):
-            return
-
-        # 6. HTTP method filtering: hosts not in the unrestricted set are
+        # 5. HTTP method filtering: hosts not in the unrestricted set are
         #    limited to safe methods only (GET/HEAD/OPTIONS).  LLM API hosts,
         #    trusted internal services, and essential services are unrestricted.
-        #    Skip if we just rewrote the request (it's now targeting an LLM host).
         #    Also allow hosts in the injection map (they're tool API hosts).
         host_in_injection_map = bool(self._get_allowed_keys_for_host(host))
         host_is_injection = self._host_in_patterns(host, SECRET_INJECTION_HOSTS)
         host_is_unrestricted = self._host_in_patterns(host, UNRESTRICTED_METHOD_HOSTS)
         host_is_trusted = self._host_in_patterns(host, TRUSTED_INTERNAL_HOSTS)
-        if not provider_rewritten and not host_in_injection_map and not host_is_injection and not host_is_unrestricted and not host_is_trusted:
+        if not host_in_injection_map and not host_is_injection and not host_is_unrestricted and not host_is_trusted:
             method = flow.request.method.upper()
             if method not in SAFE_METHODS:
                 flow.response = http.Response.make(
