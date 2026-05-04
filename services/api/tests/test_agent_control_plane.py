@@ -683,6 +683,290 @@ async def test_worker_marks_turn_done_error_as_failed_and_updates_runtime(db_poo
 
 
 @pytest.mark.asyncio
+async def test_worker_requeues_raw_harness_auth_error_once_on_fresh_runtime(db_pool):
+    from api.runtime_control import _claim_next_execution, _process_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    initial_runtime_id = f"rt-auth-{uuid.uuid4().hex[:8]}"
+    fresh_runtime_id = f"rt-fresh-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        initial_runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, hard_deadline_at"
+        ") VALUES ($1, $2, 1, 'exec-auth', 'hash-auth', 'running', '{}'::jsonb, '{}'::jsonb, NOW() + INTERVAL '10 minutes')",
+        execution_id,
+        thread_key,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
+        "VALUES ($1, $2, '{}'::jsonb, 'awaiting_terminal')",
+        execution_id,
+        thread_key,
+    )
+
+    row = {
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "assignment_generation": 1,
+        "status": "running",
+        "delivery": {},
+        "metadata": {},
+        "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
+        "created_at": dt.datetime.now(dt.timezone.utc),
+        "claimed_at": dt.datetime.now(dt.timezone.utc),
+    }
+    initial_session = SandboxSession(
+        sandbox_id=initial_runtime_id,
+        thread_key=thread_key,
+        harness="amp",
+        engine="amp",
+    )
+    fresh_session = SandboxSession(
+        sandbox_id=fresh_runtime_id,
+        thread_key=thread_key,
+        harness="amp",
+        engine="amp",
+    )
+
+    stream_calls = 0
+
+    async def _auth_then_success_stream(*_args, **_kwargs):
+        nonlocal stream_calls
+        stream_calls += 1
+        if stream_calls == 1:
+            yield {
+                "data": json.dumps(
+                    {
+                        "type": "turn.done",
+                        "result": "Unauthorized Check your access token.",
+                        "is_error": True,
+                    }
+                )
+            }
+            return
+        yield {
+            "data": json.dumps(
+                {
+                    "type": "turn.done",
+                    "result": "recovered",
+                }
+            )
+        }
+
+    stop_session_mock = AsyncMock()
+    inject_stdin_mock = AsyncMock(
+        side_effect=[
+            {"ok": True, "injected": True, "durable_turn_id": "turn-auth-1"},
+            {"ok": True, "injected": True, "durable_turn_id": "turn-auth-2"},
+        ]
+    )
+    backend = SimpleNamespace(attach=AsyncMock())
+
+    with (
+        patch(
+            "api.runtime_control.get_or_spawn",
+            new=AsyncMock(side_effect=[initial_session, fresh_session]),
+        ),
+        patch("api.runtime_control.inject_stdin", inject_stdin_mock),
+        patch("api.runtime_control.get_backend", return_value=backend),
+        patch(
+            "api.runtime_control._get_runtime",
+            return_value=SimpleNamespace(turn_counter=1),
+        ),
+        patch("api.runtime_control._stream_stdout", _auth_then_success_stream),
+        patch("api.runtime_control.stop_session", stop_session_mock),
+    ):
+        await _process_execution(db_pool, row)
+
+        queued = await db_pool.fetchrow(
+            "SELECT status, durable_turn_id, terminal_reason, result_text, error_text, metadata "
+            "FROM agent_execution_requests WHERE execution_id = $1",
+            execution_id,
+        )
+        assert queued is not None
+        assert queued["status"] == "queued"
+        assert queued["durable_turn_id"] is None
+        assert queued["terminal_reason"] is None
+        assert queued["result_text"] is None
+        assert queued["error_text"] is None
+        assert queued["metadata"]["control_plane_retry"] == {
+            "reason": "harness_auth",
+            "attempt": 1,
+            "max_attempts": 1,
+            "fresh_runtime": True,
+            "last_error": "Unauthorized Check your access token.",
+        }
+
+        outbox = await db_pool.fetchrow(
+            "SELECT state, final_payload FROM agent_final_delivery_outbox WHERE execution_id = $1",
+            execution_id,
+        )
+        assert outbox is not None
+        assert outbox["state"] == "awaiting_terminal"
+        assert outbox["final_payload"] is None
+
+        claimed = await _claim_next_execution(db_pool)
+        assert claimed is not None
+        assert claimed["execution_id"] == execution_id
+        assert claimed["status"] == "running"
+
+        await _process_execution(db_pool, claimed)
+
+    execution = await db_pool.fetchrow(
+        "SELECT status, terminal_reason, result_text, error_text FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution is not None
+    assert execution["status"] == "completed"
+    assert execution["terminal_reason"] == "completed"
+    assert execution["result_text"] == "recovered"
+    assert execution["error_text"] in (None, "")
+
+    assignment = await db_pool.fetchrow(
+        "SELECT runtime_id FROM agent_runtime_assignments WHERE thread_key = $1 AND assignment_generation = 1",
+        thread_key,
+    )
+    assert assignment is not None
+    assert assignment["runtime_id"] == fresh_runtime_id
+    assert inject_stdin_mock.await_count == 2
+    stop_session_mock.assert_awaited_once_with(thread_key)
+
+
+@pytest.mark.asyncio
+async def test_worker_sanitizes_raw_harness_auth_failure_after_retry(db_pool):
+    from api.runtime_control import _process_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    runtime_id = f"rt-auth-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, hard_deadline_at"
+        ") VALUES ($1, $2, 1, 'exec-auth-final', 'hash-auth-final', 'running', '{}'::jsonb, $3::jsonb, NOW() + INTERVAL '10 minutes')",
+        execution_id,
+        thread_key,
+        json.dumps(
+            {
+                "control_plane_retry": {
+                    "reason": "harness_auth",
+                    "attempt": 1,
+                    "max_attempts": 1,
+                    "fresh_runtime": True,
+                    "last_error": "Unauthorized Check your access token.",
+                }
+            }
+        ),
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
+        "VALUES ($1, $2, '{}'::jsonb, 'awaiting_terminal')",
+        execution_id,
+        thread_key,
+    )
+
+    row = {
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "assignment_generation": 1,
+        "status": "running",
+        "delivery": {},
+        "metadata": {
+            "control_plane_retry": {
+                "reason": "harness_auth",
+                "attempt": 1,
+                "max_attempts": 1,
+                "fresh_runtime": True,
+                "last_error": "Unauthorized Check your access token.",
+            }
+        },
+        "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
+        "created_at": dt.datetime.now(dt.timezone.utc),
+        "claimed_at": dt.datetime.now(dt.timezone.utc),
+    }
+    session = SandboxSession(
+        sandbox_id=runtime_id,
+        thread_key=thread_key,
+        harness="amp",
+        engine="amp",
+    )
+
+    async def _auth_failure_stream(*_args, **_kwargs):
+        yield {
+            "data": json.dumps(
+                {
+                    "type": "turn.done",
+                    "result": "Unauthorized Check your access token.",
+                    "is_error": True,
+                }
+            )
+        }
+
+    stop_session_mock = AsyncMock()
+    inject_stdin_mock = AsyncMock(
+        return_value={"ok": True, "injected": True, "durable_turn_id": "turn-auth-final"}
+    )
+    backend = SimpleNamespace(attach=AsyncMock())
+
+    with (
+        patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
+        patch("api.runtime_control.inject_stdin", inject_stdin_mock),
+        patch("api.runtime_control.get_backend", return_value=backend),
+        patch(
+            "api.runtime_control._get_runtime",
+            return_value=SimpleNamespace(turn_counter=1),
+        ),
+        patch("api.runtime_control._stream_stdout", _auth_failure_stream),
+        patch("api.runtime_control.stop_session", stop_session_mock),
+    ):
+        await _process_execution(db_pool, row)
+
+    execution = await db_pool.fetchrow(
+        "SELECT status, terminal_reason, result_text, error_text FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution is not None
+    assert execution["status"] == "failed_permanent"
+    assert execution["terminal_reason"] == "harness_auth_failed"
+    assert execution["result_text"] == (
+        "The agent hit a temporary runtime startup issue and could not complete the turn. "
+        "Please retry in a moment."
+    )
+    assert execution["error_text"] == "Unauthorized Check your access token."
+
+    outbox = await db_pool.fetchrow(
+        "SELECT final_payload FROM agent_final_delivery_outbox WHERE execution_id = $1",
+        execution_id,
+    )
+    assert outbox is not None
+    assert outbox["final_payload"]["result_text"] == (
+        "The agent hit a temporary runtime startup issue and could not complete the turn. "
+        "Please retry in a moment."
+    )
+    assert outbox["final_payload"]["error_text"] == "Unauthorized Check your access token."
+    stop_session_mock.assert_awaited_once_with(thread_key)
+
+
+@pytest.mark.asyncio
 async def test_worker_records_projected_observations_and_execution_summary(db_pool):
     from api.runtime_control import _process_execution
 
