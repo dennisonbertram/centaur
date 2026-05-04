@@ -28,6 +28,16 @@ POOL_SIZE = int(os.getenv("WARM_POOL_SIZE", "5"))
 POOL_HARNESS = os.getenv("WARM_POOL_HARNESS", "amp")
 POOL_REPLENISH_INTERVAL = float(os.getenv("WARM_POOL_REPLENISH_INTERVAL", "5.0"))
 POOL_DOCKER_TIMEOUT = float(os.getenv("WARM_POOL_DOCKER_TIMEOUT", "30.0"))
+# Recycle existing warm pods on startup instead of adopting them. After an image
+# or overlay bump the API restarts but pre-existing warm pods still run the old
+# refs; evicting them here guarantees the first claim post-deploy uses the
+# just-deployed code. Set to "0"/"false" to keep the legacy adopt-on-restart
+# behavior.
+POOL_EVICT_ON_STARTUP = os.getenv("WARM_POOL_EVICT_ON_STARTUP", "1").lower() not in (
+    "0",
+    "false",
+    "no",
+)
 
 
 @dataclass
@@ -372,6 +382,44 @@ async def _recover_warm(assigned_sandbox_ids: set[str] | None = None) -> int:
     return recovered
 
 
+async def _evict_existing_warm(assigned_sandbox_ids: set[str] | None = None) -> int:
+    """Stop every pre-existing unassigned warm sandbox on startup.
+
+    Pool members are pre-built with the previous deploy's image + overlay
+    refs. Adopting them after an image bump leaves stale containers in
+    rotation; recreating them with the current refs ensures the first
+    claim after a deploy uses the just-deployed code paths. Assigned
+    sandboxes (still serving live threads) are left alone.
+    """
+    assigned = assigned_sandbox_ids or set()
+    backend = get_backend()
+    evicted = 0
+    try:
+        sessions = await asyncio.wait_for(
+            backend.recover_warm(POOL_HARNESS),
+            timeout=POOL_DOCKER_TIMEOUT * 2,
+        )
+    except Exception as exc:
+        log.warning("warm_pool_evict_list_failed", error=str(exc))
+        return 0
+    for session in sessions:
+        if session.sandbox_id in assigned:
+            continue
+        try:
+            await asyncio.wait_for(
+                backend.stop_by_id(session.sandbox_id),
+                timeout=POOL_DOCKER_TIMEOUT,
+            )
+            evicted += 1
+        except Exception as exc:
+            log.warning(
+                "warm_pool_evict_stop_failed",
+                sandbox=session.sandbox_id[:12],
+                error=str(exc),
+            )
+    return evicted
+
+
 async def _get_assigned_sandbox_ids() -> set[str]:
     """Return sandbox IDs that are already assigned to threads in the DB."""
     from api.agent import _get_pool
@@ -393,9 +441,14 @@ async def start_replenish_loop() -> asyncio.Task | None:
 
     async def _loop() -> None:
         assigned = await _get_assigned_sandbox_ids()
-        recovered = await _recover_warm(assigned)
-        if recovered:
-            log.info("warm_pool_recovered", recovered=recovered)
+        if POOL_EVICT_ON_STARTUP:
+            evicted = await _evict_existing_warm(assigned)
+            if evicted:
+                log.info("warm_pool_startup_evicted", evicted=evicted)
+        else:
+            recovered = await _recover_warm(assigned)
+            if recovered:
+                log.info("warm_pool_recovered", recovered=recovered)
         count = await replenish()
         if count:
             log.info("warm_pool_initial_fill", spawned=count, target=POOL_SIZE)
