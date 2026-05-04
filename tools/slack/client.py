@@ -1,19 +1,48 @@
 """Slack API client with bot operations plus optional native search user token."""
 
-from datetime import datetime, timezone
 import json
 import os
 import re
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, ClassVar
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
+from centaur_sdk.tool_sdk import secret
 
 # Cache for channel list to avoid repeated API calls
+
+
+class SlackAuthError(RuntimeError):
+    """Structured Slack auth failure that survives tool-manager stringification."""
+
+    def __init__(
+        self,
+        *,
+        slack_method: str,
+        access_path: str,
+        error_code: str,
+        status_code: int | None,
+        requested_channel: str | None = None,
+        resolved_channel: str | None = None,
+    ) -> None:
+        payload = {
+            "error": "slack_auth_failed",
+            "message": f"Slack authentication failed for {slack_method} via {access_path}",
+            "slack_method": slack_method,
+            "access_path": access_path,
+            "error_code": error_code,
+            "status_code": status_code,
+            "requested_channel": requested_channel,
+            "resolved_channel": resolved_channel,
+        }
+        self.payload = payload
+        super().__init__(json.dumps(payload, sort_keys=True))
 
 class SlackClient:
     """Slack API client.
@@ -32,16 +61,25 @@ class SlackClient:
     _MAX_PAGE_SIZE = 200
     _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
     _NUMERIC_TS_RE = re.compile(r"^\d+(?:\.\d+)?$")
+    _AUTH_ERROR_CODES: ClassVar[frozenset[str]] = frozenset({
+        "account_inactive",
+        "invalid_auth",
+        "missing_scope",
+        "no_permission",
+        "not_allowed_token_type",
+        "not_authed",
+        "token_revoked",
+    })
 
     def __init__(self, bot_token: str | None = None, search_token: str | None = None):
-        token = bot_token or os.environ.get("SLACK_BOT_TOKEN", "")
+        token = (bot_token or secret("SLACK_BOT_TOKEN", default="")).strip()
         if not token:
             raise RuntimeError(
                 "SLACK_BOT_TOKEN not set.\n"
                 "Get one at https://api.slack.com/apps → OAuth & Permissions → Bot User OAuth Token"
             )
         self.token = token
-        self.search_token = (search_token or os.environ.get("SLACK_SEARCH_TOKEN", "")).strip()
+        self.search_token = (search_token or secret("SLACK_SEARCH_TOKEN", default="")).strip()
         self._client = WebClient(token=token)
         self._search_client = WebClient(token=self.search_token) if self.search_token else self._client
         self._user_cache: dict[str, str] = {}
@@ -57,6 +95,38 @@ class SlackClient:
         """Detect Slack rate limit responses from either payload or status code."""
         status_code = getattr(error.response, "status_code", None)
         return status_code == 429 or error.response.get("error") == "ratelimited"
+
+    def _slack_error_code(self, error: SlackApiError) -> str:
+        """Return Slack's machine-readable error code when present."""
+        return str(error.response.get("error") or "unknown_error")
+
+    def _is_auth_error(self, error: SlackApiError) -> bool:
+        """Classify auth and scope failures so callers can choose better fallbacks."""
+        status_code = getattr(error.response, "status_code", None)
+        return status_code in {401, 403} or self._slack_error_code(error) in self._AUTH_ERROR_CODES
+
+    def _raise_slack_api_error(
+        self,
+        error: SlackApiError,
+        *,
+        slack_method: str,
+        access_path: str,
+        requested_channel: str | None = None,
+        resolved_channel: str | None = None,
+    ) -> None:
+        """Raise auth failures as structured payloads; keep other errors unchanged."""
+        error_code = self._slack_error_code(error)
+        status_code = getattr(error.response, "status_code", None)
+        if self._is_auth_error(error):
+            raise SlackAuthError(
+                slack_method=slack_method,
+                access_path=access_path,
+                error_code=error_code,
+                status_code=status_code,
+                requested_channel=requested_channel,
+                resolved_channel=resolved_channel,
+            ) from error
+        raise RuntimeError(f"Slack API error: {error_code}") from error
 
     def _retry_on_ratelimit(
         self,
@@ -134,7 +204,7 @@ class SlackClient:
             ) from exc
 
         if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
+            parsed = parsed.replace(tzinfo=UTC)
         return self._format_ts(parsed.timestamp())
 
     def _message_permalink(self, channel_id: str, ts: str) -> str:
@@ -348,7 +418,11 @@ class SlackClient:
                     exclude_archived=True,
                 )
             except SlackApiError as e:
-                raise RuntimeError(f"Slack API error: {e.response['error']}")
+                self._raise_slack_api_error(
+                    e,
+                    slack_method="conversations.list",
+                    access_path="bot_token",
+                )
 
             for channel in response.get("channels", []):
                 if channel.get("is_member", False):
@@ -662,7 +736,13 @@ class SlackClient:
                 cursor=cursor,
             )
         except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
+            self._raise_slack_api_error(
+                e,
+                slack_method="conversations.history",
+                access_path="bot_token",
+                requested_channel=channel,
+                resolved_channel=channel_id,
+            )
 
         messages = [self._serialize_message(msg, channel_id, user_cache) for msg in raw_messages]
 
@@ -747,7 +827,13 @@ class SlackClient:
                 cursor=cursor,
             )
         except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
+            self._raise_slack_api_error(
+                e,
+                slack_method="conversations.replies",
+                access_path="bot_token",
+                requested_channel=channel,
+                resolved_channel=channel_id,
+            )
 
         messages = [self._serialize_message(msg, channel_id, user_cache) for msg in raw_messages]
 
@@ -859,7 +945,11 @@ class SlackClient:
                     exclude_archived=True,
                 )
             except SlackApiError as e:
-                raise RuntimeError(f"Slack API error: {e.response['error']}")
+                self._raise_slack_api_error(
+                    e,
+                    slack_method="conversations.list",
+                    access_path="bot_token",
+                )
 
             for channel in response.get("channels", []):
                 channels.append(
@@ -886,7 +976,11 @@ class SlackClient:
         try:
             response = self._client.users_list(limit=limit)
         except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
+            self._raise_slack_api_error(
+                e,
+                slack_method="users.list",
+                access_path="bot_token",
+            )
 
         users = []
         for user in response.get("members", []):
@@ -928,7 +1022,13 @@ class SlackClient:
                     kwargs["cursor"] = cursor
                 response = self._retry_on_ratelimit(self._client.conversations_members, **kwargs)
             except SlackApiError as e:
-                raise RuntimeError(f"Slack API error: {e.response['error']}")
+                self._raise_slack_api_error(
+                    e,
+                    slack_method="conversations.members",
+                    access_path="bot_token",
+                    requested_channel=channel,
+                    resolved_channel=channel_id,
+                )
 
             member_ids.extend(response.get("members", []))
 
@@ -1003,7 +1103,11 @@ class SlackClient:
                 method_key="users.info",
             )
         except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
+            self._raise_slack_api_error(
+                e,
+                slack_method="users.info",
+                access_path="bot_token",
+            )
 
         user = response.get("user", {})
         profile = user.get("profile", {})
@@ -1103,7 +1207,7 @@ class SlackClient:
                 "permalink": f"https://slack.com/archives/{channel_id}/p{response.get('ts', '').replace('.', '')}",
             }
         except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
+            raise RuntimeError(f"Slack API error: {e.response['error']}") from e
 
 
     def upload_file(
@@ -1162,7 +1266,13 @@ class SlackClient:
                 "url": file_info.get("url_private", ""),
             }
         except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
+            self._raise_slack_api_error(
+                e,
+                slack_method="files.upload_v2",
+                access_path="file_upload",
+                requested_channel=channel,
+                resolved_channel=channel_id,
+            )
 
 
     def list_usergroups(self) -> list[dict]:
@@ -1170,7 +1280,11 @@ class SlackClient:
         try:
             response = self._client.usergroups_list(include_users=True)
         except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
+            self._raise_slack_api_error(
+                e,
+                slack_method="usergroups.list",
+                access_path="bot_token",
+            )
 
         groups = []
         for group in response.get("usergroups", []):
@@ -1210,7 +1324,7 @@ class SlackClient:
                 "name": group.get("name", ""),
             }
         except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
+            raise RuntimeError(f"Slack API error: {e.response['error']}") from e
 
 
     def update_usergroup_users(self, group_id_or_handle: str, user_ids: list[str]) -> dict:
@@ -1235,7 +1349,7 @@ class SlackClient:
                 "users": response.get("users", user_ids),
             }
         except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
+            raise RuntimeError(f"Slack API error: {e.response['error']}") from e
 
 
     def get_message_files(self, channel_id: str, message_ts: str) -> list[dict]:
@@ -1248,7 +1362,13 @@ class SlackClient:
                 inclusive=True,
             )
         except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
+            self._raise_slack_api_error(
+                e,
+                slack_method="conversations.replies",
+                access_path="bot_token",
+                requested_channel=channel_id,
+                resolved_channel=channel_id,
+            )
 
         messages = response.get("messages", [])
         if not messages:
@@ -1281,9 +1401,8 @@ class SlackClient:
 
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {self.token}"})
-        with urllib.request.urlopen(req) as response:
-            with open(output_path, "wb") as f:
-                f.write(response.read())
+        with urllib.request.urlopen(req) as response, open(output_path, "wb") as f:
+            f.write(response.read())
 
         return output_path
 
@@ -1311,7 +1430,11 @@ class SlackClient:
                 count=max_results,
             )
         except SlackApiError as e:
-            raise RuntimeError(f"Slack API error: {e.response['error']}")
+            self._raise_slack_api_error(
+                e,
+                slack_method="files.list",
+                access_path="bot_token",
+            )
 
         files = response.get("files", [])
         query_lower = query.lower()
