@@ -8,9 +8,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     git curl wget ca-certificates gnupg lsb-release sudo \
     build-essential pkg-config cmake ninja-build \
+    ffmpeg ghostscript dvisvgm \
     libssl-dev libclang-dev protobuf-compiler \
+    libcairo2-dev libpango1.0-dev \
     ripgrep fd-find jq tree tmux unzip xz-utils gettext-base \
     python3 python3-pip python3-venv python3-dev \
+    texlive texlive-latex-base texlive-latex-extra \
+    texlive-latex-recommended texlive-fonts-recommended \
+    texlive-plain-generic texlive-science tipa cm-super \
     procps htop \
     && ln -sf /usr/bin/fdfind /usr/local/bin/fd
 
@@ -70,10 +75,13 @@ ENV PATH="/home/agent/.cargo/bin:/home/agent/.local/bin:/home/agent/.foundry/bin
 
 ARG FOUNDRY_VERSION=v1.7.0
 ARG AMP_CLI_VERSION=0.0.1774529752-g94f44d
+ARG MANIM_VERSION=0.20.1
 
 # ── Agent-scoped toolchains ─────────────────────────────────────────────────
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+RUN uv tool install "manim==${MANIM_VERSION}" \
+    && manim --version
 RUN curl -L https://foundry.paradigm.xyz | bash \
     && /home/agent/.foundry/bin/foundryup --install ${FOUNDRY_VERSION}
 RUN set -eux; \
