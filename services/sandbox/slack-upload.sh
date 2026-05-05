@@ -16,37 +16,54 @@ if [ ! -f "$FILE" ]; then
   exit 1
 fi
 
-U="${CENTAUR_API_URL:-http://api:8000}"
 CHANNEL="${SLACK_CHANNEL:?SLACK_CHANNEL not set}"
 THREAD="${SLACK_THREAD_TS:?SLACK_THREAD_TS not set}"
 FILENAME="$(basename "$FILE")"
-B64="$(base64 -w0 "$FILE")"
 
-BODY=$(jq -nc \
-  --arg content_base64 "$B64" \
-  --arg filename "$FILENAME" \
-  --arg comment "$COMMENT" \
-  --arg channel "$CHANNEL" \
-  --arg thread_ts "$THREAD" \
-  '{content_base64: $content_base64, filename: $filename, comment: $comment, channel: $channel, thread_ts: $thread_ts}')
-
-_KEY="${CENTAUR_API_KEY:-}"
-if [ -f /home/agent/.api_key ]; then
-  _KEY="$(cat /home/agent/.api_key)"
-fi
-AUTH_ARGS=()
-if [ -n "${_KEY}" ]; then
-  AUTH_ARGS=(-H "Authorization: Bearer ${_KEY}")
-fi
-
-RESP=$(curl -sf "${AUTH_ARGS[@]}" -H "Content-Type: application/json" -d "$BODY" "$U/tools/slack/upload_file") || {
-  echo "Error: upload failed" >&2
-  exit 1
+extract_link() {
+  local response="$1"
+  local json_link
+  json_link="$(printf '%s' "$response" | jq -r '.permalink // .file.permalink // empty' 2>/dev/null || true)"
+  if [[ -n "$json_link" ]]; then
+    printf '%s\n' "$json_link"
+    return
+  fi
+  if [[ "$response" =~ (https://slack\.com/archives/[^[:space:]\"]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  fi
 }
 
-LINK=$(echo "$RESP" | jq -r '.permalink // .file.permalink // empty' 2>/dev/null)
-if [ -n "$LINK" ]; then
+run_upload() {
+  local body="$1"
+
+  set +e
+  RESP="$(call slack upload_file "$body" 2>&1)"
+  STATUS=$?
+  set -e
+
+  LINK="$(extract_link "$RESP")"
+}
+
+B64="$(base64 < "$FILE" | tr -d '\n')"
+BODY=$(jq -nc \
+  --arg channel "$CHANNEL" \
+  --arg content_base64 "$B64" \
+  --arg filename "$FILENAME" \
+  --arg title "$FILENAME" \
+  --arg comment "$COMMENT" \
+  --arg thread_ts "$THREAD" \
+  '{channel: $channel, content_base64: $content_base64, filename: $filename, title: $title, comment: $comment, thread_ts: $thread_ts}')
+
+run_upload "$BODY"
+if [ "$STATUS" -eq 0 ] && [ -n "$LINK" ]; then
   echo "$LINK"
-else
-  echo "$RESP"
+  exit 0
 fi
+
+echo "Error: upload failed" >&2
+jq -nc \
+  --arg file_path "$FILE" \
+  --argjson status "$STATUS" \
+  --arg response "$RESP" \
+  '{error: "upload_failed", file_path: $file_path, status: $status, response: $response}' >&2
+exit 1
