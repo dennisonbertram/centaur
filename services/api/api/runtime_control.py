@@ -1439,7 +1439,7 @@ async def _requeue_execution_after_raw_harness_auth_failure(
     thread_key: str,
     metadata: dict[str, Any],
     combined_error: str,
-) -> None:
+) -> bool:
     next_attempt = _raw_harness_auth_retry_attempt(metadata) + 1
     retry_metadata = {
         _RAW_HARNESS_AUTH_RETRY_METADATA_KEY: {
@@ -1454,9 +1454,11 @@ async def _requeue_execution_after_raw_harness_auth_failure(
         thread_key,
         reason="raw_harness_auth_retry",
     )
-    await pool.execute(
+    update_result = await pool.execute(
         "UPDATE agent_execution_requests SET "
         "status = 'queued', "
+        # Force the replacement runtime to receive the original user turn; the
+        # previous runtime failed before it could complete the turn.
         "durable_turn_id = NULL, "
         "terminal_reason = NULL, "
         "result_text = NULL, "
@@ -1474,6 +1476,18 @@ async def _requeue_execution_after_raw_harness_auth_failure(
         canonical_json(retry_metadata),
         execution_id,
     )
+    try:
+        updated_rows = int(str(update_result).split()[-1])
+    except (IndexError, ValueError):
+        updated_rows = 0
+    if updated_rows != 1:
+        log.warning(
+            "execution_raw_harness_auth_requeue_skipped",
+            execution_id=execution_id,
+            thread_key=thread_key,
+            update_result=update_result,
+        )
+        return False
     await append_execution_state(
         pool,
         execution_id=execution_id,
@@ -1488,6 +1502,7 @@ async def _requeue_execution_after_raw_harness_auth_failure(
         retry_attempt=next_attempt,
     )
     _worker_wake.set()
+    return True
 
 
 async def _claim_next_execution(pool) -> dict[str, Any] | None:

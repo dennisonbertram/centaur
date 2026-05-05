@@ -799,7 +799,10 @@ async def test_worker_requeues_raw_harness_auth_error_once_on_fresh_runtime(db_p
         assert queued["terminal_reason"] is None
         assert queued["result_text"] is None
         assert queued["error_text"] is None
-        assert queued["metadata"]["control_plane_retry"] == {
+        metadata = queued["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        assert metadata["control_plane_retry"] == {
             "reason": "harness_auth",
             "attempt": 1,
             "max_attempts": 1,
@@ -958,11 +961,14 @@ async def test_worker_sanitizes_raw_harness_auth_failure_after_retry(db_pool):
         execution_id,
     )
     assert outbox is not None
-    assert outbox["final_payload"]["result_text"] == (
+    final_payload = outbox["final_payload"]
+    if isinstance(final_payload, str):
+        final_payload = json.loads(final_payload)
+    assert final_payload["result_text"] == (
         "The agent hit a temporary runtime startup issue and could not complete the turn. "
         "Please retry in a moment."
     )
-    assert outbox["final_payload"]["error_text"] == "Unauthorized Check your access token."
+    assert final_payload["error_text"] == "Unauthorized Check your access token."
     stop_session_mock.assert_awaited_once_with(thread_key)
 
 
