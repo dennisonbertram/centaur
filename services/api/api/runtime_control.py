@@ -89,6 +89,15 @@ _worker_wake = asyncio.Event()
 _recover_stale_running_lock = asyncio.Lock()
 _last_recover_stale_running_at = 0.0
 
+_RAW_HARNESS_AUTH_SIGNATURE = "Unauthorized Check your access token."
+_RAW_HARNESS_AUTH_RETRY_LIMIT = 1
+_RAW_HARNESS_AUTH_RETRY_METADATA_KEY = "control_plane_retry"
+_RAW_HARNESS_AUTH_RETRY_REASON = "harness_auth"
+_RAW_HARNESS_AUTH_SAFE_FAILURE_MESSAGE = (
+    "The agent hit a temporary runtime startup issue and could not complete the turn. "
+    "Please retry in a moment."
+)
+
 
 class ControlPlaneError(RuntimeError):
     def __init__(self, code: str, message: str, status_code: int = 409):
@@ -113,6 +122,26 @@ def decode_jsonb(value: Any, fallback: Any) -> Any:
         with contextlib.suppress(json.JSONDecodeError, TypeError):
             return json.loads(value)
     return fallback
+
+
+def _matches_raw_harness_auth_failure(*values: str | None) -> bool:
+    expected = _RAW_HARNESS_AUTH_SIGNATURE.casefold()
+    for value in values:
+        if isinstance(value, str) and value.strip().casefold() == expected:
+            return True
+    return False
+
+
+def _raw_harness_auth_retry_attempt(metadata: dict[str, Any]) -> int:
+    retry_metadata = metadata.get(_RAW_HARNESS_AUTH_RETRY_METADATA_KEY)
+    if not isinstance(retry_metadata, dict):
+        return 0
+    if str(retry_metadata.get("reason") or "") != _RAW_HARNESS_AUTH_RETRY_REASON:
+        return 0
+    attempt = retry_metadata.get("attempt")
+    with contextlib.suppress(TypeError, ValueError):
+        return max(int(attempt), 0)
+    return 0
 
 
 def prompt_identity(
@@ -1413,6 +1442,79 @@ async def _stop_execution_session(thread_key: str, *, reason: str) -> None:
         )
 
 
+async def _requeue_execution_after_raw_harness_auth_failure(
+    pool,
+    *,
+    execution_id: str,
+    thread_key: str,
+    metadata: dict[str, Any],
+    combined_error: str,
+) -> bool:
+    next_attempt = _raw_harness_auth_retry_attempt(metadata) + 1
+    retry_metadata = {
+        _RAW_HARNESS_AUTH_RETRY_METADATA_KEY: {
+            "reason": _RAW_HARNESS_AUTH_RETRY_REASON,
+            "attempt": next_attempt,
+            "max_attempts": _RAW_HARNESS_AUTH_RETRY_LIMIT,
+            "fresh_runtime": True,
+            "last_error": combined_error,
+        }
+    }
+    await _stop_execution_session(
+        thread_key,
+        reason="raw_harness_auth_retry",
+    )
+    update_result = await pool.execute(
+        "UPDATE agent_execution_requests SET "
+        "status = 'queued', "
+        # Force the replacement runtime to receive the original user turn; the
+        # previous runtime failed before it could complete the turn.
+        "durable_turn_id = NULL, "
+        "terminal_reason = NULL, "
+        "result_text = NULL, "
+        "error_text = NULL, "
+        "completed_at = NULL, "
+        "claimed_at = NULL, "
+        "worker_id = NULL, "
+        "worker_lease_expires_at = NULL, "
+        "last_progress_at = NOW(), "
+        "silence_deadline_at = NOW() + make_interval(secs => $1::double precision), "
+        "metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb, "
+        "updated_at = NOW() "
+        "WHERE execution_id = $3 AND status = 'running'",
+        float(EXECUTION_SILENCE_TIMEOUT_S),
+        canonical_json(retry_metadata),
+        execution_id,
+    )
+    try:
+        updated_rows = int(str(update_result).split()[-1])
+    except (IndexError, ValueError):
+        updated_rows = 0
+    if updated_rows != 1:
+        log.warning(
+            "execution_raw_harness_auth_requeue_skipped",
+            execution_id=execution_id,
+            thread_key=thread_key,
+            update_result=update_result,
+        )
+        return False
+    await append_execution_state(
+        pool,
+        execution_id=execution_id,
+        thread_key=thread_key,
+        status="queued",
+        extra={"retry": retry_metadata[_RAW_HARNESS_AUTH_RETRY_METADATA_KEY]},
+    )
+    log.warning(
+        "execution_requeued_after_raw_harness_auth_failure",
+        execution_id=execution_id,
+        thread_key=thread_key,
+        retry_attempt=next_attempt,
+    )
+    _worker_wake.set()
+    return True
+
+
 async def _claim_next_execution(pool) -> dict[str, Any] | None:
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -1514,6 +1616,9 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
     assignment_generation = int(row["assignment_generation"])
     execution_status = str(row.get("status") or "running")
     delivery = decode_jsonb(row.get("delivery"), {})
+    execution_metadata = decode_jsonb(row.get("metadata"), {})
+    if not isinstance(execution_metadata, dict):
+        execution_metadata = {}
 
     if execution_status == "cancel_requested":
         await _stop_execution_session(
@@ -2001,6 +2106,35 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
     if is_error:
         terminal_reason = "harness_error"
         combined_error = (error_text or result_text or "harness_error").strip()
+        if _matches_raw_harness_auth_failure(error_text, result_text, combined_error):
+            retry_attempt = _raw_harness_auth_retry_attempt(execution_metadata)
+            if retry_attempt < _RAW_HARNESS_AUTH_RETRY_LIMIT:
+                await _requeue_execution_after_raw_harness_auth_failure(
+                    pool,
+                    execution_id=execution_id,
+                    thread_key=thread_key,
+                    metadata=execution_metadata,
+                    combined_error=combined_error,
+                )
+                return
+            terminal_reason = "harness_auth_failed"
+            await _stop_execution_session(
+                thread_key,
+                reason="raw_harness_auth_failed",
+            )
+            log.warning(
+                "execution_raw_harness_auth_failure_retry_exhausted",
+                execution_id=execution_id,
+                thread_key=thread_key,
+                retry_attempt=retry_attempt,
+            )
+            await _finalize_execution(
+                status="failed_permanent",
+                terminal_reason=terminal_reason,
+                result_text=_RAW_HARNESS_AUTH_SAFE_FAILURE_MESSAGE,
+                error_text=combined_error,
+            )
+            return
         if "timed out while reconnecting" in combined_error.lower():
             terminal_reason = "amp_reconnect_timeout"
         await _finalize_execution(
