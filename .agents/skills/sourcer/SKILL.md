@@ -113,6 +113,13 @@ Prefer multiple narrow searches over one broad search. Start with the hard filte
 LinkedIn:
 - Use `browser-use` if available to search profiles and capture current title, company, location, and LinkedIn URL.
 - If browser automation is unavailable, use public web search and Harmonic as a fallback, but mark the source confidence lower in notes.
+- Every LinkedIn candidate must be read in this fixed order before they can stay in the pool:
+  1. Header gate: current title, current company, and displayed location. If the geography is outside the hard constraint, or the title is obviously off-level for the search, reject immediately.
+  2. Experience gate: current-role scope first, then the last 2-4 roles. Estimate total years of experience, distinguish hands-on from manager-only scope, and reject anyone clearly too senior, too junior, or wrong-shape for the role.
+  3. Education gate: school, degree, and technical foundation. If the search asks for strong school signal, exclude weak or missing school evidence unless there is equivalent technical proof the user would clearly accept.
+  4. Prior-company gate: prior employers, talent density, and timing windows. Reject weak company-history profiles instead of hoping the score will sort them out later.
+  5. Supporting evidence last: only after the candidate survives steps 1-4 should you use GitHub, X, or Harmonic to enrich or disambiguate.
+- Do not jump straight to an interesting logo, school, or bio line before checking header and experience. Hard filters come first.
 
 GitHub:
 - Use browser automation if available to inspect profiles, pinned repos, contribution recency, and obvious location clues.
@@ -138,6 +145,17 @@ For each candidate, collect:
 - `x_handle`
 - `github_url`
 - `notes`
+- `linkedin_review.read_order_version`
+- `linkedin_review.years_experience`
+- `linkedin_review.header_summary`
+- `linkedin_review.experience_summary`
+- `linkedin_review.education_summary`
+- `linkedin_review.company_history_summary`
+- `linkedin_review.location_verdict`
+- `linkedin_review.seniority_verdict`
+- `linkedin_review.scope_verdict`
+- `linkedin_review.school_signal_verdict`
+- `linkedin_review.company_signal_verdict`
 - `scores.title_correspondence`
 - `scores.educational_foundation`
 - `scores.professional_trajectory`
@@ -145,6 +163,7 @@ For each candidate, collect:
 - `scores.timing_window`
 
 Keep the notes factual. Include why the person is interesting, which hard filters they satisfy, and any uncertainty.
+For any candidate with a LinkedIn profile, the `linkedin_review` block is required. The publisher validates it and should fail fast if you skipped the fixed read order.
 
 7. Enforce hard filters before scoring.
 
@@ -157,6 +176,8 @@ Feedback-driven hard filters:
 - When the user asks for stronger hands-on depth, exclude candidates whose evidence is mostly product, strategy, or people management.
 - When the user asks for stronger school signal, exclude candidates without the requested academic foundation or equivalent technical proof.
 - When the user asks for leaders, exclude IC-only profiles unless the user explicitly broadened the scope.
+- Exclude candidates whose LinkedIn review does not end with `location_verdict=pass`, `seniority_verdict=pass`, and `scope_verdict=pass`.
+- Exclude candidates whose LinkedIn review leaves `school_signal_verdict` or `company_signal_verdict` at `weak` or `unclear`. Default to a smaller, cleaner slate instead of carrying weak-signal profiles forward.
 
 Paradigm portfolio exclusion:
 - Pull the current portfolio company list from `call paradigmdb db_organizations '{"limit":200}'`.
@@ -263,6 +284,19 @@ The publishing script accepts either a bare array or an object with `candidates`
       "email": "jane@example.com",
       "location": "New York, NY",
       "notes": "Ex-Stripe 2015 hire. Followed by 2 Paradigm team accounts on X.",
+      "linkedin_review": {
+        "read_order_version": "linkedin_v1",
+        "years_experience": 9,
+        "header_summary": "Staff Backend Engineer at Example in New York, NY.",
+        "experience_summary": "About 9 years total. Recent roles are backend/platform-focused and still hands-on.",
+        "education_summary": "BS in Computer Science from Stanford.",
+        "company_history_summary": "Example, Stripe (2015 hire), and Segment during high-growth years.",
+        "location_verdict": "pass",
+        "seniority_verdict": "pass",
+        "scope_verdict": "pass",
+        "school_signal_verdict": "strong",
+        "company_signal_verdict": "strong"
+      },
       "scores": {
         "title_correspondence": 4.5,
         "educational_foundation": 4,
@@ -287,3 +321,4 @@ The publishing script accepts either a bare array or an object with `candidates`
 - Do not pad a refined slate with weak candidates just to hit the previous count.
 - Do not treat retry feedback as informal commentary; convert it into the inclusion and exclusion checklist before re-sourcing.
 - If browser automation is unavailable, say so explicitly and continue with the best public-web and tool-backed fallback.
+- Do not publish a LinkedIn candidate unless their `linkedin_review` explicitly shows the fixed read order and all five verdicts are complete.

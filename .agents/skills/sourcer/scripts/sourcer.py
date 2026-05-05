@@ -58,6 +58,22 @@ CRITERION_ALIASES = {
 
 MAX_SUBSCORE = 5.0
 SPREADSHEET_URL_RE = re.compile(r"/spreadsheets/d/([a-zA-Z0-9-_]+)")
+LINKEDIN_REVIEW_VERSION = "linkedin_v1"
+LINKEDIN_REVIEW_TEXT_FIELDS = (
+    "header_summary",
+    "experience_summary",
+    "education_summary",
+    "company_history_summary",
+)
+LINKEDIN_REVIEW_HARD_VERDICTS = {
+    "location_verdict": {"pass"},
+    "seniority_verdict": {"pass"},
+    "scope_verdict": {"pass"},
+}
+LINKEDIN_REVIEW_SIGNAL_VERDICTS = {
+    "school_signal_verdict": {"strong", "acceptable"},
+    "company_signal_verdict": {"strong", "acceptable"},
+}
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -204,13 +220,72 @@ def _field(candidate: dict[str, Any], *names: str, default: str = "") -> str:
     return default
 
 
+def _validate_linkedin_review(candidate: dict[str, Any], linkedin_url: str) -> dict[str, Any] | None:
+    if not linkedin_url:
+        return None
+
+    candidate_name = _field(candidate, "name", "full_name", default="unknown")
+    review = candidate.get("linkedin_review")
+    if not isinstance(review, dict):
+        _fail(
+            f"Candidate '{candidate_name}' has a LinkedIn URL but is missing the required "
+            "'linkedin_review' block."
+        )
+
+    version = _field(review, "read_order_version")
+    if version != LINKEDIN_REVIEW_VERSION:
+        _fail(
+            f"Candidate '{candidate_name}' must set linkedin_review.read_order_version to "
+            f"'{LINKEDIN_REVIEW_VERSION}'."
+        )
+
+    years_experience = _coerce_number(review.get("years_experience"))
+    if years_experience is None or years_experience < 0:
+        _fail(
+            f"Candidate '{candidate_name}' must include a non-negative linkedin_review.years_experience value."
+        )
+
+    normalized_review: dict[str, Any] = {
+        "read_order_version": version,
+        "years_experience": years_experience,
+    }
+
+    for field in LINKEDIN_REVIEW_TEXT_FIELDS:
+        value = _field(review, field)
+        if not value:
+            _fail(f"Candidate '{candidate_name}' is missing linkedin_review.{field}.")
+        normalized_review[field] = value
+
+    for field, allowed in LINKEDIN_REVIEW_HARD_VERDICTS.items():
+        value = _field(review, field).lower()
+        if value not in allowed:
+            _fail(
+                f"Candidate '{candidate_name}' has linkedin_review.{field}={value or 'missing'}. "
+                f"Expected one of {sorted(allowed)}."
+            )
+        normalized_review[field] = value
+
+    for field, allowed in LINKEDIN_REVIEW_SIGNAL_VERDICTS.items():
+        value = _field(review, field).lower()
+        if value not in allowed:
+            _fail(
+                f"Candidate '{candidate_name}' has linkedin_review.{field}={value or 'missing'}. "
+                f"Expected one of {sorted(allowed)}."
+            )
+        normalized_review[field] = value
+
+    return normalized_review
+
+
 def _normalize_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     score, breakdown, score_method = _compute_weighted_score(candidate)
+    linkedin = _field(candidate, "linkedin", "linkedin_url")
+    linkedin_review = _validate_linkedin_review(candidate, linkedin)
     normalized = {
         "name": _field(candidate, "name", "full_name", default="Unknown"),
         "title": _field(candidate, "title", "current_title"),
         "company": _field(candidate, "company", "current_company"),
-        "linkedin": _field(candidate, "linkedin", "linkedin_url"),
+        "linkedin": linkedin,
         "email": _field(candidate, "email"),
         "location": _field(candidate, "location"),
         "notes": _field(candidate, "notes"),
@@ -219,15 +294,24 @@ def _normalize_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
     }
     if breakdown is not None:
         normalized["score_breakdown"] = breakdown
+    if linkedin_review is not None:
+        normalized["linkedin_review"] = linkedin_review
     return normalized
 
 
 def _prepare_candidates(candidates: list[dict[str, Any]], top_n: int | None) -> list[dict[str, Any]]:
-    normalized = [_normalize_candidate(candidate) for candidate in candidates]
-    normalized.sort(key=lambda candidate: (-candidate["score"], candidate["name"].lower()))
+    ranked = [
+        {
+            "candidate": candidate,
+            "score": _compute_weighted_score(candidate)[0],
+            "name": _field(candidate, "name", "full_name", default="Unknown").lower(),
+        }
+        for candidate in candidates
+    ]
+    ranked.sort(key=lambda item: (-item["score"], item["name"]))
     if top_n is not None:
-        return normalized[:top_n]
-    return normalized
+        ranked = ranked[:top_n]
+    return [_normalize_candidate(item["candidate"]) for item in ranked]
 
 
 def _sheet_rows(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
