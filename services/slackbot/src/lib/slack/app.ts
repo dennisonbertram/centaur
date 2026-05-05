@@ -37,8 +37,6 @@ type SlackMessageEvent = {
   thread_ts?: string;
   team?: string;
   team_id?: string;
-  user_team?: string;
-  source_team?: string;
   files?: SlackFile[];
 };
 
@@ -73,7 +71,7 @@ type SlackHistoryMessage = {
   id?: string;
   text: string;
   formatted?: Root;
-  raw?: { ts?: string; team_id?: string; team?: string; user_team?: string; source_team?: string };
+  raw?: { ts?: string; team_id?: string; team?: string };
   author: { isMe: boolean; isBot: boolean; userId: string };
   attachments?: BotAttachment[];
 };
@@ -117,14 +115,6 @@ function isIgnoredMessageSubtype(subtype?: string): boolean {
     "ekm_access_denied",
     "tombstone",
   ]).has(subtype || "");
-}
-
-function recipientTeamIdFromEvent(event: SlackMessageEvent, fallbackTeamId?: string): string | undefined {
-  return event.user_team
-    || event.source_team
-    || event.team_id
-    || event.team
-    || fallbackTeamId;
 }
 
 class NextSlackReceiver implements Receiver {
@@ -348,8 +338,6 @@ class WebClientSlackAdapter implements SlackAdapter {
         ts: event.ts,
         team_id: event.team_id ?? event.team,
         team: event.team,
-        user_team: event.user_team,
-        source_team: event.source_team,
       },
       author: {
         isMe: event.user === this.botUserId || event.bot_id === this.botUserId,
@@ -636,7 +624,7 @@ export class BoltSlackApp {
 
     const thread = this.createThread(threadId, {
       recipientUserId: event.user,
-      recipientTeamId: recipientTeamIdFromEvent(event, teamId),
+      recipientTeamId: event.team_id ?? event.team ?? teamId,
     });
     const message = await this.adapter.toBotMessage(threadId, {
       ...event,
