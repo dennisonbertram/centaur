@@ -1,13 +1,14 @@
 """GSuite API client for Gmail, Calendar, and Drive."""
 
+import base64
 import json
 import os
-import base64
+import re
 from email.mime.text import MIMEText
 from pathlib import Path
 
-from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
@@ -1307,6 +1308,170 @@ def drive_export(file_id: str, export_format: str = "txt", output_path: str | No
 # Docs functions
 
 
+DEFAULT_DOCS_BULLET_PRESET = "BULLET_DISC_CIRCLE_SQUARE"
+VALID_DOCS_BULLET_PRESETS = {
+    "BULLET_ARROW3D_CIRCLE_SQUARE",
+    "BULLET_ARROW_DIAMOND_DISC",
+    "BULLET_CHECKBOX",
+    "BULLET_DIAMOND_CIRCLE_SQUARE",
+    "BULLET_DIAMONDX_ARROW3D_SQUARE",
+    "BULLET_DIAMONDX_HOLLOWDIAMOND_SQUARE",
+    "BULLET_DISC_CIRCLE_SQUARE",
+    "BULLET_LEFTTRIANGLE_DIAMOND_DISC",
+    "BULLET_STAR_CIRCLE_SQUARE",
+    "NUMBERED_DECIMAL_ALPHA_ROMAN",
+    "NUMBERED_DECIMAL_ALPHA_ROMAN_PARENS",
+    "NUMBERED_DECIMAL_NESTED",
+    "NUMBERED_UPPERALPHA_ALPHA_ROMAN",
+    "NUMBERED_UPPERROMAN_UPPERALPHA_DECIMAL",
+    "NUMBERED_ZERODECIMAL_ALPHA_ROMAN",
+}
+
+
+def _utf16_len(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _validate_docs_bullet_match_prefix(match_prefix: str) -> None:
+    if not match_prefix:
+        raise ValueError("match_prefix must not be empty")
+
+
+def _validate_docs_bullets_args(match_prefix: str, bullet_preset: str) -> None:
+    _validate_docs_bullet_match_prefix(match_prefix)
+
+    if bullet_preset not in VALID_DOCS_BULLET_PRESETS:
+        valid_presets = ", ".join(sorted(VALID_DOCS_BULLET_PRESETS))
+        raise ValueError(
+            f"Unsupported bullet_preset {bullet_preset!r}. Expected one of: {valid_presets}"
+        )
+
+
+def _iter_document_tabs(tabs: list[dict]):
+    for tab in tabs:
+        tab_id = tab.get("tabProperties", {}).get("tabId")
+        body = tab.get("documentTab", {}).get("body", {})
+        yield tab_id, body.get("content", [])
+
+        yield from _iter_document_tabs(tab.get("childTabs", []))
+
+
+def _paragraph_text(paragraph: dict) -> str:
+    text_parts = []
+    for element in paragraph.get("elements", []):
+        if "textRun" in element:
+            text_parts.append(element["textRun"].get("content", ""))
+    return "".join(text_parts)
+
+
+def _collect_document_paragraphs_from_content(
+    content: list[dict],
+    tab_id: str | None,
+    paragraphs: list[dict],
+    paragraph_indices: dict[str | None, int],
+) -> None:
+    for element in content:
+        if "paragraph" in element:
+            paragraph_index = paragraph_indices.get(tab_id, 0)
+            paragraph_indices[tab_id] = paragraph_index + 1
+            paragraph = element["paragraph"]
+            paragraphs.append(
+                {
+                    "tab_id": tab_id,
+                    "paragraph_index": paragraph_index,
+                    "start_index": element.get("startIndex", 0),
+                    "end_index": element.get("endIndex", 0),
+                    "text": _paragraph_text(paragraph),
+                    "has_bullet": "bullet" in paragraph,
+                }
+            )
+        elif "table" in element:
+            for row in element["table"].get("tableRows", []):
+                for cell in row.get("tableCells", []):
+                    _collect_document_paragraphs_from_content(
+                        cell.get("content", []),
+                        tab_id,
+                        paragraphs,
+                        paragraph_indices,
+                    )
+        elif "tableOfContents" in element:
+            _collect_document_paragraphs_from_content(
+                element["tableOfContents"].get("content", []),
+                tab_id,
+                paragraphs,
+                paragraph_indices,
+            )
+
+
+def _get_document_paragraphs(document: dict) -> list[dict]:
+    paragraphs: list[dict] = []
+    paragraph_indices: dict[str | None, int] = {}
+
+    if document.get("tabs"):
+        for tab_id, content in _iter_document_tabs(document["tabs"]):
+            _collect_document_paragraphs_from_content(
+                content, tab_id, paragraphs, paragraph_indices
+            )
+    else:
+        _collect_document_paragraphs_from_content(
+            document.get("body", {}).get("content", []),
+            None,
+            paragraphs,
+            paragraph_indices,
+        )
+
+    return paragraphs
+
+
+def _build_docs_bullet_matches(
+    document: dict,
+    match_prefix: str,
+    tab_id: str | None = None,
+) -> tuple[list[dict], int]:
+    _validate_docs_bullet_match_prefix(match_prefix)
+
+    matches: list[dict] = []
+    already_bulleted = 0
+    prefix_pattern = re.compile(rf"^(?P<tabs>\t*)(?P<spaces> *){re.escape(match_prefix)}")
+
+    for paragraph in _get_document_paragraphs(document):
+        if tab_id and paragraph["tab_id"] != tab_id:
+            continue
+
+        match = prefix_pattern.match(paragraph["text"])
+        if not match:
+            continue
+
+        if paragraph["has_bullet"]:
+            already_bulleted += 1
+            continue
+
+        nesting_tabs = match.group("tabs")
+        delete_prefix = f"{match.group('spaces')}{match_prefix}"
+        text_after_prefix = paragraph["text"][match.end() :]
+        transformed_text = f"{nesting_tabs}{text_after_prefix}"
+        if not transformed_text.strip():
+            continue
+
+        delete_start = paragraph["start_index"] + _utf16_len(nesting_tabs)
+        delete_end = delete_start + _utf16_len(delete_prefix)
+        matches.append(
+            {
+                "tab_id": paragraph["tab_id"],
+                "paragraph_index": paragraph["paragraph_index"],
+                "start_index": paragraph["start_index"],
+                "end_index": paragraph["end_index"] - _utf16_len(delete_prefix),
+                "delete_start": delete_start,
+                "delete_end": delete_end,
+                "before": paragraph["text"].rstrip("\n"),
+                "after": text_after_prefix.rstrip("\n"),
+                "nesting_level": len(nesting_tabs),
+            }
+        )
+
+    return matches, already_bulleted
+
+
 def get_docs_service():
     """Get authenticated Docs service."""
     return build("docs", "v1", credentials=get_credentials())
@@ -1420,28 +1585,133 @@ def docs_insert_page_break(document_id: str, index: int = 1) -> dict:
     return {"document_id": result.get("documentId", "")}
 
 
-def docs_batch_update(document_id: str, requests: list) -> dict:
+def docs_batch_update(
+    document_id: str,
+    requests: list,
+    required_revision_id: str | None = None,
+) -> dict:
     """Execute batch update on a Google Doc.
 
     Args:
         document_id: The document ID
         requests: List of request objects
+        required_revision_id: Optional document revision that must still be current
 
     Returns:
         Dict with document ID and replies
     """
     service = get_docs_service()
 
-    result = (
-        service.documents()
-        .batchUpdate(documentId=document_id, body={"requests": requests})
-        .execute()
-    )
+    body = {"requests": requests}
+    if required_revision_id:
+        body["writeControl"] = {"requiredRevisionId": required_revision_id}
+
+    result = service.documents().batchUpdate(documentId=document_id, body=body).execute()
 
     return {
         "document_id": result.get("documentId", ""),
         "replies": result.get("replies", []),
     }
+
+
+def docs_bullets(
+    document_id: str,
+    match_prefix: str = "- ",
+    bullet_preset: str = DEFAULT_DOCS_BULLET_PRESET,
+    tab_id: str | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """Convert matching paragraphs into real Google Docs bullets.
+
+    Args:
+        document_id: The document ID
+        match_prefix: Literal paragraph prefix to convert into bullet formatting
+        bullet_preset: Google Docs bullet preset to apply
+        tab_id: Optional tab ID to limit the update to
+        dry_run: Preview matching paragraphs without mutating the document
+
+    Returns:
+        Dict with match counts and verification details
+    """
+    _validate_docs_bullets_args(match_prefix, bullet_preset)
+
+    document = docs_get(document_id)
+    matches, already_bulleted = _build_docs_bullet_matches(document, match_prefix, tab_id=tab_id)
+
+    summary = {
+        "document_id": document_id,
+        "match_prefix": match_prefix,
+        "bullet_preset": bullet_preset,
+        "matched_paragraphs": len(matches),
+        "updated_paragraphs": 0,
+        "verified_paragraphs": 0,
+        "already_bulleted_paragraphs": already_bulleted,
+        "dry_run": dry_run,
+        "paragraphs": [
+            {
+                "tab_id": match["tab_id"],
+                "paragraph_index": match["paragraph_index"],
+                "before": match["before"],
+                "after": match["after"],
+                "nesting_level": match["nesting_level"],
+            }
+            for match in matches
+        ],
+    }
+    if dry_run or not matches:
+        return summary
+
+    requests = []
+    sorted_matches = sorted(
+        matches,
+        key=lambda match: (match["tab_id"] or "", match["start_index"]),
+        reverse=True,
+    )
+    for match in sorted_matches:
+        delete_range = {
+            "startIndex": match["delete_start"],
+            "endIndex": match["delete_end"],
+        }
+        bullet_range = {
+            "startIndex": match["start_index"],
+            "endIndex": match["end_index"],
+        }
+        if match["tab_id"]:
+            delete_range["tabId"] = match["tab_id"]
+            bullet_range["tabId"] = match["tab_id"]
+
+        requests.append({"deleteContentRange": {"range": delete_range}})
+        requests.append(
+            {
+                "createParagraphBullets": {
+                    "range": bullet_range,
+                    "bulletPreset": bullet_preset,
+                }
+            }
+        )
+
+    required_revision_id = document.get("revisionId")
+    if not required_revision_id:
+        raise RuntimeError("Google Docs response did not include revisionId for guarded update")
+
+    docs_batch_update(document_id, requests, required_revision_id=required_revision_id)
+
+    verified_document = docs_get(document_id)
+    paragraphs_by_key = {
+        (paragraph["tab_id"], paragraph["paragraph_index"]): paragraph
+        for paragraph in _get_document_paragraphs(verified_document)
+    }
+    verified_paragraphs = 0
+    for match in matches:
+        verified_paragraph = paragraphs_by_key.get((match["tab_id"], match["paragraph_index"]))
+        if not verified_paragraph:
+            continue
+        if verified_paragraph["has_bullet"] and verified_paragraph["text"].rstrip("\n") == match["after"]:
+            verified_paragraphs += 1
+
+    summary["updated_paragraphs"] = len(matches)
+    summary["verified_paragraphs"] = verified_paragraphs
+    return summary
 
 
 def docs_replace(document_id: str, old_text: str, new_text: str) -> dict:
@@ -2667,7 +2937,12 @@ class GSuiteClient:
         """
         return docs_insert_page_break(document_id, index=index)
 
-    def docs_batch_update(self, document_id: str, requests: list) -> dict:
+    def docs_batch_update(
+        self,
+        document_id: str,
+        requests: list,
+        required_revision_id: str | None = None,
+    ) -> dict:
         """Execute batch update on a Google Doc.
 
         Args:
@@ -2677,7 +2952,39 @@ class GSuiteClient:
         Returns:
             Dict with document ID and replies
         """
-        return docs_batch_update(document_id, requests)
+        return docs_batch_update(
+            document_id,
+            requests,
+            required_revision_id=required_revision_id,
+        )
+
+    def docs_bullets(
+        self,
+        document_id: str,
+        match_prefix: str = "- ",
+        bullet_preset: str = DEFAULT_DOCS_BULLET_PRESET,
+        tab_id: str | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Convert matching paragraphs into real Google Docs bullets.
+
+        Args:
+            document_id: The document ID
+            match_prefix: Literal paragraph prefix to convert into bullet formatting
+            bullet_preset: Google Docs bullet preset to apply
+            tab_id: Optional tab ID to limit the update to
+            dry_run: Preview matching paragraphs without mutating the document
+
+        Returns:
+            Dict with match counts and verification details
+        """
+        return docs_bullets(
+            document_id,
+            match_prefix=match_prefix,
+            bullet_preset=bullet_preset,
+            tab_id=tab_id,
+            dry_run=dry_run,
+        )
 
     def docs_replace(self, document_id: str, old_text: str, new_text: str) -> dict:
         """Find and replace text in a Google Doc.

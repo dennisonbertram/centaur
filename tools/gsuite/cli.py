@@ -1032,7 +1032,10 @@ def docs_replace_cmd(
     old_text: str = typer.Argument(..., help="Text to find"),
     new_text: str = typer.Argument(..., help="Text to replace with"),
 ):
-    """Find and replace text in a Google Doc.
+    """Find and replace literal text in a Google Doc.
+
+    This only swaps characters. For actual Google Docs list formatting, use
+    `gsuite docs bullets`.
 
     Examples:
         gsuite docs replace "1abc123" "old text" "new text"
@@ -1044,6 +1047,76 @@ def docs_replace_cmd(
         document_id = extract_doc_id(doc_id)
         result = docs_replace(document_id, old_text, new_text)
         console.print(f"[green]✓ Replaced {result['occurrences_replaced']} occurrence(s)[/]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1)
+
+
+@docs_app.command("bullets")
+def docs_bullets_cmd(
+    doc_id: str = typer.Argument(..., help="Document ID or Google Docs URL"),
+    match: str = typer.Option("- ", "--match", help="Literal paragraph prefix to convert"),
+    preset: str = typer.Option(
+        "BULLET_DISC_CIRCLE_SQUARE",
+        "--preset",
+        help="Google Docs bullet preset to apply",
+    ),
+    tab_id: str = typer.Option(None, "--tab-id", help="Only convert paragraphs in this tab"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview matching paragraphs without modifying the document",
+    ),
+):
+    """Convert matching paragraphs into real Google Docs bullet items.
+
+    This uses the Docs list API instead of inserting literal bullet characters.
+
+    Examples:
+        gsuite docs bullets "1abc123"
+        gsuite docs bullets "1abc123" --match "• "
+        gsuite docs bullets "1abc123" --tab-id "tab-123" --dry-run
+    """
+    from .client import docs_bullets
+
+    try:
+        document_id = extract_doc_id(doc_id)
+        result = docs_bullets(
+            document_id,
+            match_prefix=match,
+            bullet_preset=preset,
+            tab_id=tab_id,
+            dry_run=dry_run,
+        )
+
+        if result["matched_paragraphs"] == 0:
+            console.print(f"[yellow]No paragraphs matched {match!r}.[/]")
+            return
+
+        action = "Would convert" if dry_run else "Converted"
+        style = "cyan" if dry_run else "green"
+        console.print(
+            f"[{style}]✓ {action} {result['updated_paragraphs'] or result['matched_paragraphs']} paragraph(s) into Google Docs bullets[/]"
+        )
+        console.print(
+            "[dim]Verification: "
+            f"matched {result['matched_paragraphs']}, "
+            f"updated {result['updated_paragraphs']}, "
+            f"verified {result['verified_paragraphs']}, "
+            f"already bulleted {result['already_bulleted_paragraphs']}[/]"
+        )
+
+        for paragraph in result["paragraphs"]:
+            location = f"tab {paragraph['tab_id']} " if paragraph["tab_id"] else ""
+            console.print(
+                f"  [dim]{location}paragraph {paragraph['paragraph_index'] + 1}:[/] "
+                f"{paragraph['before']} -> {paragraph['after']}"
+            )
+
+        if not dry_run and result["verified_paragraphs"] != result["updated_paragraphs"]:
+            console.print(
+                "[yellow]Verification warning: some updated paragraphs did not report bullet metadata on the follow-up read.[/]"
+            )
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
         raise typer.Exit(1)
