@@ -45,6 +45,7 @@ const RESTRICTED_DESTINATION_CODES = new Set([
   "no_permission",
 ]);
 const INVALID_PAYLOAD_CODES = new Set([
+  "invalid_arguments",
   "invalid_blocks",
   "invalid_blocks_format",
   "invalid_metadata_format",
@@ -59,6 +60,9 @@ const TRANSIENT_CODES = new Set([
   "fatal_error",
   "request_timeout",
   "service_unavailable",
+]);
+const GENERIC_SLACK_SDK_CODES = new Set([
+  "slack_webapi_platform_error",
 ]);
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -76,7 +80,6 @@ function statusValue(value: unknown): number | undefined {
 function extractCode(error: unknown): string | undefined {
   const err = asRecord(error) as ErrorLike;
   const direct = stringValue(err.code);
-  if (direct) return direct;
 
   const responseData = asRecord(err.response?.data);
   const responseError = responseData.error;
@@ -91,6 +94,7 @@ function extractCode(error: unknown): string | undefined {
   const data = asRecord(err.data);
   const dataError = data.error;
   if (typeof dataError === "string") return dataError;
+  if (direct && !GENERIC_SLACK_SDK_CODES.has(direct.toLowerCase())) return direct;
   return undefined;
 }
 

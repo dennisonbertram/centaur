@@ -35,7 +35,11 @@ function createAdapter() {
     stream(
       threadId: string,
       stream: AsyncIterable<string | StreamChunk>,
-      options?: { taskDisplayMode?: "timeline" | "plan" },
+      options?: {
+        recipientUserId?: string;
+        recipientTeamId?: string;
+        taskDisplayMode?: "timeline" | "plan";
+      },
     ): Promise<{ id: string }>;
   };
 }
@@ -100,6 +104,23 @@ describe("Slack stream payloads", () => {
     expect(appends).toHaveLength(0);
   });
 
+  it("passes the Slack Connect user team as the channel stream recipient team", async () => {
+    const adapter = createAdapter();
+
+    await adapter.stream("slack:C123:1700000000.000001", (async function* () {
+      yield { type: "markdown_text", text: "pong" } satisfies StreamChunk;
+    })(), {
+      recipientUserId: "U_EXTERNAL",
+      recipientTeamId: "T_EXTERNAL_USER",
+    });
+
+    const start = streamCallParams("chat.startStream")[0];
+    expect(start).toEqual(expect.objectContaining({
+      recipient_user_id: "U_EXTERNAL",
+      recipient_team_id: "T_EXTERNAL_USER",
+    }));
+  });
+
   it("falls back to raw mention IDs when users.info cannot resolve a user", async () => {
     slackUsersInfo.mockResolvedValueOnce({ ok: false, error: "user_not_found" });
     const adapter = new BoltSlackApp("xoxb-test", "signing-secret").getSlackAdapter() as any;
@@ -157,5 +178,19 @@ describe("Slack error classification", () => {
 
     expect(result.errorClass).toBe("invalid_destination");
     expect(result.retryable).toBe(false);
+  });
+
+  it("prefers Slack platform error payload codes over generic SDK wrapper codes", () => {
+    const result = classifySlackError({
+      code: "slack_webapi_platform_error",
+      message: "An API error occurred: restricted_action",
+      data: { ok: false, error: "restricted_action" },
+    });
+
+    expect(result).toMatchObject({
+      code: "restricted_action",
+      errorClass: "restricted_destination",
+      retryable: false,
+    });
   });
 });

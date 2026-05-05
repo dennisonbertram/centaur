@@ -54,7 +54,7 @@ function streamText(chunks: StreamChunk[]): string {
   }).join("");
 }
 
-function userMessage(text: string, opts?: { id?: string; teamId?: string; isMention?: boolean }): BotMessage {
+function userMessage(text: string, opts?: { id?: string; teamId?: string; userTeam?: string; isMention?: boolean }): BotMessage {
   const ts = opts?.id || "1700000000.000100";
   return {
     id: ts,
@@ -63,6 +63,7 @@ function userMessage(text: string, opts?: { id?: string; teamId?: string; isMent
     raw: {
       ts,
       team_id: opts?.teamId || "T123",
+      user_team: opts?.userTeam,
     },
     author: {
       isMe: false,
@@ -95,6 +96,7 @@ function createImmediateStreamClient(): any {
     renewFinalDeliveryLease: vi.fn(async () => ({ ok: true })),
     claimFinalDeliveries: vi.fn(async () => ({ deliveries: [] })),
     listExecutions: vi.fn(async (threadKey: string) => ({ thread_key: threadKey, executions: [] })),
+    getWorkflowRun: vi.fn(async () => ({ execution_id: "exe-new", status: "waiting" })),
     getExecution: vi.fn(async () => ({ status: "completed", result_text: "done" })),
   };
 }
@@ -164,6 +166,20 @@ describe("SlackBot runtime control", () => {
     expect(client.startWorkflowRun.mock.calls[0][0].input.history_messages.map((m: any) => m.message_id)).toEqual([
       "slack:1700000000.000001",
     ]);
+  });
+
+  it("uses Slack Connect user_team as the streaming recipient team", async () => {
+    const client = createImmediateStreamClient();
+    const bot = new SlackBot(client as any, "", createSlackAdapter());
+    const { thread } = createThread();
+
+    await bot.onNewMention(thread, userMessage("<@bot> hello", {
+      id: "1700000000.000020",
+      teamId: "T_LOCAL",
+      userTeam: "T_EXTERNAL_USER",
+    }));
+
+    expect(client.startWorkflowRun.mock.calls[0][0].input.delivery.recipient_team_id).toBe("T_EXTERNAL_USER");
   });
 
   it("releases the active assignment before an explicit persona switch", async () => {
@@ -321,7 +337,7 @@ describe("SlackBot runtime control", () => {
       isMention: true,
     }));
 
-    expect(client.getExecution).toHaveBeenCalledWith("exe-new");
+    expect(client.getExecution).not.toHaveBeenCalled();
     const markdownCalls = post.mock.calls
       .map(([content]) => content)
       .filter((content): content is { markdown: string } => "markdown" in content)
@@ -354,6 +370,38 @@ describe("SlackBot runtime control", () => {
     // First call has triggerKey, retry does not
     expect(client.startWorkflowRun.mock.calls[0][0].triggerKey).toBeDefined();
     expect(client.startWorkflowRun.mock.calls[1][0].triggerKey).toBeUndefined();
+    expect(runtime.postedMarkdown).not.toContain("Agent request failed before execution started. Please retry.");
+  });
+
+  it("waits for an idempotent eager workflow run to expose its execution id", async () => {
+    const client = createImmediateStreamClient();
+    client.startWorkflowRun = vi.fn(async () => ({
+      ok: true,
+      run_id: "wfr-race",
+      workflow_name: "slack_thread_turn",
+      status: "running",
+      idempotent: true,
+    }));
+    client.getWorkflowRun = vi.fn(async () => ({
+      ok: true,
+      run_id: "wfr-race",
+      workflow_name: "slack_thread_turn",
+      status: "waiting",
+      execution_id: "exe-race",
+    }));
+
+    const bot = new SlackBot(client as any);
+    const runtime = createThread();
+
+    await bot.onSubscribedMessage(runtime.thread, userMessage("follow-up", {
+      id: "1700000000.000006",
+      isMention: true,
+    }));
+
+    expect(client.getWorkflowRun).toHaveBeenCalledWith("wfr-race");
+    expect(client.streamEvents).toHaveBeenCalledWith(expect.objectContaining({
+      executionId: "exe-race",
+    }));
     expect(runtime.postedMarkdown).not.toContain("Agent request failed before execution started. Please retry.");
   });
 

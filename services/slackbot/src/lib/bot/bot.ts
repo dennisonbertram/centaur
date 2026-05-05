@@ -1,7 +1,7 @@
 import { normalizeThreadKey, splitThreadKey } from "@centaur/harness-events";
 import type { CanonicalEvent } from "@centaur/harness-events";
 import { CentaurClient } from "@centaur/api-client";
-import type { InputContentBlock } from "@centaur/api-client";
+import type { InputContentBlock, WorkflowRunAccepted } from "@centaur/api-client";
 
 import { log } from "@/lib/logger";
 import {
@@ -37,6 +37,9 @@ const FINAL_DELIVERY_IDLE_MS = 2_000;
 const FINAL_DELIVERY_ERROR_MS = 5_000;
 const FINAL_DELIVERY_LEASE_SECONDS = 90;
 const EXECUTION_HARNESSES = new Set(["amp", "claude-code", "codex", "pi-mono"]);
+const WORKFLOW_EXECUTION_ID_WAIT_MS = 5_000;
+const WORKFLOW_EXECUTION_ID_POLL_MS = 250;
+const WORKFLOW_TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const PROMPT_FLAG_ALIASES = new Map<string, string>([
   ["claude", "claude-code"],
   ["pi", "pi-mono"],
@@ -59,6 +62,21 @@ const KNOWN_PROMPT_SELECTORS = new Set([
   "invest",
 ]);
 const STREAM_BOOTSTRAP_TEXT = "\u200b";
+
+function workflowExecutionId(run: WorkflowRunAccepted): string {
+  if (typeof run.execution_id === "string" && run.execution_id.trim()) {
+    return run.execution_id.trim();
+  }
+  const output = run.output_json;
+  if (output && typeof output.execution_id === "string" && output.execution_id.trim()) {
+    return output.execution_id.trim();
+  }
+  return "";
+}
+
+function workflowErrorText(run: WorkflowRunAccepted): string {
+  return typeof run.error_text === "string" ? run.error_text.trim() : "";
+}
 
 type SlackRepoContext = {
   cwd?: string;
@@ -134,6 +152,8 @@ export { splitSlackMessage } from "@/lib/slack/delivery";
 type SlackRawMessage = {
   team_id?: string;
   team?: string;
+  user_team?: string;
+  source_team?: string;
   ts?: string;
 };
 
@@ -253,7 +273,7 @@ function stableSlackMessageId(msg: { id?: string; raw?: SlackRawMessage }): stri
 }
 
 function slackTeamId(msg: { raw?: SlackRawMessage }): string | undefined {
-  const teamId = msg.raw?.team_id ?? msg.raw?.team;
+  const teamId = msg.raw?.user_team ?? msg.raw?.source_team ?? msg.raw?.team_id ?? msg.raw?.team;
   return typeof teamId === "string" && teamId.trim() ? teamId : undefined;
 }
 
@@ -673,23 +693,79 @@ export class SlackBot {
         throw err;
       }
     }
-    if (!accepted.execution_id) {
-      const errorText = typeof accepted.error_text === "string"
-        ? accepted.error_text.trim()
-        : "";
-      throw new Error(errorText || "workflow did not enqueue an execution");
-    }
+    const executionId = await this.waitForWorkflowExecution(accepted, threadKey);
     try {
       await this.execute(thread, threadKey, {
-        executionId: accepted.execution_id,
+        executionId,
         userId: delivery.userId,
         teamId: delivery.teamId,
       });
     } catch (err) {
       const wrapped = err instanceof Error ? err : new Error(String(err));
-      (wrapped as Error & { executionId?: string }).executionId = accepted.execution_id;
+      (wrapped as Error & { executionId?: string }).executionId = executionId;
       throw wrapped;
     }
+  }
+
+  private async waitForWorkflowExecution(
+    accepted: WorkflowRunAccepted,
+    threadKey: string,
+  ): Promise<string> {
+    const immediateExecutionId = workflowExecutionId(accepted);
+    if (immediateExecutionId) return immediateExecutionId;
+
+    const initialErrorText = workflowErrorText(accepted);
+    if (!accepted.run_id) {
+      throw new Error(initialErrorText || "workflow did not enqueue an execution");
+    }
+
+    let latest = accepted;
+    const deadline = Date.now() + WORKFLOW_EXECUTION_ID_WAIT_MS;
+    log.info("workflow_execution_id_pending", {
+      thread_key: threadKey,
+      workflow_run_id: accepted.run_id,
+      workflow_status: accepted.status,
+      idempotent: accepted.idempotent,
+    });
+
+    while (Date.now() <= deadline) {
+      try {
+        latest = await this.client.getWorkflowRun(accepted.run_id);
+      } catch (err) {
+        log.warn("workflow_execution_id_poll_failed", {
+          thread_key: threadKey,
+          workflow_run_id: accepted.run_id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      const executionId = workflowExecutionId(latest);
+      if (executionId) {
+        log.info("workflow_execution_id_resolved", {
+          thread_key: threadKey,
+          workflow_run_id: accepted.run_id,
+          execution_id: executionId,
+          workflow_status: latest.status,
+        });
+        return executionId;
+      }
+
+      const errorText = workflowErrorText(latest);
+      const status = typeof latest.status === "string" ? latest.status : "";
+      if (WORKFLOW_TERMINAL_STATUSES.has(status) && errorText) {
+        throw new Error(errorText);
+      }
+      if (status === "failed" || status === "cancelled") {
+        throw new Error(`workflow ${status} before enqueueing an execution`);
+      }
+
+      await sleep(WORKFLOW_EXECUTION_ID_POLL_MS);
+    }
+
+    const finalErrorText = workflowErrorText(latest);
+    throw new Error(
+      finalErrorText || `workflow ${accepted.run_id} did not enqueue an execution`,
+    );
   }
 
   private async releaseForPromptSwitch(threadKey: string, messageId?: string): Promise<void> {
