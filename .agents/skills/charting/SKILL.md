@@ -120,13 +120,15 @@ Then upload via the slack tool:
 call slack upload_file '{"channel": "<CHANNEL>", "content_base64": "<base64_png_from_chart>", "filename": "chart.png", "title": "<takeaway_title>", "alt_text": "<plain English chart description>", "thread_ts": "<THREAD_TS>"}'
 ```
 
+If that single `slack upload_file` call fails with auth or delivery errors, stop the PNG path immediately. Do not retry uploads in the same turn. Lead with one sentence that the PNG upload is blocked by Slack auth or delivery, then give the numeric takeaway and a compact source-data table or list in the same reply. Mark the result as partial rather than saying the request is fully answered.
+
 **Always pass `alt_text`** so screen-readers and Slack search can index the chart. The router gives you a sensible default; override for accessibility-critical contexts.
 
 The Centaur visual signature is applied automatically by the router (light editorial 16:9 1600×900 200-DPI PNG, Inter sentence-case title, Okabe-Ito categorical, brand-aware token colours). You do not configure these.
 
 ### Phase 5 — Verify
 
-After every render, walk this checklist before delivering. **Hard cap: 3 visual rounds.** If issues remain after round 3, hand to the user — don't iterate further.
+After every render, walk this checklist before delivering. **Hard cap: 3 visual rounds.** If issues remain after round 3, hand to the user — don't iterate further. Delivery failures are different: after one failed upload attempt or one missing-permalink verification miss, exit the image path and ship the degraded response immediately.
 
 #### Code compliance scan (before running)
 
@@ -136,9 +138,18 @@ After every render, walk this checklist before delivering. **Hard cap: 3 visual 
 4. The `source` is set when known.
 5. The returned base64 PNG is uploaded via `slack upload_file` with `alt_text`.
 
+#### Delivery gate (before more retries)
+
+1. Attempt `slack upload_file` once.
+2. If the upload call returns an auth or delivery failure, stop. Do not spend visual rounds on more upload attempts.
+3. If upload verification cannot confirm a permalink after that one attempt, treat it as a blocked artifact and stop.
+4. In the fallback reply, the first sentence must say the PNG upload is blocked by Slack auth or delivery.
+5. Then provide the numeric takeaway and a compact source-data table or bullet list so the user still gets the answer.
+6. Label the turn as partial, and explicitly avoid phrasing that implies the PNG artifact was delivered.
+
 #### Visual quality review (read the rendered PNG)
 
-Use the harness's image-reading capability to look at the PNG. Then walk these in order — **enumerate before evaluating**.
+Only continue to this section if the upload and permalink checks succeeded. Use the harness's image-reading capability to look at the PNG. Then walk these in order — **enumerate before evaluating**.
 
 1. **Enumerate visible elements**: title text, subtitle, axis labels, legend entries (if any), data encoding (line / bar / scatter), annotations, source line. Note anything expected but absent.
 2. **Semantic fidelity** — does the chart show what the user asked for? If you asked for "ETH vs BTC", are both there?
@@ -158,7 +169,7 @@ Use the harness's image-reading capability to look at the PNG. Then walk these i
 7. **Mobile readability** — would tick text remain legible if the PNG were downsampled to 360 px wide?
 8. **Name one improvement** — even if minor. Then decide whether to apply it now or note it for the user.
 
-If round 1 surfaces issues, fix and re-render (round 2). One more pass max (round 3). After that, ship and disclose remaining issues in plain prose alongside the chart.
+If round 1 surfaces issues, fix and re-render (round 2). One more pass max (round 3). After that, ship and disclose remaining issues in plain prose alongside the chart. If the artifact is blocked by Slack auth or upload verification at any point, skip the remaining visual loop and return the degraded partial response immediately.
 
 ## Non-negotiables (the Centaur visual signature)
 
