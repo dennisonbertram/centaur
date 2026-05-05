@@ -16,13 +16,21 @@ if [ ! -f "$FILE" ]; then
   exit 1
 fi
 
-FILE="$(realpath "$FILE")"
 CHANNEL="${SLACK_CHANNEL:?SLACK_CHANNEL not set}"
 THREAD="${SLACK_THREAD_TS:?SLACK_THREAD_TS not set}"
 FILENAME="$(basename "$FILE")"
 
 extract_link() {
-  printf '%s' "$1" | jq -r '.permalink // .file.permalink // empty' 2>/dev/null || true
+  local response="$1"
+  local json_link
+  json_link="$(printf '%s' "$response" | jq -r '.permalink // .file.permalink // empty' 2>/dev/null || true)"
+  if [[ -n "$json_link" ]]; then
+    printf '%s\n' "$json_link"
+    return
+  fi
+  if [[ "$response" =~ (https://slack\.com/archives/[^[:space:]\"]+) ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  fi
 }
 
 run_upload() {
@@ -36,26 +44,8 @@ run_upload() {
   LINK="$(extract_link "$RESP")"
 }
 
-PRIMARY_BODY=$(jq -nc \
-  --arg channel "$CHANNEL" \
-  --arg file_path "$FILE" \
-  --arg title "$FILENAME" \
-  --arg comment "$COMMENT" \
-  --arg thread_ts "$THREAD" \
-  '{channel: $channel, file_path: $file_path, title: $title, comment: $comment, thread_ts: $thread_ts}')
-
-run_upload "$PRIMARY_BODY"
-if [ -n "$LINK" ]; then
-  echo "$LINK"
-  exit 0
-fi
-
-PRIMARY_RESP="$RESP"
-PRIMARY_STATUS="$STATUS"
-
-# Fall back to inline content if the direct file upload path fails.
-B64="$(base64 -w0 "$FILE")"
-FALLBACK_BODY=$(jq -nc \
+B64="$(base64 < "$FILE" | tr -d '\n')"
+BODY=$(jq -nc \
   --arg channel "$CHANNEL" \
   --arg content_base64 "$B64" \
   --arg filename "$FILENAME" \
@@ -64,7 +54,7 @@ FALLBACK_BODY=$(jq -nc \
   --arg thread_ts "$THREAD" \
   '{channel: $channel, content_base64: $content_base64, filename: $filename, title: $title, comment: $comment, thread_ts: $thread_ts}')
 
-run_upload "$FALLBACK_BODY"
+run_upload "$BODY"
 if [ -n "$LINK" ]; then
   echo "$LINK"
   exit 0
@@ -73,9 +63,7 @@ fi
 echo "Error: upload failed" >&2
 jq -nc \
   --arg file_path "$FILE" \
-  --argjson primary_status "$PRIMARY_STATUS" \
-  --arg primary_response "$PRIMARY_RESP" \
-  --argjson fallback_status "$STATUS" \
-  --arg fallback_response "$RESP" \
-  '{error: "upload_failed", file_path: $file_path, primary_status: $primary_status, primary_response: $primary_response, fallback_status: $fallback_status, fallback_response: $fallback_response}' >&2
+  --argjson status "$STATUS" \
+  --arg response "$RESP" \
+  '{error: "upload_failed", file_path: $file_path, status: $status, response: $response}' >&2
 exit 1
