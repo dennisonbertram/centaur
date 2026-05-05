@@ -99,6 +99,48 @@ class _FakeSheetsService:
         return self.spreadsheets_api
 
 
+class _FakeDocsDocumentsApi:
+    def __init__(self, get_results: list[dict]):
+        self.get_results = list(get_results)
+        self.get_calls: list[dict] = []
+        self.batch_update_calls: list[dict] = []
+
+    def get(self, **kwargs):
+        self.get_calls.append(kwargs)
+        if not self.get_results:
+            raise AssertionError("Unexpected extra documents.get call")
+        return _CreateRequest(self.get_results.pop(0))
+
+    def batchUpdate(self, **kwargs):
+        self.batch_update_calls.append(kwargs)
+        request_count = len(kwargs["body"]["requests"])
+        return _CreateRequest(
+            {
+                "documentId": kwargs["documentId"],
+                "replies": [{} for _ in range(request_count)],
+            }
+        )
+
+
+class _FakeDocsService:
+    def __init__(self, get_results: list[dict]):
+        self.documents_api = _FakeDocsDocumentsApi(get_results)
+
+    def documents(self):
+        return self.documents_api
+
+
+def _paragraph(start_index: int, text: str, *, bullet: bool = False) -> dict:
+    paragraph = {"elements": [{"textRun": {"content": text}}]}
+    if bullet:
+        paragraph["bullet"] = {"listId": "list-123"}
+    return {
+        "startIndex": start_index,
+        "endIndex": start_index + len(text),
+        "paragraph": paragraph,
+    }
+
+
 def test_drive_upload_sets_supports_all_drives(tmp_path, monkeypatch):
     upload_file = tmp_path / "example.txt"
     upload_file.write_text("hello")
@@ -224,4 +266,92 @@ def test_sheets_write_table_writes_headers_and_rows_to_named_tab(monkeypatch):
         "headers": ["Asset", "Status"],
         "row_count": 3,
         "header_count": 2,
+    }
+
+
+def test_docs_bullets_builds_google_docs_list_requests(monkeypatch):
+    fake_service = _FakeDocsService(
+        [
+            {
+                "body": {
+                    "content": [
+                        _paragraph(1, "Intro\n"),
+                        _paragraph(7, "- First item\n"),
+                        _paragraph(20, "\t- Nested item\n"),
+                    ]
+                }
+            },
+            {
+                "body": {
+                    "content": [
+                        _paragraph(1, "Intro\n"),
+                        _paragraph(7, "First item\n", bullet=True),
+                        _paragraph(18, "\tNested item\n", bullet=True),
+                    ]
+                }
+            },
+        ]
+    )
+    monkeypatch.setattr(client, "get_docs_service", lambda: fake_service)
+
+    result = client.docs_bullets("doc-123")
+
+    assert fake_service.documents_api.get_calls == [
+        {"documentId": "doc-123", "includeTabsContent": True},
+        {"documentId": "doc-123", "includeTabsContent": True},
+    ]
+    assert fake_service.documents_api.batch_update_calls == [
+        {
+            "documentId": "doc-123",
+            "body": {
+                "requests": [
+                    {
+                        "deleteContentRange": {
+                            "range": {"startIndex": 21, "endIndex": 23}
+                        }
+                    },
+                    {
+                        "createParagraphBullets": {
+                            "range": {"startIndex": 20, "endIndex": 33},
+                            "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
+                        }
+                    },
+                    {
+                        "deleteContentRange": {
+                            "range": {"startIndex": 7, "endIndex": 9}
+                        }
+                    },
+                    {
+                        "createParagraphBullets": {
+                            "range": {"startIndex": 7, "endIndex": 18},
+                            "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
+                        }
+                    },
+                ]
+            },
+        }
+    ]
+    assert result == {
+        "document_id": "doc-123",
+        "match_prefix": "- ",
+        "bullet_preset": "BULLET_DISC_CIRCLE_SQUARE",
+        "matched_paragraphs": 2,
+        "updated_paragraphs": 2,
+        "verified_paragraphs": 2,
+        "already_bulleted_paragraphs": 0,
+        "dry_run": False,
+        "paragraphs": [
+            {
+                "tab_id": None,
+                "paragraph_index": 1,
+                "before": "- First item",
+                "after": "First item",
+            },
+            {
+                "tab_id": None,
+                "paragraph_index": 2,
+                "before": "\t- Nested item",
+                "after": "\tNested item",
+            },
+        ],
     }
