@@ -6,9 +6,11 @@
 # Usage:
 #   ./integration-slackbot.sh                          # defaults: slackbot at localhost:3001
 #   SLACKBOT_URL=http://slackbot:3001 ./integration-slackbot.sh  # inside docker network
+#   SMOKE_CHART_UPLOAD=1 ./integration-slackbot.sh      # opt into live LLM/tool chart smoke
 #
 # Requires:  SLACK_SIGNING_SECRET in env (or sourced from .env).
 #            A bot-accessible Slack channel for live smoke replies.
+#            jq, curl, and openssl on PATH.
 #            The slackbot service must be running.
 
 set -euo pipefail
@@ -24,6 +26,7 @@ SLACK_SMOKE_TEAM_ID="${SLACK_SMOKE_TEAM_ID:-}"
 SMOKE_POLL_ATTEMPTS="${SMOKE_POLL_ATTEMPTS:-30}"
 SMOKE_POLL_SLEEP_SECONDS="${SMOKE_POLL_SLEEP_SECONDS:-2}"
 EVENT_STREAM_TIMEOUT_SECONDS="${EVENT_STREAM_TIMEOUT_SECONDS:-120}"
+SMOKE_CHART_UPLOAD="${SMOKE_CHART_UPLOAD:-0}"
 
 # ── Load .env values when present ────────────────────────────────────────────
 
@@ -348,10 +351,24 @@ capture_execution_events() {
   local encoded_thread
   encoded_thread=$(urlencode "$thread_key")
 
+  local curl_status
+  set +e
   curl -sS -N --max-time "$EVENT_STREAM_TIMEOUT_SECONDS" \
     "${AUTH_ARGS[@]}" \
     "${API_URL}/agent/threads/${encoded_thread}/events?execution_id=${execution_id}&poll_ms=1000" \
     > "$out_file"
+  curl_status=$?
+  set -e
+
+  # curl exits 28 when --max-time closes an otherwise healthy SSE stream.
+  if [[ "$curl_status" -ne 0 && "$curl_status" -ne 28 ]]; then
+    echo "    execution event stream failed with curl status ${curl_status}"
+    return 1
+  fi
+  if [[ ! -s "$out_file" ]]; then
+    echo "    execution event stream produced no events"
+    return 1
+  fi
 }
 
 wait_for_uploaded_reply() {
@@ -621,9 +638,13 @@ run_check \
 # 8. Event callback — app_mention that must inline-upload a chart
 # ─────────────────────────────────────────────────────────────────────────────
 
-run_check \
-  "chart request → inline upload permalink + uploaded Slack file" \
-  smoke_chart_case
+if [[ "$SMOKE_CHART_UPLOAD" == "1" ]]; then
+  run_check \
+    "chart request → inline upload permalink + uploaded Slack file" \
+    smoke_chart_case
+else
+  echo "  - chart request → inline upload permalink + uploaded Slack file (skipped; set SMOKE_CHART_UPLOAD=1)"
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 9. Invalid JSON body
