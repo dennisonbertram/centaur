@@ -1,7 +1,9 @@
+import json
+
 import pytest
 from slack_sdk.errors import SlackApiError
 
-from slack.client import SlackClient
+from slack.client import SlackAuthError, SlackClient
 
 
 class _FakeSlackResponse(dict):
@@ -17,14 +19,21 @@ class _FakeWebClient:
         self.history_calls: list[dict] = []
         self.history_pages: list[dict] = []
         self.api_calls: list[tuple[str, dict]] = []
+        self.upload_exception: Exception | None = None
 
-    def chat_postMessage(self, **kwargs):  # noqa: N802
+    def chat_postMessage(self, **kwargs):
         self.last_kwargs = kwargs
         return {"ts": "123.456"}
 
-    def conversations_history(self, **kwargs):  # noqa: N802
+    def conversations_history(self, **kwargs):
         self.history_calls.append(kwargs)
         return self.history_pages.pop(0)
+
+    def files_upload_v2(self, **kwargs):
+        self.last_kwargs = kwargs
+        if self.upload_exception is not None:
+            raise self.upload_exception
+        return {"file": {"id": "F123", "name": "upload.png"}}
 
     def api_call(self, method: str, *, params: dict):
         self.api_calls.append((method, params))
@@ -42,6 +51,13 @@ def _make_client() -> tuple[SlackClient, _FakeWebClient]:
     client._format_requester_attribution = lambda: ""  # type: ignore[method-assign]
     client.list_bot_channels = lambda **_: [{"id": "C123", "name": "paradigm-pulse"}]  # type: ignore[method-assign]
     return client, fake_web_client
+
+
+def _make_slack_error(*, error: str, status_code: int, message: str = "Slack request failed") -> SlackApiError:
+    return SlackApiError(
+        message=message,
+        response=_FakeSlackResponse(error=error, status_code=status_code),
+    )
 
 
 def test_send_message_forwards_unfurl_flags() -> None:
@@ -139,6 +155,72 @@ def test_get_channel_history_page_paginates_with_date_window() -> None:
     assert result["count"] == 3
     assert result["has_more"] is False
     assert result["messages"][1]["text"] == "hi @alice"
+
+
+def test_get_channel_history_page_surfaces_structured_auth_failure() -> None:
+    client, fake_web_client = _make_client()
+    client._get_user_cache = lambda: {}  # type: ignore[method-assign]
+
+    def fail_history(**kwargs):
+        raise _make_slack_error(error="invalid_auth", status_code=401, message="Unauthorized")
+
+    fake_web_client.conversations_history = fail_history  # type: ignore[method-assign]
+
+    with pytest.raises(SlackAuthError) as excinfo:
+        client.get_channel_history_page("paradigm-pulse")
+
+    payload = json.loads(str(excinfo.value))
+    assert payload == {
+        "access_path": "bot_token",
+        "error": "slack_auth_failed",
+        "error_code": "invalid_auth",
+        "message": "Slack authentication failed for conversations.history via bot_token",
+        "requested_channel": "paradigm-pulse",
+        "resolved_channel": "C123",
+        "slack_method": "conversations.history",
+        "status_code": 401,
+    }
+
+
+def test_get_channel_history_page_preserves_non_auth_error_shape() -> None:
+    client, fake_web_client = _make_client()
+    client._get_user_cache = lambda: {}  # type: ignore[method-assign]
+
+    def fail_history(**kwargs):
+        raise _make_slack_error(error="channel_not_found", status_code=404)
+
+    fake_web_client.conversations_history = fail_history  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="Slack API error: channel_not_found"):
+        client.get_channel_history_page("paradigm-pulse")
+
+
+def test_upload_file_surfaces_structured_auth_failure() -> None:
+    client, fake_web_client = _make_client()
+    fake_web_client.upload_exception = _make_slack_error(
+        error="not_authed",
+        status_code=401,
+        message="Unauthorized",
+    )
+
+    with pytest.raises(SlackAuthError) as excinfo:
+        client.upload_file(
+            "paradigm-pulse",
+            content_base64="dGVzdA==",
+            filename="chart.png",
+        )
+
+    payload = json.loads(str(excinfo.value))
+    assert payload == {
+        "access_path": "file_upload",
+        "error": "slack_auth_failed",
+        "error_code": "not_authed",
+        "message": "Slack authentication failed for files.upload_v2 via file_upload",
+        "requested_channel": "paradigm-pulse",
+        "resolved_channel": "C123",
+        "slack_method": "files.upload_v2",
+        "status_code": 401,
+    }
 
 
 def test_native_search_uses_dedicated_search_client() -> None:
