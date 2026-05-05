@@ -1,6 +1,6 @@
 ---
 name: policy-gigabrain
-description: "Policy team intelligence system for Hill briefings, staffer tracking, bill analysis, vote prediction, and legislative trend detection. Use when asked about congressional meetings, staffers, legislation, regulatory actions, rulemakings, whip counts, policy team workflows, or any question about OCC, SEC, CFTC, FDIC, FinCEN, Treasury guidance, stablecoins, GENIUS Act, market structure bills, or crypto regulation. Triggers on: policy question, regulatory impact, bill analysis, legislation impact on portfolio."
+description: "Policy team intelligence system for Hill briefings, prep notes, staffer tracking, bill analysis, vote prediction, and legislative trend detection. Use when asked about congressional meetings, member or staff prep notes, legislation, regulatory actions, rulemakings, whip counts, policy team workflows, or any question about OCC, SEC, CFTC, FDIC, FinCEN, Treasury guidance, stablecoins, GENIUS Act, market structure bills, or crypto regulation. Triggers on: policy question, regulatory impact, bill analysis, legislation impact on portfolio, prep notes, Google Doc prep."
 ---
 
 # Policy Gigabrain
@@ -12,7 +12,8 @@ Centralized intelligence system for government affairs. Generates meeting briefe
 **Before answering ANY policy or regulatory question — before running web searches or reading external sources — you MUST first check the Paradigm Policy team's internal analysis.**
 
 ```bash
-call gsuite docs_read '{"doc_id":"1yiKL4NgJfT0cAXehqHvaYC1mMezKdDhxwnr8Gm8aa6c"}'
+call discover gsuite
+call gsuite docs_get_text '{"document_id":"1yiKL4NgJfT0cAXehqHvaYC1mMezKdDhxwnr8Gm8aa6c"}'
 ```
 
 This is the **Policy Explainer Index** ([link](https://docs.google.com/document/d/1yiKL4NgJfT0cAXehqHvaYC1mMezKdDhxwnr8Gm8aa6c/edit?tab=t.0)), maintained by the Policy team. It contains Paradigm's internal analysis and takes on major regulatory developments (GENIUS Act, FDIC rulemakings, SEC actions, etc.).
@@ -72,8 +73,18 @@ Generate a policy briefing memo before Hill meetings.
 - "Briefing memo for [Name]"
 - "Policy briefer for [Name]"
 - "Meeting brief for [Name]"
+- "Prep notes for [Name]"
+- "Not the usual memo"
+- "Facts and substance"
+- "Put this in a Google Doc"
 
 **Input:** Member/staffer name, meeting context, date, and any requested topical sections (for example: crypto knowledge, prediction markets, AI, defense tech, robotics)
+
+**Output Mode Selection:**
+- Default to **operator brief mode** for standard requests like "briefing memo," "policy briefer," or "meeting brief."
+- Switch to **prep-notes mode** when the user asks for something like "not the usual memo," "facts and substance," "prep notes," or "put this in a Google Doc," or otherwise signals they want dense member/staffer prep rather than a polished memo.
+- If the user specifies sections to include or exclude, follow that list literally. Do not add extra sections for symmetry.
+- If the user asks for a Google Doc, write in the requested mode first, then do a Docs formatting pass before returning the link.
 
 **Steps:**
 1. Read the Policy Explainer Index first, then check Shift / slack / notes for prior Paradigm context and any portfolio-company relevance that sharpens the read.
@@ -98,18 +109,50 @@ Generate a policy briefing memo before Hill meetings.
    ```bash
    call paradigmdb db_query '{"query":"SELECT * FROM \"Organization\" WHERE name ILIKE '\''%relevant_company%'\'';"}'
    ```
-7. Generate operator brief in the format below
+7. Generate the selected output shape below
 
-**Format Rules:**
-- Write these as **operator briefs**, not formal research memos.
+**Shared Format Rules:**
+- Write these as meeting prep deliverables, not formal research memos.
 - Use short paragraphs and crisp bullets. Prefer direct sentences over issue-summary prose.
 - Do **not** use the old memo scaffolding (`Executive Summary`, `Background`, `Primary Ask / Secondary Objectives / Success Criteria`, `Specific Topics To Address`) unless a policy-team member explicitly asks for it.
-- Start with the office read, then move into the lanes that matter for the meeting.
-- Include only the topical sections the policy-team prompt asks for or that clearly earn their place. Common sections include `Crypto Knowledge`, `Stance on Prediction Markets`, `Stance on AI`, `Stance on Defense Tech`, and `Stance on Robotics`.
+- Include only the topical sections the prompt asks for or that clearly earn their place. Common sections include `Crypto Knowledge`, `Stance on Prediction Markets`, `Stance on AI`, `Stance on Defense Tech`, and `Stance on Robotics`.
 - Use less interpretive language. Favor "this is the lane" and "this is what they are likely to care about" over broader ideological framing.
 - If you mention a portfolio company, it must be a **Paradigm portfolio company verified in Shift**. Use **one company by default**. Mention it only if it materially sharpens the memo.
 - Put the company mention in the **second bullet** of the relevant topical section after first establishing the member read.
 - Company mentions should focus on the business and the concrete policy lane it makes real. Use public toplines and high-level internal context when helpful, but do not add a separate company sidebar.
+
+**Operator Brief Mode:**
+- Use this when the user asks for the usual briefing memo shape.
+- Start with the office read, then move into the lanes that matter for the meeting.
+
+**Prep-Notes Mode:**
+- Use this when the user wants dense prep notes, a less polished memo, or a Google Doc handoff.
+- Lead with factual bullets, not connective tissue. Do not add framing lines like "Below is a memo," "taken together," "more broadly," or "the key takeaway is."
+- Keep each bullet loaded with one concrete read, fact, vote signal, committee lane, or policy implication. If a section needs context, put it in another bullet, not a throat-clearing sentence.
+- Prefer section labels like `Office Read`, `Biography`, `Goals`, and only the topical lanes the user asked for. If the user only wants selected sections, omit everything else.
+- Omit empty sections rather than filling them with generic scene-setting.
+- If a section needs a short paragraph, keep it factual and avoid editorial transitions between paragraphs and bullets.
+- When the user asks for a Google Doc, the final document must use real Google Docs headings and bulleted lists, not literal `#`, `##`, `-`, or `•` characters left in plain text.
+
+**Prep-Notes Template:**
+```
+Office Read
+• [Direct read on the office and the productive lane]
+• [What to avoid or where not to overreach]
+
+Biography
+• [Role, committee seat, or prior career fact that changes the read]
+• [Any other fact that changes how they process the issue]
+
+Goals
+• [Goal 1]
+• [Goal 2]
+
+[Optional user-selected topical section]
+• [Fact-dense bullet]
+• [Optional verified company example in bullet two if it materially sharpens the lane]
+• [Fact-dense bullet]
+```
 
 **Operator-Brief Template:**
 ```
@@ -151,10 +194,19 @@ Stance on Robotics
 ```
 
 **Section Selection Rules:**
-- `Landscape Summary`, `Biography`, and `Goals` are the default anchor sections.
+- In operator brief mode, `Landscape Summary`, `Biography`, and `Goals` are the default anchor sections.
+- In prep-notes mode, default to `Office Read`, `Biography`, and `Goals` unless the user asks for a different subset.
+- If the user asks for only one or two sections, provide only those sections plus any minimal orientation needed to make them usable.
 - Add topical sections only when the prompt, agenda, or office lane makes them useful.
 - Do not force symmetry. A strong memo may have `Crypto Knowledge` and `Stance on Defense Tech` but no AI section, or AI and robotics but no prediction-markets section.
 - If a section has nothing useful to say, omit it.
+
+**Google Docs Formatting Checklist:**
+1. If the user asked for a document, run `call discover gsuite` before any Docs mutation so you use the live method names.
+2. Create or open the Google Doc with `call gsuite docs_create`, `call gsuite docs_get`, and `call gsuite docs_insert` or `call gsuite docs_append` as needed.
+3. Run `call gsuite docs_batch_update` to convert section labels into heading styles and body ranges into bulleted lists. Do not stop at pasted plain text.
+4. Run `call gsuite docs_get` after the formatting pass and verify the structure is real headings plus bullets, not literal marker characters sitting in body text.
+5. If verification fails, fix the document before returning it.
 
 **Company-Reference Example:**
 ```text
