@@ -247,6 +247,113 @@ spec:
         - name: firewall-mitmproxy-config
           emptyDir: {}
 ---
+{{- if .Values.ironProxy.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "centaur.componentName" (dict "root" . "component" "iron-proxy") }}
+  labels:
+{{ include "centaur.componentLabels" (dict "root" . "component" "iron-proxy") | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret-env: {{ toJson (dict "secretManager" .Values.secretManager "ironProxy" .Values.ironProxy) | sha256sum }}
+      labels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: iron-proxy
+          image: {{ printf "%s:%s" .Values.ironProxy.image.repository .Values.ironProxy.image.tag | quote }}
+          imagePullPolicy: {{ .Values.ironProxy.image.pullPolicy }}
+          env:
+            - name: SECRET_MANAGER_URL
+              value: {{ printf "http://%s:8100" (include "centaur.componentName" (dict "root" . "component" "secrets")) | quote }}
+            - name: IRON_MANAGEMENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%sIRON_MANAGEMENT_API_KEY" .Values.secretManager.envPrefix }}
+{{- range $name, $value := .Values.ironProxy.extraEnv }}
+            - name: {{ $name }}
+              value: {{ $value | quote }}
+{{- end }}
+          ports:
+            - containerPort: {{ .Values.ironProxy.service.proxyPort }}
+              name: proxy
+            - containerPort: {{ .Values.ironProxy.service.managementPort }}
+              name: management
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.ironProxy.service.proxyPort }}
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.ironProxy.service.proxyPort }}
+          securityContext:
+{{ toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: iron-proxy-config
+              mountPath: /etc/iron-proxy
+            - name: iron-proxy-certs
+              mountPath: /certs
+        - name: firewall-manager
+          image: {{ printf "%s:%s" .Values.ironProxy.manager.image.repository .Values.ironProxy.manager.image.tag | quote }}
+          imagePullPolicy: {{ .Values.ironProxy.manager.image.pullPolicy }}
+          env:
+            - name: FIREWALL_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%sFIREWALL_CONTROL_TOKEN" .Values.secretManager.envPrefix }}
+            - name: IRON_MANAGEMENT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%sIRON_MANAGEMENT_API_KEY" .Values.secretManager.envPrefix }}
+            - name: SECRET_MANAGER_URL
+              value: {{ printf "http://%s:8100" (include "centaur.componentName" (dict "root" . "component" "secrets")) | quote }}
+            - name: IRON_PROXY_CONFIG_PATH
+              value: /etc/iron-proxy/proxy.yaml
+            - name: IRON_PROXY_MANAGEMENT_URL
+              value: {{ printf "http://127.0.0.1:%v" .Values.ironProxy.service.managementPort | quote }}
+            - name: FIREWALL_MANAGER_PORT
+              value: {{ .Values.ironProxy.manager.service.controlPort | quote }}
+            - name: FIREWALL_MANAGER_SECRET_SOURCE
+              value: {{ .Values.ironProxy.manager.secretSource | quote }}
+            - name: FIREWALL_MANAGER_SECRET_TTL
+              value: {{ .Values.ironProxy.manager.secretTtl | quote }}
+          ports:
+            - containerPort: {{ .Values.ironProxy.manager.service.controlPort }}
+              name: control
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.ironProxy.manager.service.controlPort }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.ironProxy.manager.service.controlPort }}
+          securityContext:
+{{ toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: iron-proxy-config
+              mountPath: /etc/iron-proxy
+      volumes:
+        - name: iron-proxy-config
+          emptyDir: {}
+        - name: iron-proxy-certs
+          emptyDir: {}
+---
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -23,6 +23,32 @@
         }
       }
     },
+    "ironProxy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "service": {
+          "type": "object",
+          "properties": {
+            "proxyPort": { "type": "integer" },
+            "managementPort": { "type": "integer" }
+          }
+        },
+        "manager": {
+          "type": "object",
+          "properties": {
+            "service": {
+              "type": "object",
+              "properties": {
+                "controlPort": { "type": "integer" }
+              }
+            },
+            "secretSource": { "type": "string" },
+            "secretTtl": { "type": "string" }
+          }
+        }
+      }
+    },
     "secrets": {
       "type": "object",
       "properties": {

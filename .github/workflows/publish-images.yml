@@ -57,6 +57,14 @@ jobs:
             image: centaur-agent
             dockerfile: services/sandbox/Dockerfile
             target: sandbox
+          - service: iron-proxy
+            image: centaur-iron-proxy
+            dockerfile: services/iron-proxy/Dockerfile
+            target: ""
+          - service: firewall-manager
+            image: centaur-firewall-manager
+            dockerfile: services/firewall-manager/Dockerfile
+            target: ""
 
     steps:
       - name: Checkout

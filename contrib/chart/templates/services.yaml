@@ -45,6 +45,36 @@ spec:
       port: {{ .Values.firewall.service.controlPort }}
       targetPort: {{ .Values.firewall.service.controlPort }}
 ---
+{{- if .Values.ironProxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "centaur.componentName" (dict "root" . "component" "iron-proxy") }}
+  labels:
+{{ include "centaur.componentLabels" (dict "root" . "component" "iron-proxy") | nindent 4 }}
+spec:
+  selector:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 4 }}
+  ports:
+    - name: proxy
+      port: {{ .Values.ironProxy.service.proxyPort }}
+      targetPort: {{ .Values.ironProxy.service.proxyPort }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "centaur.componentName" (dict "root" . "component" "firewall-manager") }}
+  labels:
+{{ include "centaur.componentLabels" (dict "root" . "component" "firewall-manager") | nindent 4 }}
+spec:
+  selector:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 4 }}
+  ports:
+    - name: control
+      port: {{ .Values.ironProxy.manager.service.controlPort }}
+      targetPort: {{ .Values.ironProxy.manager.service.controlPort }}
+---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:

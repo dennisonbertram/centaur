@@ -17,6 +17,7 @@ secretManager:
     slackbotApiKey: ""
     localDevApiKey: ""
     sandboxSigningKey: ""
+    ironManagementApiKey: ""
   extraSecrets: {}
 
 firewall:
@@ -32,6 +33,30 @@ firewall:
   ca:
     certPem: ""
     keyPem: ""
+  extraEnv: {}
+
+# Opt-in iron-proxy stack. When enabled, deploys iron-proxy + the
+# firewall-manager sidecar (which renders proxy.yaml and triggers reloads
+# via iron-proxy's management API). The legacy firewall continues to run
+# alongside this — callers control which one they push injection maps to.
+ironProxy:
+  enabled: false
+  image:
+    repository: centaur-iron-proxy
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    proxyPort: 8080
+    managementPort: 9092
+  manager:
+    image:
+      repository: centaur-firewall-manager
+      tag: latest
+      pullPolicy: IfNotPresent
+    service:
+      controlPort: 8081
+    secretSource: onepassword
+    secretTtl: 10m
   extraEnv: {}
 
 secrets:
