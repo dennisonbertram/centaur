@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import httpx
 import pytest
 
 
@@ -15,7 +16,7 @@ class _FakeResponse:
 
 
 class _FakeClient:
-    def __init__(self, responses: dict[str, _FakeResponse]):
+    def __init__(self, responses: dict[str, _FakeResponse | Exception]):
         self._responses = responses
         self.calls: list[tuple[str, dict[str, str] | None]] = []
 
@@ -27,7 +28,19 @@ class _FakeClient:
 
     async def get(self, url: str, headers: dict[str, str] | None = None):
         self.calls.append((url, headers))
-        return self._responses[url]
+        response = self._responses[url]
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+@pytest.fixture(autouse=True)
+def reset_runtime_credential_cache() -> None:
+    from api.runtime_guardrails import reset_runtime_credential_cache
+
+    reset_runtime_credential_cache()
+    yield
+    reset_runtime_credential_cache()
 
 
 @pytest.mark.asyncio
@@ -66,6 +79,7 @@ async def test_check_runtime_credentials_ok_when_key_present() -> None:
                 "FIREWALL_CONTROL_TOKEN": "control-token",
                 "RUNTIME_CREDENTIAL_GUARD_ENABLED": "1",
                 "REQUIRED_RUNTIME_SECRET_KEYS": "AMP_API_KEY",
+                "OPENAI_API_KEY": "ambient-provider-env-is-not-probed",
                 "FIREWALL_HEALTH_URL": base,
             },
             clear=True,
@@ -134,7 +148,6 @@ async def test_check_runtime_credentials_marks_openai_key_invalid_on_401() -> No
         patch.dict(
             "os.environ",
             {
-                "OPENAI_API_KEY": "configured",
                 "RUNTIME_CREDENTIAL_GUARD_ENABLED": "1",
                 "REQUIRED_RUNTIME_SECRET_KEYS": "OPENAI_API_KEY",
                 "FIREWALL_HEALTH_URL": base,
@@ -183,7 +196,6 @@ async def test_check_runtime_credentials_marks_anthropic_key_invalid_on_403() ->
         patch.dict(
             "os.environ",
             {
-                "ANTHROPIC_API_KEY": "configured",
                 "RUNTIME_CREDENTIAL_GUARD_ENABLED": "1",
                 "REQUIRED_RUNTIME_SECRET_KEYS": "ANTHROPIC_API_KEY",
                 "FIREWALL_HEALTH_URL": base,
@@ -217,6 +229,118 @@ async def test_check_runtime_credentials_marks_anthropic_key_invalid_on_403() ->
             },
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_check_runtime_credentials_degrades_on_transient_provider_error() -> None:
+    from api.runtime_guardrails import check_runtime_credentials
+
+    base = "http://firewall:8081"
+    secret = "sk-live-secret-value"
+    secret_url = f"{base}/secrets/OPENAI_API_KEY"
+    probe_url = "https://api.openai.com/v1/models"
+    fake_client = _FakeClient(
+        {
+            secret_url: _FakeResponse(200, {"value": secret}),
+            probe_url: httpx.ConnectError(f"network failed for {secret}"),
+        }
+    )
+
+    with (
+        patch.dict(
+            "os.environ",
+            {
+                "RUNTIME_CREDENTIAL_GUARD_ENABLED": "1",
+                "REQUIRED_RUNTIME_SECRET_KEYS": "OPENAI_API_KEY",
+                "FIREWALL_HEALTH_URL": base,
+            },
+            clear=True,
+        ),
+        patch(
+            "api.runtime_guardrails.httpx.AsyncClient",
+            return_value=fake_client,
+        ),
+    ):
+        report = await check_runtime_credentials()
+
+    assert report["status"] == "degraded"
+    assert report["missing_keys"] == []
+    assert report["invalid_keys"] == []
+    assert report["errors"] == []
+    assert report["provider_probe_errors"] == ["OPENAI_API_KEY:probe_request_failed:ConnectError"]
+    assert secret not in str(report)
+
+
+@pytest.mark.asyncio
+async def test_check_runtime_credentials_uses_cache_for_provider_probe() -> None:
+    from api.runtime_guardrails import check_runtime_credentials
+
+    base = "http://firewall:8081"
+    secret_url = f"{base}/secrets/OPENAI_API_KEY"
+    probe_url = "https://api.openai.com/v1/models"
+    fake_client = _FakeClient(
+        {
+            secret_url: _FakeResponse(200, {"value": "sk-live-valid-format"}),
+            probe_url: _FakeResponse(200, {"data": []}),
+        }
+    )
+
+    with (
+        patch.dict(
+            "os.environ",
+            {
+                "RUNTIME_CREDENTIAL_GUARD_ENABLED": "1",
+                "REQUIRED_RUNTIME_SECRET_KEYS": "OPENAI_API_KEY",
+                "RUNTIME_CREDENTIAL_CHECK_CACHE_SECONDS": "60",
+                "FIREWALL_HEALTH_URL": base,
+            },
+            clear=True,
+        ),
+        patch(
+            "api.runtime_guardrails.httpx.AsyncClient",
+            return_value=fake_client,
+        ),
+    ):
+        first = await check_runtime_credentials()
+        second = await check_runtime_credentials()
+
+    assert first == second
+    assert fake_client.calls == [
+        (secret_url, {}),
+        (probe_url, {"Authorization": "Bearer sk-live-valid-format"}),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_assert_runtime_credentials_ready_allows_transient_provider_error() -> None:
+    from api.runtime_guardrails import assert_runtime_credentials_ready
+
+    base = "http://firewall:8081"
+    secret_url = f"{base}/secrets/OPENAI_API_KEY"
+    probe_url = "https://api.openai.com/v1/models"
+    fake_client = _FakeClient(
+        {
+            secret_url: _FakeResponse(200, {"value": "sk-live-secret-value"}),
+            probe_url: httpx.ReadTimeout("provider timed out"),
+        }
+    )
+
+    with (
+        patch.dict(
+            "os.environ",
+            {
+                "RUNTIME_CREDENTIAL_GUARD_ENABLED": "1",
+                "REQUIRED_RUNTIME_SECRET_KEYS": "OPENAI_API_KEY",
+                "FIREWALL_HEALTH_URL": base,
+            },
+            clear=True,
+        ),
+        patch(
+            "api.runtime_guardrails.httpx.AsyncClient",
+            return_value=fake_client,
+        ),
+    ):
+        await assert_runtime_credentials_ready()
 
 
 @pytest.mark.asyncio
@@ -263,7 +387,6 @@ async def test_assert_runtime_credentials_ready_raises_when_provider_key_invalid
         patch.dict(
             "os.environ",
             {
-                "OPENAI_API_KEY": "configured",
                 "RUNTIME_CREDENTIAL_GUARD_ENABLED": "1",
                 "REQUIRED_RUNTIME_SECRET_KEYS": "OPENAI_API_KEY",
                 "FIREWALL_HEALTH_URL": base,
