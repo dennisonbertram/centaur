@@ -314,6 +314,21 @@ function slackDeliveryThreadId(threadKey: string, delivery: Record<string, unkno
   return slackAdapterThreadId(threadKey);
 }
 
+function invalidWorkflowSlackDestination(
+  threadKey: string,
+  delivery: Record<string, unknown>,
+): string | null {
+  if (!threadKey.startsWith("workflow:")) return null;
+  const channel = typeof delivery.channel === "string" ? delivery.channel.trim() : "";
+  const threadTs = typeof delivery.thread_ts === "string" ? delivery.thread_ts.trim() : "";
+  if (!channel) return "workflow Slack delivery is missing delivery.channel";
+  if (!/^(C|G|D)[A-Z0-9]+$/.test(channel)) {
+    return `workflow Slack delivery must use a Slack channel id, got ${JSON.stringify(channel)}`;
+  }
+  if (!threadTs) return "workflow Slack delivery is missing delivery.thread_ts";
+  return null;
+}
+
 function buildResponseFooter(
   ampThreadId: string | undefined,
   commitSha: string | undefined,
@@ -1305,6 +1320,21 @@ export class SlackBot {
         terminal_reason: finalPayload.terminal_reason,
       });
       await this.ackFinalDelivery(executionId, threadKey);
+      return;
+    }
+
+    const invalidDestination = invalidWorkflowSlackDestination(threadKey, delivery);
+    if (invalidDestination) {
+      log.warn("final_delivery_invalid_destination_config", {
+        execution_id: executionId,
+        thread_key: threadKey,
+        error: invalidDestination,
+        channel: delivery.channel,
+      });
+      await this.failFinalDelivery(executionId, threadKey, invalidDestination, {
+        nonRetryable: true,
+        errorClass: "invalid_destination",
+      });
       return;
     }
 

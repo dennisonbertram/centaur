@@ -654,6 +654,95 @@ describe("SlackBot runtime control", () => {
     );
   });
 
+  it("dead-letters workflow deliveries that use channel names", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-workflow-channel-name",
+          thread_key: "workflow:wfr_123",
+          delivery: { platform: "slack", channel: "paradigm-pulse" },
+          final_payload: { status: "completed", result_text: "done" },
+        },
+      ],
+    }));
+    const slack = createSlackAdapter({
+      postMessage: vi.fn(async () => ({ id: "msg-final" })),
+    });
+    const bot = new SlackBot(client as any, "", slack);
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    expect(slack.postMessage).not.toHaveBeenCalled();
+    expect(client.markFinalDelivered).not.toHaveBeenCalled();
+    expect(client.markFinalFailed).toHaveBeenCalledWith(
+      "exe-workflow-channel-name",
+      expect.stringContaining("must use a Slack channel id"),
+      expect.objectContaining({
+        nonRetryable: true,
+        errorClass: "invalid_destination",
+      }),
+    );
+  });
+
+  it("dead-letters workflow deliveries missing thread_ts", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-workflow-no-thread-ts",
+          thread_key: "workflow:wfr_123",
+          delivery: { platform: "slack", channel: "C123456" },
+          final_payload: { status: "completed", result_text: "done" },
+        },
+      ],
+    }));
+    const slack = createSlackAdapter({
+      postMessage: vi.fn(async () => ({ id: "msg-final" })),
+    });
+    const bot = new SlackBot(client as any, "", slack);
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    expect(slack.postMessage).not.toHaveBeenCalled();
+    expect(client.markFinalFailed).toHaveBeenCalledWith(
+      "exe-workflow-no-thread-ts",
+      expect.stringContaining("missing delivery.thread_ts"),
+      expect.objectContaining({
+        nonRetryable: true,
+        errorClass: "invalid_destination",
+      }),
+    );
+  });
+
+  it("allows workflow deliveries with explicit channel id and thread_ts", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-workflow-valid-destination",
+          thread_key: "workflow:wfr_123",
+          delivery: { platform: "slack", channel: "C123456", thread_ts: "1700000000.000100" },
+          final_payload: { status: "completed", result_text: "done" },
+        },
+      ],
+    }));
+    const postMessage = vi.fn(async () => ({ id: "msg-final" }));
+    const slack = createSlackAdapter({ postMessage });
+    const bot = new SlackBot(client as any, "", slack);
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    expect(postMessage).toHaveBeenCalledWith(
+      "slack:C123456:1700000000.000100",
+      { markdown: "done" },
+    );
+    expect(client.markFinalDelivered).toHaveBeenCalledWith(
+      "exe-workflow-valid-destination",
+      expect.any(String),
+    );
+  });
+
   it("retries final delivery with flattened tables when Slack rejects blocks", async () => {
     const client = createImmediateStreamClient();
     client.claimFinalDeliveries = vi.fn(async () => ({
