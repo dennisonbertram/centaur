@@ -3,8 +3,6 @@
 CREATE TABLE IF NOT EXISTS slack_sync_channels (
     channel_id      TEXT PRIMARY KEY,
     channel_name    TEXT NOT NULL DEFAULT '',
-    is_indexed      BOOLEAN NOT NULL DEFAULT FALSE,
-    is_private      BOOLEAN NOT NULL DEFAULT FALSE,
     is_archived     BOOLEAN NOT NULL DEFAULT FALSE,
     is_member       BOOLEAN NOT NULL DEFAULT FALSE,
     topic           TEXT NOT NULL DEFAULT '',
@@ -16,8 +14,8 @@ CREATE TABLE IF NOT EXISTS slack_sync_channels (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_slack_sync_channels_indexed
-    ON slack_sync_channels (is_indexed, channel_name);
+CREATE INDEX IF NOT EXISTS idx_slack_sync_channels_member
+    ON slack_sync_channels (is_member, channel_name);
 
 CREATE TABLE IF NOT EXISTS slack_sync_users (
     user_id       TEXT PRIMARY KEY,
@@ -123,5 +121,5 @@ DROP INDEX IF EXISTS idx_slack_sync_runs_started;
 DROP TABLE IF EXISTS slack_sync_runs;
 DROP INDEX IF EXISTS idx_slack_sync_users_real_name;
 DROP TABLE IF EXISTS slack_sync_users;
-DROP INDEX IF EXISTS idx_slack_sync_channels_indexed;
+DROP INDEX IF EXISTS idx_slack_sync_channels_member;
 DROP TABLE IF EXISTS slack_sync_channels;

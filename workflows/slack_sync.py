@@ -23,7 +23,7 @@ DEFAULT_PAGE_LIMIT = 200
 class SlackSyncClient(Protocol):
     """Small protocol for the Slack client methods this workflow uses."""
 
-    def list_channels(self, limit: int = 200) -> list[dict]:
+    def list_bot_channels(self, limit: int = 200, force_refresh: bool = False) -> list[dict]:
         ...
 
     def list_users(self, limit: int = 200) -> list[dict]:
@@ -57,7 +57,6 @@ class SlackSyncClient(Protocol):
 class Input:
     """Runtime options for a manual Slack sync workflow run."""
 
-    channels: list[str] = field(default_factory=list)
     lookback_days: int | None = None
     thread_lookback_days: int | None = None
     limit: int = DEFAULT_PAGE_LIMIT
@@ -65,28 +64,6 @@ class Input:
     latest: str | None = None
     mode: str = "incremental"
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
-def _parse_channels(raw: str | None) -> list[str]:
-    """Parse a comma-separated channel allowlist, preserving first-seen order."""
-    if not raw:
-        return []
-    seen: set[str] = set()
-    channels: list[str] = []
-    for part in raw.split(","):
-        item = part.strip().lstrip("#")
-        if not item or item in seen:
-            continue
-        seen.add(item)
-        channels.append(item)
-    return channels
-
-
-def _configured_channels(inp: Input) -> list[str]:
-    """Return workflow-provided channels or the env-configured default allowlist."""
-    if inp.channels:
-        return _parse_channels(",".join(str(ch) for ch in inp.channels))
-    return _parse_channels(os.getenv("SLACK_SYNC_CHANNELS"))
 
 
 def _positive_int(value: int | str | None, default: int) -> int:
@@ -158,16 +135,6 @@ def _message_row(message: dict[str, Any], run_id: str, parent_message_ts: str | 
     }
 
 
-def _channel_matches(configured: str, channel: dict[str, Any]) -> bool:
-    """Check whether a configured channel token matches a Slack channel id or name."""
-    candidate = configured.strip().lstrip("#")
-    if not candidate:
-        return False
-    channel_id = str(channel.get("id") or "")
-    channel_name = str(channel.get("name") or "")
-    return candidate == channel_id or candidate == channel_name
-
-
 def _channel_ref(channel: dict[str, Any], reason: str | None = None) -> dict[str, str]:
     """Return a compact channel reference for run summaries."""
     result = {
@@ -179,29 +146,26 @@ def _channel_ref(channel: dict[str, Any], reason: str | None = None) -> dict[str
     return result
 
 
-async def _upsert_channels(pool, channels: list[dict[str, Any]], indexed_ids: set[str]) -> None:
-    """Refresh public channel directory rows and mark the active indexed set."""
+async def _upsert_channels(pool, channels: list[dict[str, Any]]) -> None:
+    """Refresh public bot-member channel rows and mark absent channels inactive."""
     async with pool.acquire() as conn:
         async with conn.transaction():
-            if channels:
-                await conn.execute(
-                    "UPDATE slack_sync_channels SET is_indexed = FALSE, updated_at = NOW()",
-                )
+            await conn.execute(
+                "UPDATE slack_sync_channels SET is_member = FALSE, updated_at = NOW()",
+            )
             for channel in channels:
                 channel_id = str(channel.get("id") or "")
                 if not channel_id:
                     continue
                 await conn.execute(
                     "INSERT INTO slack_sync_channels ("
-                    "channel_id, channel_name, is_indexed, is_private, is_archived, "
-                    "is_member, topic, purpose, member_count, raw_payload, last_seen_at, updated_at"
-                    ") VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, NOW(), NOW()) "
+                    "channel_id, channel_name, is_archived, is_member, topic, purpose, "
+                    "member_count, raw_payload, last_seen_at, updated_at"
+                    ") VALUES ($1, $2, $3, TRUE, $4, $5, $6, $7::jsonb, NOW(), NOW()) "
                     "ON CONFLICT (channel_id) DO UPDATE SET "
                     "channel_name = EXCLUDED.channel_name, "
-                    "is_indexed = EXCLUDED.is_indexed, "
-                    "is_private = EXCLUDED.is_private, "
                     "is_archived = EXCLUDED.is_archived, "
-                    "is_member = EXCLUDED.is_member, "
+                    "is_member = TRUE, "
                     "topic = EXCLUDED.topic, "
                     "purpose = EXCLUDED.purpose, "
                     "member_count = EXCLUDED.member_count, "
@@ -210,10 +174,7 @@ async def _upsert_channels(pool, channels: list[dict[str, Any]], indexed_ids: se
                     "updated_at = NOW()",
                     channel_id,
                     str(channel.get("name") or ""),
-                    channel_id in indexed_ids,
-                    bool(channel.get("is_private")),
                     bool(channel.get("is_archived")),
-                    bool(channel.get("is_member")),
                     str(channel.get("topic") or ""),
                     str(channel.get("purpose") or ""),
                     int(channel.get("member_count") or 0),
@@ -328,7 +289,7 @@ async def _record_run_start(
     run_id: str,
     workflow_run_id: str,
     mode: str,
-    requested: list[str],
+    requested: list[dict[str, str]],
     skipped: list[dict[str, str]],
     metadata: dict[str, Any],
 ) -> None:
@@ -444,41 +405,6 @@ async def _update_checkpoint_failure(
     )
 
 
-def _resolve_channels(
-    configured: list[str],
-    all_channels: list[dict[str, Any]],
-    ctx: WorkflowContext,
-) -> tuple[list[dict[str, Any]], list[dict[str, str]], set[str]]:
-    """Resolve configured channels, skipping private or unresolved entries with logs."""
-    public_channels = [ch for ch in all_channels if not ch.get("is_private")]
-    matched_public: list[dict[str, Any]] = []
-    skipped: list[dict[str, str]] = []
-    matched_public_ids: set[str] = set()
-
-    for item in configured:
-        matches = [ch for ch in all_channels if _channel_matches(item, ch)]
-        if not matches:
-            ctx.log("slack_sync_channel_skipped_not_public_or_not_found", channel=item)
-            skipped.append({"channel": item, "reason": "not_public_or_not_found"})
-            continue
-        channel = matches[0]
-        if channel.get("is_private"):
-            ctx.log(
-                "slack_sync_channel_skipped_private",
-                channel_id=str(channel.get("id") or ""),
-                channel_name=str(channel.get("name") or ""),
-            )
-            skipped.append(_channel_ref(channel, "private_channel"))
-            continue
-        channel_id = str(channel.get("id") or "")
-        if channel_id and channel_id not in matched_public_ids:
-            matched_public.append(channel)
-            matched_public_ids.add(channel_id)
-
-    public_ids = {str(ch.get("id") or "") for ch in public_channels if ch.get("id")}
-    return matched_public, skipped, public_ids
-
-
 def _client() -> SlackSyncClient:
     """Construct the Slack tool client from either import path or repo layout."""
     try:
@@ -496,12 +422,7 @@ def _client() -> SlackSyncClient:
 
 
 async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
-    """Sync configured public Slack channels into Postgres."""
-    configured = _configured_channels(inp)
-    if not configured:
-        ctx.log("slack_sync_skipped_no_channels")
-        return {"status": "skipped", "reason": "no_channels_configured"}
-
+    """Sync public Slack channels that the bot has been added to into Postgres."""
     lookback_days = _positive_int(
         inp.lookback_days or os.getenv("SLACK_SYNC_LOOKBACK_DAYS"),
         DEFAULT_LOOKBACK_DAYS,
@@ -513,21 +434,15 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     limit = _positive_int(inp.limit, DEFAULT_PAGE_LIMIT)
 
     client = _client()
-    all_channels = client.list_channels(limit=10_000)
-    channels_to_sync, skipped, public_ids = _resolve_channels(configured, all_channels, ctx)
-    public_channels = [ch for ch in all_channels if str(ch.get("id") or "") in public_ids]
-    await _upsert_channels(
-        ctx._pool,
-        public_channels,
-        {str(ch.get("id") or "") for ch in channels_to_sync},
-    )
+    channels_to_sync = client.list_bot_channels(limit=10_000, force_refresh=True)
+    await _upsert_channels(ctx._pool, channels_to_sync)
 
     if not channels_to_sync:
-        ctx.log("slack_sync_skipped_no_public_channels", skipped=skipped)
+        ctx.log("slack_sync_skipped_no_bot_member_channels")
         return {
             "status": "skipped",
-            "reason": "no_public_channels",
-            "channels_skipped": skipped,
+            "reason": "no_bot_member_channels",
+            "channels_skipped": [],
         }
 
     users = client.list_users(limit=10_000)
@@ -539,12 +454,13 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         run_id=run_id,
         workflow_run_id=ctx.run_id,
         mode=inp.mode,
-        requested=configured,
-        skipped=skipped,
+        requested=[_channel_ref(channel) for channel in channels_to_sync],
+        skipped=[],
         metadata={**inp.metadata, "users_upserted": users_upserted},
     )
 
     synced: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = []
     failed: list[dict[str, str]] = []
     counts = {
         "messages_fetched": 0,
