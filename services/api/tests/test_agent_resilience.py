@@ -31,6 +31,24 @@ class _EOFReattachBackend:
         return "running" if self.status_calls == 1 else "gone"
 
 
+class _KnownUserEventBackend:
+    async def stream_stdout(self, _session):
+        yield json.dumps({"type": "user", "message": {"content": []}})
+        yield json.dumps({"type": "turn.done", "result": "OK"})
+
+    async def status(self, _session):
+        return "gone"
+
+
+class _UnknownEventBackend:
+    async def stream_stdout(self, _session):
+        yield json.dumps({"type": "mystery_event"})
+        yield json.dumps({"type": "turn.done", "result": "OK"})
+
+    async def status(self, _session):
+        return "gone"
+
+
 def test_elapsed_since_uses_monotonic_delta_when_available() -> None:
     from api.agent import _elapsed_since
 
@@ -87,6 +105,78 @@ async def test_stream_stdout_reattaches_when_running_eof() -> None:
     )
     backend.close_streams.assert_awaited_once_with(session)
     backend.attach.assert_awaited_once_with(session)
+
+
+@pytest.mark.asyncio
+async def test_stream_stdout_accepts_user_events_without_warning() -> None:
+    from api.agent import _stream_stdout
+
+    session = SandboxSession(
+        sandbox_id="sbx-known-user",
+        thread_key="test:known-user",
+        harness="amp",
+        engine="amp",
+    )
+    rt = RuntimeState()
+    backend = _KnownUserEventBackend()
+
+    with (
+        patch("api.agent._persist_turn_messages", new_callable=AsyncMock),
+        patch("api.agent._db_complete_inflight_turn", new_callable=AsyncMock),
+        patch("api.agent.log.warning") as warning,
+    ):
+        [
+            event
+            async for event in _stream_stdout(
+                session,
+                backend,
+                rt,
+                turn_id=1,
+                t0=time.monotonic(),
+            )
+        ]
+
+    assert not any(
+        call.args and call.args[0] == "stdout_unknown_event_type"
+        for call in warning.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_stdout_warns_for_unknown_event_types() -> None:
+    from api.agent import _stream_stdout
+
+    session = SandboxSession(
+        sandbox_id="sbx-unknown",
+        thread_key="test:unknown-event",
+        harness="amp",
+        engine="amp",
+    )
+    rt = RuntimeState()
+    backend = _UnknownEventBackend()
+
+    with (
+        patch("api.agent._persist_turn_messages", new_callable=AsyncMock),
+        patch("api.agent._db_complete_inflight_turn", new_callable=AsyncMock),
+        patch("api.agent.log.warning") as warning,
+    ):
+        [
+            event
+            async for event in _stream_stdout(
+                session,
+                backend,
+                rt,
+                turn_id=1,
+                t0=time.monotonic(),
+            )
+        ]
+
+    warning.assert_any_call(
+        "stdout_unknown_event_type",
+        type="mystery_event",
+        thread_key="test:unknown-event",
+        sandbox="sbx-unknown",
+    )
 
 
 @pytest.mark.asyncio
