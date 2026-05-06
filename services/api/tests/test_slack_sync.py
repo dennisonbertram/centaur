@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -172,6 +173,34 @@ def _reply_message() -> dict[str, Any]:
         "reply_count": 0,
         "type": "message",
     }
+
+
+def test_schedule_defaults_enabled(monkeypatch):
+    monkeypatch.delenv("SLACK_ETL_ENABLED", raising=False)
+    monkeypatch.delenv("SLACK_SYNC_INTERVAL_SECONDS", raising=False)
+
+    from workflows import slack_sync
+
+    reloaded = importlib.reload(slack_sync)
+
+    assert reloaded.SCHEDULE == {
+        "schedule_id": "slack_sync",
+        "interval_seconds": 3600,
+        "enabled": True,
+        "no_delivery": True,
+    }
+
+
+def test_schedule_respects_env_overrides(monkeypatch):
+    monkeypatch.setenv("SLACK_ETL_ENABLED", "false")
+    monkeypatch.setenv("SLACK_SYNC_INTERVAL_SECONDS", "900")
+
+    from workflows import slack_sync
+
+    reloaded = importlib.reload(slack_sync)
+
+    assert reloaded.SCHEDULE["enabled"] is False
+    assert reloaded.SCHEDULE["interval_seconds"] == 900
 
 
 @pytest.mark.asyncio

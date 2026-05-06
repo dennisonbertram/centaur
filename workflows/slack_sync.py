@@ -18,7 +18,36 @@ WORKFLOW_NAME = "slack_sync"
 DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_THREAD_LOOKBACK_DAYS = 3
 DEFAULT_PAGE_LIMIT = 200
+DEFAULT_SYNC_INTERVAL_SECONDS = 3600
 FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+
+
+def _positive_int(value: int | str | None, default: int) -> int:
+    """Coerce positive integer config values with a safe default."""
+    try:
+        parsed = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _env_flag_enabled(name: str, default: bool = True) -> bool:
+    """Read a boolean feature flag where common false strings opt out."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in FALSE_ENV_VALUES
+
+
+SCHEDULE = {
+    "schedule_id": "slack_sync",
+    "interval_seconds": _positive_int(
+        os.getenv("SLACK_SYNC_INTERVAL_SECONDS"),
+        DEFAULT_SYNC_INTERVAL_SECONDS,
+    ),
+    "enabled": _env_flag_enabled("SLACK_ETL_ENABLED", default=True),
+    "no_delivery": True,
+}
 
 
 class SlackSyncClient(Protocol):
@@ -65,23 +94,6 @@ class Input:
     latest: str | None = None
     mode: str = "incremental"
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
-def _positive_int(value: int | str | None, default: int) -> int:
-    """Coerce positive integer config values with a safe default."""
-    try:
-        parsed = int(value) if value is not None else default
-    except (TypeError, ValueError):
-        return default
-    return parsed if parsed > 0 else default
-
-
-def _env_flag_enabled(name: str, default: bool = True) -> bool:
-    """Read a boolean feature flag where common false strings opt out."""
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() not in FALSE_ENV_VALUES
 
 
 def _ts_minus_days(ts: str | None, days: int) -> str | None:

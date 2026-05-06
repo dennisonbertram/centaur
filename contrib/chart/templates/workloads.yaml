@@ -466,6 +466,10 @@ spec:
             - name: SLACK_ETL_ENABLED
               value: {{ ternary "1" "0" .Values.api.slackEtlEnabled | quote }}
 {{- end }}
+{{- if not (hasKey $apiExtraEnv "SLACK_SYNC_INTERVAL_SECONDS") }}
+            - name: SLACK_SYNC_INTERVAL_SECONDS
+              value: {{ .Values.api.slackSyncIntervalSeconds | quote }}
+{{- end }}
             - name: AGENT_IMAGE
               value: {{ printf "%s:%s" .Values.sandbox.image.repository .Values.sandbox.image.tag | quote }}
             - name: KUBERNETES_AGENT_IMAGE_PULL_POLICY
