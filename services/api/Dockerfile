@@ -45,6 +45,7 @@ COPY services/api/api/ api/
 COPY services/api/db/ db/
 COPY services/sandbox/SYSTEM_PROMPT.md services/sandbox/SYSTEM_PROMPT.md
 COPY tools/ tools/
+COPY workflows/ workflows/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --inexact
 
