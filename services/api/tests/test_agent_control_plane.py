@@ -467,6 +467,34 @@ async def test_execute_enqueues_and_creates_outbox(client, db_pool, api_key: str
 
 
 @pytest.mark.asyncio
+async def test_execute_dev_delivery_does_not_create_outbox(
+    client, db_pool, api_key: str
+):
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    await _insert_assignment(db_pool, thread_key, generation=1)
+
+    res = await client.post(
+        "/agent/execute",
+        headers=_auth(api_key),
+        json={
+            "thread_key": thread_key,
+            "assignment_generation": 1,
+            "execute_id": "exec-dev",
+            "delivery": {"platform": "dev"},
+        },
+    )
+
+    assert res.status_code == 202
+    execution_id = res.json()["execution_id"]
+
+    outbox_row = await db_pool.fetchrow(
+        "SELECT state FROM agent_final_delivery_outbox WHERE execution_id = $1",
+        execution_id,
+    )
+    assert outbox_row is None
+
+
+@pytest.mark.asyncio
 async def test_final_delivery_claim_and_mark_delivered(client, db_pool, api_key: str):
     execution_id = f"exe-{uuid.uuid4().hex[:10]}"
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"

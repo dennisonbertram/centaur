@@ -48,10 +48,14 @@ from api.sandbox.registry import get_backend
 log = structlog.get_logger()
 
 EXECUTION_SILENCE_TIMEOUT_S = int(os.getenv("EXECUTION_SILENCE_TIMEOUT_S", "600"))
-EXECUTION_TOOL_SILENCE_TIMEOUT_S = int(os.getenv("EXECUTION_TOOL_SILENCE_TIMEOUT_S", "1800"))
+EXECUTION_TOOL_SILENCE_TIMEOUT_S = int(
+    os.getenv("EXECUTION_TOOL_SILENCE_TIMEOUT_S", "1800")
+)
 EXECUTION_HARD_TIMEOUT_S = int(os.getenv("EXECUTION_HARD_TIMEOUT_S", "3600"))
 EXECUTION_WATCHDOG_POLL_S = float(os.getenv("EXECUTION_WATCHDOG_POLL_S", "1.0"))
-EXECUTION_RECONCILE_INTERVAL_S = float(os.getenv("EXECUTION_RECONCILE_INTERVAL_S", "0.5"))
+EXECUTION_RECONCILE_INTERVAL_S = float(
+    os.getenv("EXECUTION_RECONCILE_INTERVAL_S", "0.5")
+)
 EXECUTION_STREAM_EOF_RETRY_DELAY_S = max(
     float(os.getenv("EXECUTION_STREAM_EOF_RETRY_DELAY_S", "1.0")),
     0.0,
@@ -147,11 +151,7 @@ def _raw_harness_auth_retry_attempt(metadata: dict[str, Any]) -> int:
 def prompt_identity(
     *, harness: str, persona_id: str | None, agents_md_override: str | None
 ) -> tuple[str, str]:
-    prompt_ref = (
-        f"persona:{persona_id}"
-        if persona_id
-        else f"harness:{harness}"
-    )
+    prompt_ref = f"persona:{persona_id}" if persona_id else f"harness:{harness}"
     effective = agents_md_override if agents_md_override is not None else prompt_ref
     sha = hashlib.sha256(effective.encode("utf-8")).hexdigest()
     return prompt_ref, sha
@@ -239,7 +239,9 @@ async def _merge_execution_repo_context(
     )
 
 
-def _attachment_name_from_source_path(source_path: str | None, attachment_id: str) -> str:
+def _attachment_name_from_source_path(
+    source_path: str | None, attachment_id: str
+) -> str:
     if not source_path:
         return f"{attachment_id}.bin"
     with contextlib.suppress(Exception):
@@ -369,7 +371,12 @@ async def spawn_assignment(
         await _write_agents_override(session.sandbox_id, effective_agents_md_override)
 
     persona = effective_persona_id
-    if persona is None and requested_harness not in {"amp", "claude-code", "codex", "pi-mono"}:
+    if persona is None and requested_harness not in {
+        "amp",
+        "claude-code",
+        "codex",
+        "pi-mono",
+    }:
         persona = requested_harness
 
     prompt_ref, prompt_sha = prompt_identity(
@@ -432,13 +439,16 @@ async def spawn_assignment(
                 resolved_prompt_ref = active["prompt_ref"]
                 resolved_prompt_sha = active["effective_agents_md_sha256"]
             else:
-                generation = int(
-                    await conn.fetchval(
-                        "SELECT COALESCE(MAX(assignment_generation), 0) "
-                        "FROM agent_runtime_assignments WHERE thread_key = $1",
-                        thread_key,
+                generation = (
+                    int(
+                        await conn.fetchval(
+                            "SELECT COALESCE(MAX(assignment_generation), 0) "
+                            "FROM agent_runtime_assignments WHERE thread_key = $1",
+                            thread_key,
+                        )
                     )
-                ) + 1
+                    + 1
+                )
                 await conn.execute(
                     "INSERT INTO agent_runtime_assignments ("
                     "thread_key, assignment_generation, runtime_id, harness, engine, "
@@ -523,7 +533,11 @@ async def extract_inline_attachments(
                     422,
                 ) from exc
             attachment_id = f"att-{uuid.uuid4().hex[:16]}"
-            source_path = part.get("source_path") if isinstance(part.get("source_path"), str) else None
+            source_path = (
+                part.get("source_path")
+                if isinstance(part.get("source_path"), str)
+                else None
+            )
             name = _attachment_name_from_source_path(source_path, attachment_id)
             await pool.execute(
                 "INSERT INTO attachments (id, thread_key, message_id, name, mime_type, data) "
@@ -560,7 +574,11 @@ def event_to_chat_parts(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         elif part_type == "attachment_ref":
             attachment_id = str(part.get("attachment_id") or "")
             media_type = str(part.get("media_type") or "application/octet-stream")
-            source_path = part.get("source_path") if isinstance(part.get("source_path"), str) else None
+            source_path = (
+                part.get("source_path")
+                if isinstance(part.get("source_path"), str)
+                else None
+            )
             name = _attachment_name_from_source_path(source_path, attachment_id)
             chat_parts.append(
                 {
@@ -617,7 +635,9 @@ async def append_message(
     role = event_role(event)
     content_parts = flatten_event_parts(event)
     if not content_parts:
-        raise ControlPlaneError("INVALID_AMP_EVENT_ENVELOPE", "event.message.content is required", 400)
+        raise ControlPlaneError(
+            "INVALID_AMP_EVENT_ENVELOPE", "event.message.content is required", 400
+        )
 
     chat_message_id = f"msg:{thread_key}:{message_id}"
     attachment_ids: list[str] = []
@@ -817,7 +837,9 @@ async def append_execution_state(
     )
 
 
-async def get_execution_terminal_snapshot(pool, execution_id: str) -> dict[str, Any] | None:
+async def get_execution_terminal_snapshot(
+    pool, execution_id: str
+) -> dict[str, Any] | None:
     row = await pool.fetchrow(
         "SELECT thread_key, status, terminal_reason, result_text, error_text "
         "FROM agent_execution_requests WHERE execution_id = $1",
@@ -843,14 +865,10 @@ async def get_execution_terminal_snapshot(pool, execution_id: str) -> dict[str, 
                 else None
             ),
             result_text=(
-                str(row["result_text"])
-                if row["result_text"] is not None
-                else None
+                str(row["result_text"]) if row["result_text"] is not None else None
             ),
             error_text=(
-                str(row["error_text"])
-                if row["error_text"] is not None
-                else None
+                str(row["error_text"]) if row["error_text"] is not None else None
             ),
         ),
     }
@@ -970,15 +988,16 @@ async def enqueue_execution(
                 silence_deadline,
                 hard_deadline,
             )
-            await conn.execute(
-                "INSERT INTO agent_final_delivery_outbox ("
-                "execution_id, thread_key, delivery, state"
-                ") VALUES ($1, $2, $3::jsonb, 'awaiting_terminal') "
-                "ON CONFLICT (execution_id) DO NOTHING",
-                execution_id,
-                thread_key,
-                canonical_json(delivery),
-            )
+            if _delivery_platform(delivery) != "dev":
+                await conn.execute(
+                    "INSERT INTO agent_final_delivery_outbox ("
+                    "execution_id, thread_key, delivery, state"
+                    ") VALUES ($1, $2, $3::jsonb, 'awaiting_terminal') "
+                    "ON CONFLICT (execution_id) DO NOTHING",
+                    execution_id,
+                    thread_key,
+                    canonical_json(delivery),
+                )
             await append_execution_state(
                 conn,
                 execution_id=execution_id,
@@ -1040,12 +1059,16 @@ async def get_execution(pool, execution_id: str) -> dict[str, Any] | None:
         "metadata": decode_jsonb(row["metadata"], {}),
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "started_at": row["started_at"].isoformat() if row["started_at"] else None,
-        "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+        "completed_at": row["completed_at"].isoformat()
+        if row["completed_at"]
+        else None,
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
     }
 
 
-async def list_thread_executions(pool, thread_key: str, limit: int = 20) -> list[dict[str, Any]]:
+async def list_thread_executions(
+    pool, thread_key: str, limit: int = 20
+) -> list[dict[str, Any]]:
     rows = await pool.fetch(
         "SELECT execution_id, execute_id, status, created_at, started_at, completed_at "
         "FROM agent_execution_requests WHERE thread_key = $1 "
@@ -1060,7 +1083,9 @@ async def list_thread_executions(pool, thread_key: str, limit: int = 20) -> list
             "status": r["status"],
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
             "started_at": r["started_at"].isoformat() if r["started_at"] else None,
-            "completed_at": r["completed_at"].isoformat() if r["completed_at"] else None,
+            "completed_at": r["completed_at"].isoformat()
+            if r["completed_at"]
+            else None,
         }
         for r in rows
     ]
@@ -1288,12 +1313,16 @@ async def _mark_execution_terminal(
         "SELECT agent_thread_id FROM sandbox_sessions WHERE thread_key = $1",
         thread_key,
     )
-    agent_thread_id = raw_agent_thread_id.strip() if isinstance(raw_agent_thread_id, str) else ""
+    agent_thread_id = (
+        raw_agent_thread_id.strip() if isinstance(raw_agent_thread_id, str) else ""
+    )
     if row:
         ag = row["assignment_generation"]
         metadata = decode_jsonb(row["metadata"], {})
         if isinstance(metadata, dict):
-            repo_context = _extract_repo_context(decode_jsonb(metadata.get("repo_context"), {}))
+            repo_context = _extract_repo_context(
+                decode_jsonb(metadata.get("repo_context"), {})
+            )
         assignment_row = await pool.fetchrow(
             "SELECT harness, engine, persona_id, prompt_ref, effective_agents_md_sha256 "
             "FROM agent_runtime_assignments WHERE thread_key = $1 AND assignment_generation = $2",
@@ -1339,6 +1368,30 @@ async def _mark_execution_terminal(
             **({"repo_context": repo_context} if repo_context else {}),
         },
     )
+    delivery_platform = _delivery_platform(
+        decode_jsonb(row["delivery"], {}) if row else {}
+    )
+    if delivery_platform == "dev":
+        log.info(
+            "final_delivery_skipped_dev",
+            execution_id=execution_id,
+            thread_key=thread_key,
+            status=status,
+            terminal_reason=terminal_reason,
+        )
+        try:
+            from api.workflow_engine import notify_execution_terminal
+
+            await notify_execution_terminal(pool, execution_id)
+        except Exception:
+            log.warning(
+                "workflow_terminal_notify_failed",
+                execution_id=execution_id,
+                thread_key=thread_key,
+                exc_info=True,
+            )
+        return
+
     await pool.execute(
         "UPDATE agent_final_delivery_outbox SET state = 'pending', final_payload = $1::jsonb, "
         "next_attempt_at = $2, lease_owner = NULL, lease_expires_at = NULL, updated_at = NOW() "
@@ -1384,6 +1437,7 @@ async def _mark_execution_terminal(
 
     try:
         from api.workflow_engine import notify_execution_terminal
+
         await notify_execution_terminal(pool, execution_id)
     except Exception:
         log.warning(
@@ -1414,9 +1468,7 @@ async def _touch_execution_progress(
     )
     if row and row["silence_deadline_at"]:
         return row["silence_deadline_at"]
-    return dt.datetime.now(dt.timezone.utc) + dt.timedelta(
-        seconds=silence_timeout_s
-    )
+    return dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=silence_timeout_s)
 
 
 async def _heartbeat_execution_lease(pool, execution_id: str) -> None:
@@ -1584,7 +1636,10 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
                     "WHERE execution_id = $1 LIMIT 1",
                     candidate["execution_id"],
                 )
-                if is_workflow_linked and workflow_running_count >= _MAX_WORKFLOW_EXECUTION_SLOTS:
+                if (
+                    is_workflow_linked
+                    and workflow_running_count >= _MAX_WORKFLOW_EXECUTION_SLOTS
+                ):
                     continue
                 row = await conn.fetchrow(
                     "UPDATE agent_execution_requests er "
@@ -1668,7 +1723,11 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
     prompt_ref = assignment["prompt_ref"]
     prompt_sha = assignment["effective_agents_md_sha256"]
     claimed_at = row.get("claimed_at")
-    queue_delay_s = (claimed_at - row["created_at"]).total_seconds() if claimed_at and row.get("created_at") else 0
+    queue_delay_s = (
+        (claimed_at - row["created_at"]).total_seconds()
+        if claimed_at and row.get("created_at")
+        else 0
+    )
     log.info(
         "execute_claimed",
         execution_id=execution_id,
@@ -1720,7 +1779,9 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
             session,
             "",
             platform=delivery.get("platform") if isinstance(delivery, dict) else None,
-            user_id=delivery.get("recipient_user_id") if isinstance(delivery, dict) else None,
+            user_id=delivery.get("recipient_user_id")
+            if isinstance(delivery, dict)
+            else None,
         )
         durable_turn_id = str(inject_result.get("durable_turn_id") or "")
         await pool.execute(
@@ -1971,20 +2032,32 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
                         usage_metrics = extract_usage_metrics(
                             {
                                 "input_tokens": observation_payload.get("input_tokens"),
-                                "output_tokens": observation_payload.get("output_tokens"),
-                                "cache_creation_input_tokens": observation_payload.get("cache_creation_input_tokens"),
-                                "cache_read_input_tokens": observation_payload.get("cache_read_input_tokens"),
+                                "output_tokens": observation_payload.get(
+                                    "output_tokens"
+                                ),
+                                "cache_creation_input_tokens": observation_payload.get(
+                                    "cache_creation_input_tokens"
+                                ),
+                                "cache_read_input_tokens": observation_payload.get(
+                                    "cache_read_input_tokens"
+                                ),
                                 "cost_usd": observation_payload.get("cost_usd"),
                             },
-                            model=observation_payload.get("model") if isinstance(observation_payload.get("model"), str) else None,
+                            model=observation_payload.get("model")
+                            if isinstance(observation_payload.get("model"), str)
+                            else None,
                         )
                         record_usage_observation(
                             harness=harness,
                             model=usage_metrics.get("model"),
                             input_tokens=usage_metrics["input_tokens"],
                             output_tokens=usage_metrics["output_tokens"],
-                            cache_creation_input_tokens=usage_metrics["cache_creation_input_tokens"],
-                            cache_read_input_tokens=usage_metrics["cache_read_input_tokens"],
+                            cache_creation_input_tokens=usage_metrics[
+                                "cache_creation_input_tokens"
+                            ],
+                            cache_read_input_tokens=usage_metrics[
+                                "cache_read_input_tokens"
+                            ],
                             cost_usd=usage_metrics["cost_usd"],
                         )
             silence_deadline = await _touch_execution_progress(
@@ -2028,7 +2101,9 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
     finally:
         if pending_event is not None:
             pending_event.cancel()
-            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration, Exception):
+            with contextlib.suppress(
+                asyncio.CancelledError, StopAsyncIteration, Exception
+            ):
                 await pending_event
         with contextlib.suppress(Exception):
             await stream.aclose()
@@ -2070,7 +2145,9 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
                 "updated_at = NOW() "
                 "WHERE execution_id = $3 AND status = 'running'",
                 float(EXECUTION_STREAM_EOF_RETRY_DELAY_S),
-                float(max(EXECUTION_TOOL_SILENCE_TIMEOUT_S, EXECUTION_SILENCE_TIMEOUT_S)),
+                float(
+                    max(EXECUTION_TOOL_SILENCE_TIMEOUT_S, EXECUTION_SILENCE_TIMEOUT_S)
+                ),
                 execution_id,
             )
             log.warning(
@@ -2184,7 +2261,9 @@ async def _execution_worker_loop(pool) -> None:
             if row is None:
                 _worker_wake.clear()
                 try:
-                    await asyncio.wait_for(_worker_wake.wait(), timeout=EXECUTION_RECONCILE_INTERVAL_S)
+                    await asyncio.wait_for(
+                        _worker_wake.wait(), timeout=EXECUTION_RECONCILE_INTERVAL_S
+                    )
                 except TimeoutError:
                     pass
                 continue
