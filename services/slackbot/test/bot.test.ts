@@ -766,6 +766,7 @@ describe("execute streams structured progress immediately", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
 
     await (bot as any).setAssistantTitle("C123456:1770000000.000400", {}, "Final answer from fallback");
+    await (bot as any).setAssistantTitle("C123456:1770000000.000400", {}, "Final answer from fallback again");
 
     expect(slack.setAssistantTitle).toHaveBeenCalledOnce();
     expect(infoSpy).toHaveBeenCalledWith("set_title_skipped", expect.objectContaining({

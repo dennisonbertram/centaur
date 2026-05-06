@@ -432,6 +432,8 @@ export class SlackBot {
 
   private readonly chartRenderer: ChartRenderer;
 
+  private readonly assistantTitleUnsupported = new Set<string>();
+
   constructor(
     readonly client: CentaurClient,
     private viewerUrl = "",
@@ -1449,11 +1451,14 @@ export class SlackBot {
   ): Promise<void> {
     const targetThreadId = slackDeliveryThreadId(threadKey, delivery);
     await this.withSlackDeliveryContext(delivery, async () => {
-      const chunks = splitMarkdownForSlackMessages(markdown);
+      const chunks = splitMarkdownForSlackMessages(markdown, { maxBlocks: 49 });
       for (let i = 0; i < chunks.length; i += 1) {
         const chunkFiles = i === chunks.length - 1 && files.length ? files : undefined;
+        const chunkMarkdown = chunks.length > 1
+          ? `Part ${i + 1}/${chunks.length}\n\n${chunks[i]}`
+          : chunks[i];
         await this.slack!.postMessage(targetThreadId, {
-          markdown: chunks[i],
+          markdown: chunkMarkdown,
           ...(chunkFiles ? { files: chunkFiles } : {}),
         });
       }
@@ -1489,12 +1494,19 @@ export class SlackBot {
   ): Promise<void> {
     if (!this.slack || !title.trim()) return;
 
+    const targetThreadId = slackDeliveryThreadId(threadKey, delivery);
+    const { channel, threadTs } = splitThreadKey(targetThreadId);
+    const unsupportedKey = `${channel}:${threadTs}`;
+    if (this.assistantTitleUnsupported.has(unsupportedKey)) {
+      return;
+    }
+
     try {
-      const { channel, threadTs } = splitThreadKey(slackDeliveryThreadId(threadKey, delivery));
       await this.slack.setAssistantTitle(channel, threadTs, title.slice(0, 60));
     } catch (err) {
       const classified = classifySlackError(err);
       if (!classified.retryable && classified.errorClass === "restricted_destination") {
+        this.assistantTitleUnsupported.add(unsupportedKey);
         log.info("set_title_skipped", {
           thread_key: threadKey,
           error: classified.message,
