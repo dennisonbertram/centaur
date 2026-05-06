@@ -387,13 +387,10 @@ class SlackClient:
             pass
         return user_cache
 
-    def list_bot_channels(
-        self, include_private: bool = True, limit: int = 500, force_refresh: bool = False
-    ) -> list[dict]:
-        """List channels the bot is a member of.
+    def list_bot_channels(self, limit: int = 500, force_refresh: bool = False) -> list[dict]:
+        """List public channels the bot is a member of.
 
         Args:
-            include_private: Include private channels
             limit: Maximum channels to return
             force_refresh: Ignore cache and fetch fresh data
 
@@ -409,13 +406,12 @@ class SlackClient:
 
         channels = []
         cursor = None
-        types = "public_channel,private_channel" if include_private else "public_channel"
 
         while True:
             try:
                 response = self._retry_on_ratelimit(
                     self._client.conversations_list,
-                    types=types,
+                    types="public_channel",
                     limit=min(limit - len(channels), 200),
                     cursor=cursor,
                     exclude_archived=True,
@@ -934,16 +930,15 @@ class SlackClient:
             "sync_state": next_state,
         }
 
-    def list_channels(self, include_private: bool = False, limit: int = 200) -> list[dict]:
-        """List all Slack channels (not just bot member channels)."""
+    def list_channels(self, limit: int = 200) -> list[dict]:
+        """List public Slack channels (not just bot member channels)."""
         channels = []
         cursor = None
-        types = "public_channel,private_channel" if include_private else "public_channel"
 
         while True:
             try:
                 response = self._client.conversations_list(
-                    types=types,
+                    types="public_channel",
                     limit=min(limit - len(channels), 200),
                     cursor=cursor,
                     exclude_archived=True,
@@ -976,31 +971,51 @@ class SlackClient:
 
     def list_users(self, limit: int = 200) -> list[dict]:
         """List workspace users."""
-        try:
-            response = self._client.users_list(limit=limit)
-        except SlackApiError as e:
-            self._raise_slack_api_error(
-                e,
-                slack_method="users.list",
-                access_path="bot_token",
-            )
-
         users = []
-        for user in response.get("members", []):
-            if user.get("deleted"):
-                continue
-            users.append(
-                {
-                    "id": user.get("id", ""),
-                    "name": user.get("name", ""),
-                    "real_name": user.get("real_name", ""),
-                    "email": user.get("profile", {}).get("email", ""),
-                    "title": user.get("profile", {}).get("title", ""),
-                    "is_bot": user.get("is_bot", False),
-                }
-            )
+        cursor = None
 
-        return sorted(users, key=lambda x: x["name"])
+        while len(users) < limit:
+            try:
+                kwargs: dict[str, Any] = {
+                    "limit": min(limit - len(users), self._MAX_PAGE_SIZE),
+                }
+                if cursor:
+                    kwargs["cursor"] = cursor
+                response = self._retry_on_ratelimit(
+                    self._client.users_list,
+                    method_key="users.list",
+                    **kwargs,
+                )
+            except SlackApiError as e:
+                self._raise_slack_api_error(
+                    e,
+                    slack_method="users.list",
+                    access_path="bot_token",
+                )
+
+            for user in response.get("members", []):
+                if user.get("deleted"):
+                    continue
+                profile = user.get("profile", {}) or {}
+                users.append(
+                    {
+                        "id": user.get("id", ""),
+                        "name": user.get("name", ""),
+                        "real_name": user.get("real_name", ""),
+                        "display_name": profile.get("display_name", ""),
+                        "email": profile.get("email", ""),
+                        "title": profile.get("title", ""),
+                        "is_bot": user.get("is_bot", False),
+                        "is_deleted": user.get("deleted", False),
+                        "team_id": user.get("team_id", "") or user.get("team", ""),
+                    }
+                )
+
+            cursor = response.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
+
+        return sorted(users[:limit], key=lambda x: x["name"])
 
     def get_channel_members(self, channel: str) -> list[dict]:
         """Get all members of a Slack channel with their user info.

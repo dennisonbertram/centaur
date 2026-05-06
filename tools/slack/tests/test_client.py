@@ -23,6 +23,8 @@ class _FakeWebClient:
         self.history_pages: list[dict] = []
         self.reply_calls: list[dict] = []
         self.reply_pages: list[dict] = []
+        self.users_calls: list[dict] = []
+        self.users_pages: list[dict] = []
         self.api_calls: list[tuple[str, dict]] = []
         self.upload_exception: Exception | None = None
 
@@ -37,6 +39,10 @@ class _FakeWebClient:
     def conversations_replies(self, **kwargs):
         self.reply_calls.append(kwargs)
         return self.reply_pages.pop(0)
+
+    def users_list(self, **kwargs):
+        self.users_calls.append(kwargs)
+        return self.users_pages.pop(0)
 
     def files_upload_v2(self, **kwargs):
         self.last_kwargs = kwargs
@@ -447,3 +453,47 @@ def test_sync_channel_history_uses_watermark_lookback() -> None:
     assert captured["inclusive"] is True
     assert result["sync_state"]["cursor"] is None
     assert result["sync_state"]["watermark"] == "3000100.000000"
+
+
+def test_list_users_paginates_and_skips_deleted_by_default() -> None:
+    client, fake_web_client = _make_client()
+    fake_web_client.users_pages = [
+        {
+            "members": [
+                {
+                    "id": "U1",
+                    "name": "alice",
+                    "real_name": "Alice Example",
+                    "profile": {"display_name": "Alice"},
+                },
+                {
+                    "id": "U2",
+                    "name": "deleted",
+                    "deleted": True,
+                },
+            ],
+            "response_metadata": {"next_cursor": "cursor-2"},
+        },
+        {
+            "members": [
+                {
+                    "id": "U3",
+                    "name": "bob",
+                    "real_name": "Bob Example",
+                    "team_id": "T1",
+                    "profile": {"display_name": "Bobby"},
+                },
+            ],
+            "response_metadata": {"next_cursor": ""},
+        },
+    ]
+
+    users = client.list_users(limit=10)
+
+    assert [user["id"] for user in users] == ["U1", "U3"]
+    assert users[0]["display_name"] == "Alice"
+    assert users[1]["team_id"] == "T1"
+    assert fake_web_client.users_calls == [
+        {"limit": 10},
+        {"limit": 9, "cursor": "cursor-2"},
+    ]
