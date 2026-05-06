@@ -372,21 +372,25 @@ function splitSlackBlocks(blocks: SlackBlocks): SlackBlocks[] {
   return blocks.length ? [blocks] : [];
 }
 
-function shouldFallbackSlackStreamError(error: unknown): boolean {
+function expectedSlackFallbackReason(error: unknown): string | null {
   const classified = classifySlackError(error);
   if (
     !classified.retryable
     && (classified.errorClass === "invalid_destination" || classified.errorClass === "restricted_destination")
   ) {
-    return true;
+    return classified.errorClass;
   }
 
   const errMsg = classified.message;
-  return errMsg.includes("message_not_in_streaming_state")
-    || errMsg.includes("message_not_found")
-    || errMsg.includes("msg_too_long")
-    || errMsg.includes("streaming_mode_mismatch")
-    || errMsg.includes("cannot_provide_both_markdown_text_and_chunks");
+  if (errMsg.includes("message_not_in_streaming_state")) return "message_not_in_streaming_state";
+  if (errMsg.includes("message_not_found")) return "message_not_found";
+  if (errMsg.includes("msg_too_long")) return "msg_too_long";
+  if (errMsg.includes("msg_blocks_too_long")) return "msg_blocks_too_long";
+  if (errMsg.includes("streaming_mode_mismatch")) return "streaming_mode_mismatch";
+  if (errMsg.includes("cannot_provide_both_markdown_text_and_chunks")) {
+    return "streaming_payload_conflict";
+  }
+  return null;
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -815,9 +819,11 @@ export class SlackBot {
         // plain chat.postMessage delivery still succeeds.
         // Fall back to posting a plain message with whatever result we accumulated,
         // or poll the API for the final result if we don't have one yet.
-        if (shouldFallbackSlackStreamError(err)) {
-          log.warn("slack_stream_fallback", {
+        const fallbackReason = expectedSlackFallbackReason(err);
+        if (fallbackReason) {
+          log.info("slack_stream_fallback", {
             thread_key: threadKey,
+            reason: fallbackReason,
             error: classified.message,
             error_class: classified.errorClass,
             error_code: classified.code,
@@ -913,10 +919,18 @@ export class SlackBot {
           try {
             await streamedReply.edit({ markdown: streamedMarkdown });
           } catch (err) {
-            log.warn("streamed_reply_block_upgrade_failed", {
+            const classified = classifySlackError(err);
+            const expected = classified.errorClass === "invalid_payload"
+              || classified.message.includes("msg_too_long")
+              || classified.message.includes("msg_blocks_too_long");
+            const logFn = expected ? log.info.bind(log) : log.warn.bind(log);
+            logFn("streamed_reply_block_upgrade_failed", {
               thread_key: threadKey,
               execution_id: executionId,
-              error: err instanceof Error ? err.message : String(err),
+              error: classified.message,
+              error_class: classified.errorClass,
+              error_code: classified.code,
+              retryable: classified.retryable,
             });
           }
         }
@@ -1351,7 +1365,7 @@ export class SlackBot {
         const fallbackMarkdown = flattenMarkdownTables(markdown);
         if (fallbackMarkdown !== markdown) {
           try {
-            log.warn("final_delivery_retry_plaintext", {
+            log.info("final_delivery_retry_plaintext", {
               execution_id: executionId,
               thread_key: threadKey,
             });

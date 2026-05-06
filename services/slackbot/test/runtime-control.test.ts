@@ -294,6 +294,39 @@ describe("SlackBot runtime control", () => {
     expect(streamText(runtime.streamedChunks)).toContain("stored answer");
   });
 
+  it("logs expected Slack streaming fallbacks at info level", async () => {
+    const client = createImmediateStreamClient();
+    client.getExecution = vi.fn(async () => ({ status: "running" }));
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    const thread: BotThread = {
+      id: "slack:C123:1700000000.000100",
+      async subscribe() {},
+      async startTyping() {},
+      async post(content) {
+        if ("markdown" in content) return { id: "fallback", async edit() {} };
+        throw new Error("message_not_in_streaming_state");
+      },
+    };
+
+    const bot = new SlackBot(client as any);
+    try {
+      await bot.onSubscribedMessage(thread, userMessage("follow-up", {
+        id: "1700000000.000004",
+        isMention: true,
+      }));
+    } finally {
+      // assertions below inspect captured writes before restoring stdout.
+    }
+
+    const writes = stdoutSpy.mock.calls.map(([chunk]) => String(chunk));
+    stdoutSpy.mockRestore();
+    expect(writes.some((line) => line.includes('"event":"slack_stream_fallback"')
+      && line.includes('"level":"info"'))).toBe(true);
+    expect(writes.some((line) => line.includes('"event":"slack_stream_fallback"')
+      && line.includes('"level":"warn"'))).toBe(false);
+  });
+
   it("suppresses the pre-start failure message when a live execution hits a Slack fallback error", async () => {
     const client = createImmediateStreamClient();
     client.getExecution = vi.fn(async () => ({ status: "running" }));
