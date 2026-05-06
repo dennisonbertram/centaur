@@ -1,6 +1,6 @@
 ---
 name: gtm
-description: "Portfolio intelligence for Paradigm. Use when asked about meetings, portfolio companies, relationship intros, competitive intel, coverage, health scorecards, general meeting prep, company lookups, token prices, market data, or any GTM workflow. Do not use for explicit LP briefing memo asks or same-day LP meeting prep; route those to LP-meeting-prep or lp_meeting_brief_batch. Triggers on: 'about', 'coverage', 'health', 'intro', 'who is', 'summarize', 'brief', 'upcoming', 'followups', 'search', 'price of', 'news on', 'trending', 'competitive', 'sectors', 'catch me up', 'draft-intro', 'pipeline', 'recent', 'digest'."
+description: "Portfolio intelligence for Paradigm. Use when asked about meetings, portfolio companies, relationship intros, competitive intel, coverage, health scorecards, general meeting prep, company lookups, token prices, market data, or any GTM workflow. Do not use for explicit LP briefing memo asks or same-day LP meeting prep; route those to LP-meeting-prep or lp_meeting_brief_batch. Triggers on: 'about', 'coverage', 'health', 'intro', 'who is', 'summarize', 'brief', 'upcoming', 'followups', 'search', 'price of', 'why is X up', 'what's driving today's move', 'explain the move in Y', 'news on', 'trending', 'competitive', 'sectors', 'catch me up', 'draft-intro', 'pipeline', 'recent', 'digest'."
 ---
 
 # GTM Skill — Portfolio Intelligence for Paradigm
@@ -173,6 +173,51 @@ When the user says **"digest [topic]"**:
 Centaur has native tools for market data. Use them directly:
 
 **Charting rule (highest priority):** use the format that matches the job. If the user asks for a chart, comparison, trend, distribution, ranking, drawdown, or market overview, ship a PNG via `chart render_chart` and upload it with `alt_text`. If the user asks for a single current price or exact lookup, answer in text first and offer a chart only if trend/context would add value. If the user needs exact values across many rows, prefer a compact text/code-block table. Do not force charts where the task is really lookup, source citation, or precise tabulation.
+
+When the user says **"why is [asset] up/down"**, **"what's driving today's move"**, **"explain the move in [asset]"**, or otherwise asks for a catalyst-ranked explanation of price action:
+1. Confirm the move magnitude and timeframe before explaining it. If the user did not specify a window, infer the shortest reasonable one from the wording (`today` = 1d, `this week` = 7d, `this month` = 30d) and state that assumption. If no window is implied, ask one short clarifying question.
+2. Verify the move with the freshest source available:
+   - Tokens: resolve the CoinGecko ID, then use `call coingecko get_price` for the current move and `call coingecko get_market_chart` for the relevant window.
+   - Equities, sectors, and ETFs: use `call websearch search` with price-action queries scoped to recent market coverage and require at least two reputable sources before treating the move as confirmed.
+```
+call websearch search '{"query": "<asset> stock price move today catalyst", "num_results": 5, "max_age_hours": 24, "synthesize": true}'
+call websearch search '{"query": "<asset> this week price action catalyst Reuters OR Bloomberg OR CNBC", "num_results": 5, "max_age_hours": 168, "synthesize": true}'
+```
+3. Gather the most plausible catalysts, then rank 1-3 of them. Separate the immediate trigger from continuation factors:
+   - `Primary driver`: the most direct explanation for the move window.
+   - `Continuation`: sympathy, positioning, short covering, ETF/sector flows, macro, or follow-through factors that likely amplified the move after the trigger.
+   - `Secondary`: only include a third catalyst when there is direct evidence.
+4. Add peer context so the user can tell whether this was idiosyncratic or part of a broader tape move. Compare against the closest peer set, sector ETF, index, or major token basket over the same window.
+5. End with an explicit confidence call (`high`, `medium`, `low`). Confidence should drop when the move is real but the catalyst ranking is mostly circumstantial.
+6. Include source links for every catalyst claim. Prefer primary sources first, then Reuters/Bloomberg/CNBC/issuer coverage, then broader web coverage.
+7. Use this response shape:
+```
+<ASSET> moved <+/-X%> over <window>. Best explanation: <primary driver>.
+
+1. Primary driver: <what changed, with source>
+2. Continuation: <why the move extended, with source>
+3. Secondary: <optional, only if supported>
+
+Peer context: <how peers / sector / majors moved over the same window>
+Confidence: <high|medium|low>
+Sources: <link 1>, <link 2>, <link 3>
+```
+8. Routing guardrails:
+   - If the user asks only for a spot price, stay on the `price of [token]` path.
+   - If the user asks only for headlines, stay on the `news on [company]` path.
+   - If the user asks for a visual trend or comparison, stay on the chart/compare path and optionally add one sentence of catalyst context.
+9. Positive trigger examples for this mode:
+   - `why is NVDA up today`
+   - `what's driving today's move in TON`
+   - `explain the move in memory stocks this week`
+   - `why did the solana ecosystem rip this month`
+   - `what is behind the move in semis today`
+   - `what changed for HYPE over the last two weeks`
+   - `walk me through why bitcoin is moving with miners today`
+10. Negative examples that should route elsewhere:
+   - `price of BTC`
+   - `news on Coinbase`
+   - `chart ETH vs SOL`
 
 When the user says **"price of [token]"** or asks about a token price:
 1. Resolve the CoinGecko ID (e.g. "SOL" -> "solana", "BTC" -> "bitcoin", "ETH" -> "ethereum", "HYPE" -> "hyperliquid")
