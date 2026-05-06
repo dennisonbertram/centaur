@@ -18,12 +18,18 @@ class FakeContainer:
         self.name = name
         self.config = config
         self.id = f"{name}-id"
+        self.deleted = False
+        self.stop_error: Exception | None = None
 
     async def start(self) -> None:
         return None
 
+    async def stop(self, t: int = 5) -> None:  # noqa: ARG002
+        if self.stop_error is not None:
+            raise self.stop_error
+
     async def delete(self, force: bool = False) -> None:  # noqa: ARG002
-        return None
+        self.deleted = True
 
     async def show(self) -> dict:
         return {
@@ -80,6 +86,27 @@ class FakeDockerClient:
 
 
 @pytest.mark.asyncio
+async def test_stop_by_id_deletes_exited_container_when_stop_fails(monkeypatch) -> None:
+    fake_client = FakeDockerClient()
+    container = FakeContainer("sandbox-exited", {})
+    container.stop_error = RuntimeError("already stopped")
+    fake_client.containers.by_name[container.id] = container
+    backend = DockerSandboxBackend()
+    backend._client = fake_client
+    stop_dind_calls: list[str] = []
+
+    async def fake_stop_dind(name: str) -> None:
+        stop_dind_calls.append(name)
+
+    monkeypatch.setattr(backend, "_stop_dind", fake_stop_dind)
+
+    await backend.stop_by_id(container.id)
+
+    assert container.deleted is True
+    assert stop_dind_calls == ["sandbox-exited"]
+
+
+@pytest.mark.asyncio
 async def test_attach_uses_dedicated_docker_client() -> None:
     control_client = FakeDockerClient()
     attach_client = FakeDockerClient()
@@ -105,7 +132,9 @@ def test_repo_host_dir_defaults_to_repo_root(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-async def test_create_connects_dind_and_sandbox_to_egress(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_connects_dind_and_sandbox_to_egress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake_client = FakeDockerClient()
     backend = DockerSandboxBackend()
     backend._client = fake_client
@@ -113,7 +142,10 @@ async def test_create_connects_dind_and_sandbox_to_egress(monkeypatch: pytest.Mo
     monkeypatch.setenv("AGENT_NETWORK", "centaur_agent_net")
     monkeypatch.setenv("AGENT_EGRESS_NETWORK", "centaur_agent_egress")
     monkeypatch.setenv("SANDBOX_DIND_ENABLED", "1")
-    monkeypatch.setattr("api.sandbox.docker.mint_sandbox_token", lambda *_args, **_kwargs: "sandbox-token")
+    monkeypatch.setattr(
+        "api.sandbox.docker.mint_sandbox_token",
+        lambda *_args, **_kwargs: "sandbox-token",
+    )
 
     async def fake_wait_ready(*_args, **_kwargs) -> float:
         return 0.01
@@ -125,7 +157,9 @@ async def test_create_connects_dind_and_sandbox_to_egress(monkeypatch: pytest.Mo
     egress = fake_client.networks.by_name["centaur_agent_egress"]
     connected_ids = {call["Container"] for call in egress.connections}
     assert session.sandbox_id in connected_ids
-    assert any(container_id.startswith("centaur-dind-") for container_id in connected_ids)
+    assert any(
+        container_id.startswith("centaur-dind-") for container_id in connected_ids
+    )
 
 
 @pytest.mark.asyncio
@@ -134,7 +168,10 @@ async def test_create_skips_dind_by_default(monkeypatch: pytest.MonkeyPatch) -> 
     backend = DockerSandboxBackend()
     backend._client = fake_client
 
-    monkeypatch.setattr("api.sandbox.docker.mint_sandbox_token", lambda *_args, **_kwargs: "sandbox-token")
+    monkeypatch.setattr(
+        "api.sandbox.docker.mint_sandbox_token",
+        lambda *_args, **_kwargs: "sandbox-token",
+    )
 
     async def fake_wait_ready(*_args, **_kwargs) -> float:
         return 0.01
@@ -143,7 +180,9 @@ async def test_create_skips_dind_by_default(monkeypatch: pytest.MonkeyPatch) -> 
 
     await backend.create("C123:1.2", "amp", "amp")
 
-    assert not any(name.startswith("centaur-dind-") for name in fake_client.containers.by_name)
+    assert not any(
+        name.startswith("centaur-dind-") for name in fake_client.containers.by_name
+    )
 
 
 @pytest.mark.asyncio
@@ -162,7 +201,10 @@ async def test_create_mounts_centaur_skills_when_present(
     (repo_root / "services" / "sandbox" / "SYSTEM_PROMPT.md").write_text("prompt")
 
     monkeypatch.setenv("REPO_HOST_DIR", str(repo_root))
-    monkeypatch.setattr("api.sandbox.docker.mint_sandbox_token", lambda *_args, **_kwargs: "sandbox-token")
+    monkeypatch.setattr(
+        "api.sandbox.docker.mint_sandbox_token",
+        lambda *_args, **_kwargs: "sandbox-token",
+    )
 
     async def fake_wait_ready(*_args, **_kwargs) -> float:
         return 0.01
@@ -181,12 +223,17 @@ async def test_create_mounts_centaur_skills_when_present(
 
 
 @pytest.mark.asyncio
-async def test_create_hardens_sandbox_container(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_hardens_sandbox_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake_client = FakeDockerClient()
     backend = DockerSandboxBackend()
     backend._client = fake_client
 
-    monkeypatch.setattr("api.sandbox.docker.mint_sandbox_token", lambda *_args, **_kwargs: "sandbox-token")
+    monkeypatch.setattr(
+        "api.sandbox.docker.mint_sandbox_token",
+        lambda *_args, **_kwargs: "sandbox-token",
+    )
 
     async def fake_wait_ready(*_args, **_kwargs) -> float:
         return 0.01
@@ -249,7 +296,10 @@ async def test_create_mounts_overlay_skills_and_prompt_when_present(
     monkeypatch.setenv("REPO_HOST_DIR", str(repo_root))
     monkeypatch.setenv("CENTAUR_OVERLAY_HOST_DIR", str(overlay_root))
     monkeypatch.setenv("CENTAUR_OVERLAY_DIR", "/app/overlay/org")
-    monkeypatch.setattr("api.sandbox.docker.mint_sandbox_token", lambda *_args, **_kwargs: "sandbox-token")
+    monkeypatch.setattr(
+        "api.sandbox.docker.mint_sandbox_token",
+        lambda *_args, **_kwargs: "sandbox-token",
+    )
 
     async def fake_wait_ready(*_args, **_kwargs) -> float:
         return 0.01

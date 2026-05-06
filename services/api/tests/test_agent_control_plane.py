@@ -87,7 +87,9 @@ async def test_db_insert_session_initial_state_tracks_inflight_turn(db_pool):
 
 
 @pytest.mark.asyncio
-async def test_reconcile_tick_reaps_only_stale_running_sessions_without_activity(db_pool):
+async def test_reconcile_tick_reaps_only_stale_running_sessions_without_activity(
+    db_pool,
+):
     from api.agent import reconcile_tick
 
     stale_thread_key = f"slack:C-test:{uuid.uuid4().hex}:stale"
@@ -141,11 +143,197 @@ async def test_reconcile_tick_reaps_only_stale_running_sessions_without_activity
     assert active_row is not None
     assert active_row["state"] == "running"
 
-    stopped_threads = {
-        call.args[0].thread_key for call in backend.stop.await_args_list
-    }
+    stopped_threads = {call.args[0].thread_key for call in backend.stop.await_args_list}
     assert stopped_threads == {stale_thread_key}
     drop_runtime.assert_called_once_with(stale_runtime_id)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_tick_reaps_stale_inflight_session_without_activity(db_pool):
+    from api.agent import reconcile_tick
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}:inflight"
+    runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions ("
+        "thread_key, sandbox_id, harness, engine, state, started_at, updated_at, "
+        "inflight_turn_id, inflight_turn_input, inflight_started_at, inflight_attempts"
+        ") VALUES ("
+        "$1, $2, 'amp', 'amp', 'running', NOW() - INTERVAL '25 hours', "
+        "NOW() - INTERVAL '25 hours', 'turn-stale', '{}'::jsonb, "
+        "NOW() - INTERVAL '25 hours', 2"
+        ")",
+        thread_key,
+        runtime_id,
+    )
+
+    backend = SimpleNamespace(
+        status_by_id=AsyncMock(return_value="running"),
+        stop=AsyncMock(),
+        stop_by_id=AsyncMock(),
+        list_containers=AsyncMock(return_value=[]),
+    )
+    with (
+        patch("api.agent.get_backend", return_value=backend),
+        patch("api.agent._drop_runtime") as drop_runtime,
+    ):
+        await reconcile_tick()
+
+    row = await db_pool.fetchrow(
+        "SELECT state, inflight_turn_id, inflight_turn_input, inflight_attempts "
+        "FROM sandbox_sessions WHERE thread_key = $1",
+        thread_key,
+    )
+    assert row is not None
+    assert row["state"] == "suspended"
+    assert row["inflight_turn_id"] is None
+    assert row["inflight_turn_input"] is None
+    assert row["inflight_attempts"] == 0
+    backend.stop.assert_awaited_once()
+    drop_runtime.assert_called_once_with(runtime_id)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_tick_preserves_stale_inflight_with_active_execution(db_pool):
+    from api.agent import reconcile_tick
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}:inflight-active"
+    runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions ("
+        "thread_key, sandbox_id, harness, engine, state, started_at, updated_at, "
+        "inflight_turn_id, inflight_turn_input, inflight_started_at, inflight_attempts"
+        ") VALUES ("
+        "$1, $2, 'amp', 'amp', 'running', NOW() - INTERVAL '25 hours', "
+        "NOW() - INTERVAL '25 hours', 'turn-live', '{}'::jsonb, "
+        "NOW() - INTERVAL '25 hours', 2"
+        ")",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, "
+        "status, delivery, metadata"
+        ") VALUES ($1, $2, 1, 'exec-live', 'hash-live', 'running', '{}'::jsonb, '{}'::jsonb)",
+        f"exe-{uuid.uuid4().hex[:12]}",
+        thread_key,
+    )
+
+    backend = SimpleNamespace(
+        status_by_id=AsyncMock(return_value="running"),
+        stop=AsyncMock(),
+        stop_by_id=AsyncMock(),
+        list_containers=AsyncMock(return_value=[]),
+    )
+    with patch("api.agent.get_backend", return_value=backend):
+        await reconcile_tick()
+
+    row = await db_pool.fetchrow(
+        "SELECT state, inflight_turn_id FROM sandbox_sessions WHERE thread_key = $1",
+        thread_key,
+    )
+    assert row is not None
+    assert row["state"] == "running"
+    assert row["inflight_turn_id"] == "turn-live"
+    backend.stop.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_tick_deletes_old_suspended_rows(db_pool):
+    from api.agent import reconcile_tick
+
+    old_thread_key = f"slack:C-test:{uuid.uuid4().hex}:old-suspended"
+    recent_thread_key = f"slack:C-test:{uuid.uuid4().hex}:recent-suspended"
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions ("
+        "thread_key, sandbox_id, harness, engine, state, started_at, updated_at"
+        ") VALUES "
+        "($1, $2, 'amp', 'amp', 'suspended', NOW() - INTERVAL '10 days', "
+        "NOW() - INTERVAL '10 days'), "
+        "($3, $4, 'amp', 'amp', 'suspended', NOW(), NOW())",
+        old_thread_key,
+        f"rt-{uuid.uuid4().hex[:8]}",
+        recent_thread_key,
+        f"rt-{uuid.uuid4().hex[:8]}",
+    )
+
+    backend = SimpleNamespace(
+        status_by_id=AsyncMock(return_value="running"),
+        stop=AsyncMock(),
+        stop_by_id=AsyncMock(),
+        list_containers=AsyncMock(return_value=[]),
+    )
+    with patch("api.agent.get_backend", return_value=backend):
+        await reconcile_tick()
+
+    assert (
+        await db_pool.fetchval(
+            "SELECT COUNT(*) FROM sandbox_sessions WHERE thread_key = $1",
+            old_thread_key,
+        )
+        == 0
+    )
+    assert (
+        await db_pool.fetchval(
+            "SELECT COUNT(*) FROM sandbox_sessions WHERE thread_key = $1",
+            recent_thread_key,
+        )
+        == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconcile_tick_prunes_old_exited_agent_containers(db_pool):
+    from api.agent import reconcile_tick
+
+    created_old = (dt.datetime.now(dt.UTC) - dt.timedelta(hours=2)).isoformat()
+    created_recent = (dt.datetime.now(dt.UTC) - dt.timedelta(minutes=5)).isoformat()
+    dind_calls: list[dict[str, str]] = []
+    agent_calls: list[dict[str, str]] = []
+
+    async def list_containers(filters):
+        if filters == {"ai2.dind": "true"}:
+            dind_calls.append(filters)
+            return []
+        if filters == {"centaur-agent": "true", "ai2.pipe": "true"}:
+            agent_calls.append(filters)
+            return [
+                {
+                    "id": "old-exited-container",
+                    "name": "centaur-sandbox-old",
+                    "status": "exited",
+                    "created": created_old,
+                },
+                {
+                    "id": "recent-exited-container",
+                    "name": "centaur-sandbox-recent",
+                    "status": "exited",
+                    "created": created_recent,
+                },
+                {
+                    "id": "running-container",
+                    "name": "centaur-sandbox-running",
+                    "status": "running",
+                    "created": created_old,
+                },
+            ]
+        return []
+
+    backend = SimpleNamespace(
+        status_by_id=AsyncMock(return_value="running"),
+        stop=AsyncMock(),
+        stop_by_id=AsyncMock(),
+        list_containers=AsyncMock(side_effect=list_containers),
+    )
+    with patch("api.agent.get_backend", return_value=backend):
+        await reconcile_tick()
+
+    backend.stop_by_id.assert_awaited_once_with("old-exited-container")
+    assert dind_calls
+    assert agent_calls
 
 
 @pytest.mark.asyncio
@@ -483,7 +671,9 @@ async def test_final_delivery_non_retryable_failure_dead_letters_immediately(
 
 
 @pytest.mark.asyncio
-async def test_final_delivery_non_retryable_failure_requires_lease(client, db_pool, api_key: str):
+async def test_final_delivery_non_retryable_failure_requires_lease(
+    client, db_pool, api_key: str
+):
     execution_id = f"exe-{uuid.uuid4().hex[:10]}"
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"
     await db_pool.execute(
@@ -554,7 +744,11 @@ async def test_thread_events_emits_terminal_snapshot_when_cursor_is_caught_up(
     res = await client.get(
         f"/agent/threads/{thread_key}/events",
         headers=_auth(api_key),
-        params={"execution_id": execution_id, "after_event_id": int(latest_event_id), "poll_ms": 10},
+        params={
+            "execution_id": execution_id,
+            "after_event_id": int(latest_event_id),
+            "poll_ms": 10,
+        },
     )
 
     assert res.status_code == 200
@@ -679,7 +873,9 @@ async def test_worker_marks_turn_done_error_as_failed_and_updates_runtime(db_poo
         patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
         patch(
             "api.runtime_control.inject_stdin",
-            new=AsyncMock(return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}),
+            new=AsyncMock(
+                return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}
+            ),
         ),
         patch("api.runtime_control.get_backend", return_value=backend),
         patch(
@@ -951,7 +1147,11 @@ async def test_worker_sanitizes_raw_harness_auth_failure_after_retry(db_pool):
 
     stop_session_mock = AsyncMock()
     inject_stdin_mock = AsyncMock(
-        return_value={"ok": True, "injected": True, "durable_turn_id": "turn-auth-final"}
+        return_value={
+            "ok": True,
+            "injected": True,
+            "durable_turn_id": "turn-auth-final",
+        }
     )
     backend = SimpleNamespace(attach=AsyncMock())
 
@@ -1076,7 +1276,7 @@ async def test_worker_records_projected_observations_and_execution_summary(db_po
                             {
                                 "type": "tool_result",
                                 "tool_use_id": "toolu_test",
-                                "content": "[{\"url\":\"https://example.com\"}]",
+                                "content": '[{"url":"https://example.com"}]',
                                 "is_error": False,
                             }
                         ],
@@ -1091,23 +1291,36 @@ async def test_worker_records_projected_observations_and_execution_summary(db_po
                     "message": {
                         "role": "assistant",
                         "content": [{"type": "text", "text": "Here is the synthesis."}],
-                        "usage": {"input_tokens": 5, "output_tokens": 15, "cost_usd": 0.123},
+                        "usage": {
+                            "input_tokens": 5,
+                            "output_tokens": 15,
+                            "cost_usd": 0.123,
+                        },
                         "model": "claude-sonnet",
                     },
                 }
             )
         }
-        yield {"data": json.dumps({"type": "turn.done", "result": "Here is the synthesis."})}
+        yield {
+            "data": json.dumps(
+                {"type": "turn.done", "result": "Here is the synthesis."}
+            )
+        }
 
     backend = SimpleNamespace(attach=AsyncMock())
     with (
         patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
         patch(
             "api.runtime_control.inject_stdin",
-            new=AsyncMock(return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}),
+            new=AsyncMock(
+                return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}
+            ),
         ),
         patch("api.runtime_control.get_backend", return_value=backend),
-        patch("api.runtime_control._get_runtime", return_value=SimpleNamespace(turn_counter=1)),
+        patch(
+            "api.runtime_control._get_runtime",
+            return_value=SimpleNamespace(turn_counter=1),
+        ),
         patch("api.runtime_control._stream_stdout", _fake_stream),
     ):
         await _process_execution(db_pool, row)
@@ -1392,7 +1605,9 @@ async def test_release_stale_runtime_assignments_preserves_live_execution(db_poo
 
 
 @pytest.mark.asyncio
-async def test_release_stale_runtime_assignments_preserves_undelivered_messages(db_pool):
+async def test_release_stale_runtime_assignments_preserves_undelivered_messages(
+    db_pool,
+):
     from api.agent import _release_stale_runtime_assignments
 
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"
@@ -1482,7 +1697,9 @@ async def test_worker_marks_silence_deadline_exceeded_and_stops_session(db_pool)
         patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
         patch(
             "api.runtime_control.inject_stdin",
-            new=AsyncMock(return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}),
+            new=AsyncMock(
+                return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}
+            ),
         ),
         patch("api.runtime_control.get_backend", return_value=backend),
         patch(
@@ -1508,7 +1725,9 @@ async def test_worker_marks_silence_deadline_exceeded_and_stops_session(db_pool)
 
 
 @pytest.mark.asyncio
-async def test_worker_keeps_tool_timeout_while_command_execution_reports_progress(db_pool):
+async def test_worker_keeps_tool_timeout_while_command_execution_reports_progress(
+    db_pool,
+):
     from api.runtime_control import _process_execution
 
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"
@@ -1565,7 +1784,9 @@ async def test_worker_keeps_tool_timeout_while_command_execution_reports_progres
                                 "type": "tool_use",
                                 "id": "tool-1",
                                 "name": "shell_command",
-                                "input": {"command": "python3 -c 'import time; time.sleep(1)'"},
+                                "input": {
+                                    "command": "python3 -c 'import time; time.sleep(1)'"
+                                },
                             }
                         ],
                     },
@@ -1601,7 +1822,9 @@ async def test_worker_keeps_tool_timeout_while_command_execution_reports_progres
         patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
         patch(
             "api.runtime_control.inject_stdin",
-            new=AsyncMock(return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}),
+            new=AsyncMock(
+                return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}
+            ),
         ),
         patch("api.runtime_control.get_backend", return_value=backend),
         patch(
@@ -1696,7 +1919,9 @@ async def test_worker_stops_session_when_cancel_requested_mid_stream(db_pool):
         patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
         patch(
             "api.runtime_control.inject_stdin",
-            new=AsyncMock(return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}),
+            new=AsyncMock(
+                return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}
+            ),
         ),
         patch("api.runtime_control.get_backend", return_value=backend),
         patch(
@@ -1806,7 +2031,9 @@ async def test_worker_reuses_durable_turn_id_without_reinjecting(db_pool):
 
 
 @pytest.mark.asyncio
-async def test_worker_retries_running_execution_when_stream_ends_without_turn_done(db_pool):
+async def test_worker_retries_running_execution_when_stream_ends_without_turn_done(
+    db_pool,
+):
     from api.runtime_control import _claim_next_execution, _process_execution
 
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"
@@ -1844,7 +2071,8 @@ async def test_worker_retries_running_execution_when_stream_ends_without_turn_do
         "status": "running",
         "durable_turn_id": "turn-existing",
         "delivery": {},
-        "silence_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
+        "silence_deadline_at": dt.datetime.now(dt.timezone.utc)
+        + dt.timedelta(minutes=10),
         "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=30),
         "created_at": dt.datetime.now(dt.timezone.utc),
         "claimed_at": dt.datetime.now(dt.timezone.utc),
@@ -1878,7 +2106,9 @@ async def test_worker_retries_running_execution_when_stream_ends_without_turn_do
 
     stop_session_mock = AsyncMock()
     inject_stdin_mock = AsyncMock()
-    backend = SimpleNamespace(attach=AsyncMock(), status=AsyncMock(return_value="running"))
+    backend = SimpleNamespace(
+        attach=AsyncMock(), status=AsyncMock(return_value="running")
+    )
 
     with (
         patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
@@ -1970,7 +2200,8 @@ async def test_worker_refreshes_silence_deadline_when_resuming_existing_turn(db_
         "assignment_generation": 1,
         "status": "running",
         "durable_turn_id": "turn-existing",
-        "silence_deadline_at": dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=1),
+        "silence_deadline_at": dt.datetime.now(dt.timezone.utc)
+        - dt.timedelta(minutes=1),
         "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
         "delivery": {},
     }
@@ -2085,7 +2316,9 @@ async def test_worker_reapplies_agents_override_on_runtime_replacement(db_pool):
         patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
         patch(
             "api.runtime_control.inject_stdin",
-            new=AsyncMock(return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}),
+            new=AsyncMock(
+                return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}
+            ),
         ),
         patch("api.runtime_control.get_backend", return_value=backend),
         patch(
@@ -2111,7 +2344,9 @@ async def test_bootstrap_service_api_keys_inserts_missing_rows(db_pool, monkeypa
     monkeypatch.setenv("SLACKBOT_API_KEY", slack_key)
     monkeypatch.delenv("LOCAL_DEV_API_KEY", raising=False)
 
-    bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool, secret_manager_url="")
+    bootstrapped = await api_keys.bootstrap_service_api_keys(
+        db_pool, secret_manager_url=""
+    )
 
     assert [info.name for info in bootstrapped] == ["service:slackbot"]
     row = await db_pool.fetchrow(
@@ -2182,7 +2417,9 @@ async def test_bootstrap_service_api_keys_includes_local_dev_key(db_pool, monkey
     monkeypatch.delenv("SLACKBOT_API_KEY", raising=False)
     monkeypatch.setenv("LOCAL_DEV_API_KEY", local_dev_key)
 
-    bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool, secret_manager_url="")
+    bootstrapped = await api_keys.bootstrap_service_api_keys(
+        db_pool, secret_manager_url=""
+    )
 
     assert [info.name for info in bootstrapped] == ["service:local-dev"]
     row = await db_pool.fetchrow(

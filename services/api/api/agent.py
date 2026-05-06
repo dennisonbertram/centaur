@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime as dt
 import json
 import os
 import time
@@ -39,17 +40,32 @@ from api.sandbox.registry import get_backend
 
 log = structlog.get_logger()
 
-_VALID_STDOUT_EVENT_TYPES = frozenset({
-    "system", "assistant", "result", "turn.done", "error",
-    "tool_use", "tool_result", "content_block_start", "content_block_delta",
-    "content_block_stop", "message_start", "message_delta", "message_stop",
-    "amp_raw_event", "status",
-})
+_VALID_STDOUT_EVENT_TYPES = frozenset(
+    {
+        "system",
+        "assistant",
+        "result",
+        "turn.done",
+        "error",
+        "tool_use",
+        "tool_result",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_start",
+        "message_delta",
+        "message_stop",
+        "amp_raw_event",
+        "status",
+    }
+)
 
 _ENGINE_HARNESSES = {"amp", "claude-code", "codex", "pi-mono"}
 _REUSABLE_DB_STATES = {"running", "idle", "delivering", "error", "suspended"}
 
 IDLE_TTL_S = int(os.getenv("IDLE_TTL_S", "86400"))  # 24 hours
+SUSPENDED_RETENTION_S = int(os.getenv("SUSPENDED_RETENTION_S", str(7 * 24 * 60 * 60)))
+EXITED_SANDBOX_RETENTION_S = int(os.getenv("EXITED_SANDBOX_RETENTION_S", "3600"))
 STREAM_EOF_REATTACH_MAX = int(os.getenv("STREAM_EOF_REATTACH_MAX", "6"))
 STREAM_EOF_REATTACH_BACKOFF_S = float(os.getenv("STREAM_EOF_REATTACH_BACKOFF_S", "1.0"))
 
@@ -86,14 +102,20 @@ def _turn_input_metrics(turn_input: dict[str, Any]) -> dict[str, Any]:
     message = turn_input.get("message") if isinstance(turn_input, dict) else None
     content = message.get("content") if isinstance(message, dict) else None
     if not isinstance(content, list):
-        return {"input_block_count": 0, "input_text_chars": 0, "input_attachment_refs": 0}
+        return {
+            "input_block_count": 0,
+            "input_text_chars": 0,
+            "input_attachment_refs": 0,
+        }
     text_chars = 0
     attachment_refs = 0
     for block in content:
         if not isinstance(block, dict):
             continue
         if block.get("type") == "text":
-            text_chars += len(block.get("text", "") if isinstance(block.get("text"), str) else "")
+            text_chars += len(
+                block.get("text", "") if isinstance(block.get("text"), str) else ""
+            )
         if block.get("type") == "attachment_ref":
             attachment_refs += 1
     return {
@@ -638,9 +660,7 @@ def _terminal_error_from_harness_event(event: dict) -> str | None:
 
     if event_type == "result":
         subtype = str(event.get("subtype") or "").strip().lower()
-        is_error = bool(event.get("is_error")) or (
-            subtype not in {"", "success"}
-        )
+        is_error = bool(event.get("is_error")) or (subtype not in {"", "success"})
         if not is_error:
             return None
 
@@ -720,7 +740,8 @@ async def _stream_stdout(
                         )
                     except Exception:
                         log.warning(
-                            "agent_thread_id_persist_failed", thread_key=session.thread_key
+                            "agent_thread_id_persist_failed",
+                            thread_key=session.thread_key,
                         )
             r = extract_result(session.engine, evt)
             if r is not None:
@@ -748,7 +769,8 @@ async def _stream_stdout(
                         session.agent_thread_id = agent_thread_id
                     except Exception:
                         log.warning(
-                            "agent_thread_id_persist_failed", thread_key=session.thread_key
+                            "agent_thread_id_persist_failed",
+                            thread_key=session.thread_key,
                         )
                 turn_id = rt.turn_counter  # pick up latest turn_id for next turn
                 # Persist completion before emitting turn.done so reconnect callers
@@ -772,9 +794,7 @@ async def _stream_stdout(
                 if terminal_error:
                     turn_done_payload["is_error"] = True
                     turn_done_payload["error"] = terminal_error
-                yield {
-                    "data": json.dumps(turn_done_payload)
-                }
+                yield {"data": json.dumps(turn_done_payload)}
                 log.info(
                     "turn_done",
                     thread_key=session.thread_key,
@@ -989,7 +1009,11 @@ async def inject_stdin(
         fresh_token = mint_sandbox_token(session.thread_key, session.sandbox_id)
         await backend.refresh_token_by_id(session.sandbox_id, fresh_token)
     except Exception:
-        log.warning("token_refresh_failed", thread_key=session.thread_key, sandbox=session.sandbox_id[:12])
+        log.warning(
+            "token_refresh_failed",
+            thread_key=session.thread_key,
+            sandbox=session.sandbox_id[:12],
+        )
 
     await backend.attach(session)
 
@@ -997,7 +1021,10 @@ async def inject_stdin(
         await backend.write_stdin(session, turn_input)
     except (BrokenPipeError, OSError, RuntimeError, AssertionError) as exc:
         log.warning(
-            "stdin_broken_pipe", thread_key=session.thread_key, sandbox=session.sandbox_id[:12], error=str(exc)
+            "stdin_broken_pipe",
+            thread_key=session.thread_key,
+            sandbox=session.sandbox_id[:12],
+            error=str(exc),
         )
         st = await backend.status(session)
         if st != "running":
@@ -1063,14 +1090,21 @@ async def replay_inflight_turn(session: SandboxSession) -> dict:
         fresh_token = mint_sandbox_token(session.thread_key, session.sandbox_id)
         await backend.refresh_token_by_id(session.sandbox_id, fresh_token)
     except Exception:
-        log.warning("token_refresh_failed", thread_key=session.thread_key, sandbox=session.sandbox_id[:12])
+        log.warning(
+            "token_refresh_failed",
+            thread_key=session.thread_key,
+            sandbox=session.sandbox_id[:12],
+        )
 
     await backend.attach(session)
     try:
         await backend.write_stdin(session, turn_input)
     except (BrokenPipeError, OSError, RuntimeError, AssertionError) as exc:
         log.warning(
-            "replay_broken_pipe", thread_key=session.thread_key, sandbox=session.sandbox_id[:12], error=str(exc)
+            "replay_broken_pipe",
+            thread_key=session.thread_key,
+            sandbox=session.sandbox_id[:12],
+            error=str(exc),
         )
         st = await backend.status(session)
         if st != "running":
@@ -1162,7 +1196,7 @@ async def supervise_wires() -> None:
         log.warning("supervisor_error", exc_info=True)
 
 
-async def _release_stale_runtime_assignments(pool, backend, *, limit: int = 100) -> int:
+async def _release_stale_runtime_assignments(pool, backend, *, limit: int = 500) -> int:
     """Release active assignment rows whose runtime is gone and no execution is live.
 
     This is intentionally conservative: a transient Docker/API lookup failure
@@ -1239,6 +1273,20 @@ async def _release_stale_runtime_assignments(pool, backend, *, limit: int = 100)
     return released
 
 
+def _container_age_s(container: dict[str, Any]) -> float | None:
+    """Return container age in seconds from Docker/Kubernetes metadata."""
+    created = str(container.get("created") or "").strip()
+    if not created:
+        return None
+    try:
+        created_at = dt.datetime.fromisoformat(created.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=dt.UTC)
+    return max((dt.datetime.now(dt.UTC) - created_at).total_seconds(), 0.0)
+
+
 async def reconcile_tick() -> None:
     """Periodic reconciliation: check DB vs Docker, enforce idle TTL, clean orphans.
 
@@ -1253,7 +1301,10 @@ async def reconcile_tick() -> None:
                 await pool.execute(
                     "UPDATE sandbox_sessions SET state = 'suspended', "
                     "wire_lease_id = NULL, wire_connected_at = NULL, "
-                    "wire_last_seen_at = NULL, updated_at = NOW() "
+                    "wire_last_seen_at = NULL, "
+                    "inflight_turn_id = NULL, inflight_turn_input = NULL, "
+                    "inflight_started_at = NULL, inflight_attempts = 0, "
+                    "updated_at = NOW() "
                     "WHERE thread_key = $1",
                     thread_key,
                 )
@@ -1263,7 +1314,10 @@ async def reconcile_tick() -> None:
                 await pool.execute(
                     "UPDATE sandbox_sessions SET state = 'gone', "
                     "wire_lease_id = NULL, wire_connected_at = NULL, "
-                    "wire_last_seen_at = NULL, updated_at = NOW() "
+                    "wire_last_seen_at = NULL, "
+                    "inflight_turn_id = NULL, inflight_turn_input = NULL, "
+                    "inflight_started_at = NULL, inflight_attempts = 0, "
+                    "updated_at = NOW() "
                     "WHERE thread_key = $1",
                     thread_key,
                 )
@@ -1317,7 +1371,9 @@ async def reconcile_tick() -> None:
             thread_key = row["thread_key"]
             sandbox_id = row["sandbox_id"]
             try:
-                log.info("idle_ttl_expired", thread_key=thread_key, sandbox=sandbox_id[:12])
+                log.info(
+                    "idle_ttl_expired", thread_key=thread_key, sandbox=sandbox_id[:12]
+                )
                 session = SandboxSession(
                     sandbox_id=sandbox_id,
                     thread_key=thread_key,
@@ -1380,14 +1436,66 @@ async def reconcile_tick() -> None:
                     exc_info=True,
                 )
 
-        # Step D: Clean old terminated rows
+        # Step D: Reap stale rows that still have an inflight turn recorded but no
+        # execution remains to complete or replay it.
+        stale_inflight_rows = await pool.fetch(
+            "SELECT ss.thread_key, ss.sandbox_id, ss.state, ss.inflight_turn_id "
+            "FROM sandbox_sessions ss "
+            "WHERE ss.state IN ('running', 'delivering', 'error') "
+            "AND ss.inflight_turn_id IS NOT NULL "
+            "AND COALESCE(ss.inflight_started_at, ss.updated_at) "
+            "    < NOW() - make_interval(secs => $1::double precision) "
+            "AND ss.wire_lease_id IS NULL "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM agent_execution_requests er "
+            "  WHERE er.thread_key = ss.thread_key "
+            "    AND er.status IN ('queued', 'running', 'retry_wait', 'cancel_requested')"
+            ")",
+            float(IDLE_TTL_S),
+        )
+        for row in stale_inflight_rows:
+            thread_key = row["thread_key"]
+            sandbox_id = row["sandbox_id"]
+            try:
+                log.warning(
+                    "inflight_reaped",
+                    thread_key=thread_key,
+                    sandbox=sandbox_id[:12],
+                    state=row["state"],
+                    inflight_turn_id=row["inflight_turn_id"],
+                )
+                session = SandboxSession(
+                    sandbox_id=sandbox_id,
+                    thread_key=thread_key,
+                    harness="",
+                    engine="",
+                )
+                with contextlib.suppress(Exception):
+                    await backend.stop(session)
+                await _mark_inactive(thread_key)
+                _drop_runtime(sandbox_id)
+            except Exception:
+                log.warning(
+                    "reconcile_stale_inflight_row_error",
+                    thread_key=thread_key,
+                    sandbox=sandbox_id[:12],
+                    exc_info=True,
+                )
+
+        # Step E: Clean old terminated rows
         await pool.execute(
             "DELETE FROM sandbox_sessions "
             "WHERE state IN ('gone', 'stopped') "
             "AND updated_at < NOW() - INTERVAL '1 hour'"
         )
+        await pool.execute(
+            "DELETE FROM sandbox_sessions "
+            "WHERE state = 'suspended' "
+            "AND updated_at < NOW() - make_interval(secs => $1::double precision)",
+            float(SUSPENDED_RETENTION_S),
+        )
 
-        # Step E: Clean orphan DinD sidecars
+        # Step F: Clean orphan DinD sidecars
         try:
             dind_containers = await backend.list_containers({"ai2.dind": "true"})
             sandbox_containers = await backend.list_containers(
@@ -1424,7 +1532,34 @@ async def reconcile_tick() -> None:
         except Exception:
             log.warning("reconcile_dind_scan_failed", exc_info=True)
 
-        # Step E: Release active assignment rows whose runtime has disappeared.
+        # Step G: Clean old exited agent containers. These are not DinD sidecars
+        # and otherwise accumulate forever after normal exits.
+        try:
+            agent_containers = await backend.list_containers(
+                {"centaur-agent": "true", "ai2.pipe": "true"}
+            )
+            for container in agent_containers:
+                status = str(container.get("status") or "")
+                if status in {"running", "created"}:
+                    continue
+                age_s = _container_age_s(container)
+                if age_s is None or age_s <= EXITED_SANDBOX_RETENTION_S:
+                    continue
+                name = str(container.get("name") or "")
+                cid = str(container.get("id") or "")
+                log.info(
+                    "sandbox_container_pruned",
+                    sandbox=cid[:12],
+                    name=name,
+                    status=status,
+                    age_s=round(age_s),
+                )
+                with contextlib.suppress(Exception):
+                    await backend.stop_by_id(cid)
+        except Exception:
+            log.warning("reconcile_sandbox_container_prune_failed", exc_info=True)
+
+        # Step H: Release active assignment rows whose runtime has disappeared.
         # This keeps spawn gating and operator views from being poisoned by
         # historical assignment rows while leaving live executions to the
         # execution watchdog.

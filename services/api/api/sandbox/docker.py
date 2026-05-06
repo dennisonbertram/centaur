@@ -96,10 +96,19 @@ def _egress_network() -> str | None:
 
 
 def _dind_enabled() -> bool:
-    return os.getenv("SANDBOX_DIND_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+    return os.getenv("SANDBOX_DIND_ENABLED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
-_HARNESS_STUB_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AMP_API_KEY", "GITHUB_TOKEN")
+_HARNESS_STUB_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "AMP_API_KEY",
+    "GITHUB_TOKEN",
+)
 _AGENT_USER = "1001:1001"
 
 
@@ -118,8 +127,12 @@ def _build_harness_cmd(engine: str, model: str | None = None) -> list[str]:
         return ["amp-wrapper"]
     if engine == "claude-code":
         cmd = [
-            "claude", "--dangerously-skip-permissions",
-            "--output-format", "stream-json", "--input-format", "stream-json",
+            "claude",
+            "--dangerously-skip-permissions",
+            "--output-format",
+            "stream-json",
+            "--input-format",
+            "stream-json",
             "--verbose",
         ]
         if model:
@@ -186,7 +199,9 @@ def _container_env(
     return env
 
 
-async def _wait_ready(client: aiodocker.Docker, container_id: str, timeout: int = 15) -> float:
+async def _wait_ready(
+    client: aiodocker.Docker, container_id: str, timeout: int = 15
+) -> float:
     """Wait for the entrypoint to signal readiness (touch ~/.ready)."""
     t0 = time.monotonic()
     deadline = t0 + timeout
@@ -204,7 +219,9 @@ async def _wait_ready(client: aiodocker.Docker, container_id: str, timeout: int 
         try:
             container = await client.containers.get(container_id)
             exec_obj = await container.exec(
-                cmd=["test", "-f", "/home/agent/.ready"], stdout=True, stderr=True,
+                cmd=["test", "-f", "/home/agent/.ready"],
+                stdout=True,
+                stderr=True,
             )
             stream = exec_obj.start(detach=False)
             async with stream:
@@ -270,7 +287,9 @@ class DockerSandboxBackend(SandboxBackend):
         repo_host = _repo_host_dir()
         overlay_host = _overlay_host_dir()
 
-        container_name = f"centaur-sandbox-{thread_key.replace(':', '-').replace('.', '-')[:40]}"
+        container_name = (
+            f"centaur-sandbox-{thread_key.replace(':', '-').replace('.', '-')[:40]}"
+        )
         env = _container_env(
             thread_key,
             container_name,
@@ -296,7 +315,9 @@ class DockerSandboxBackend(SandboxBackend):
                 name=dind_name,
                 config={
                     "Image": _dind_image(),
-                    "Env": ["DOCKER_TLS_CERTDIR="],  # disable TLS (internal network only)
+                    "Env": [
+                        "DOCKER_TLS_CERTDIR="
+                    ],  # disable TLS (internal network only)
                     "Labels": {
                         "centaur-agent": "true",
                         "ai2.dind": "true",
@@ -347,15 +368,21 @@ class DockerSandboxBackend(SandboxBackend):
             env.append(f"CENTAUR_OVERLAY_DIR={_SANDBOX_OVERLAY_DIR}")
             overlay_skills_host = os.path.join(overlay_host, ".agents", "skills")
             if os.path.isdir(overlay_skills_host):
-                binds.append(f"{overlay_skills_host}:/home/agent/centaur-overlay-skills:ro")
+                binds.append(
+                    f"{overlay_skills_host}:/home/agent/centaur-overlay-skills:ro"
+                )
         vol = os.getenv("FIREWALL_CERTS_VOLUME", "firewall-certs")
         binds.append(f"{vol}:/firewall-certs:ro")
 
         # Bind-mount base system prompt
-        base_prompt_host = os.path.join(repo_host, "services", "sandbox", "SYSTEM_PROMPT.md")
+        base_prompt_host = os.path.join(
+            repo_host, "services", "sandbox", "SYSTEM_PROMPT.md"
+        )
         binds.append(f"{base_prompt_host}:/home/agent/AGENTS_BASE.md:ro")
         if overlay_host:
-            overlay_prompt_host = os.path.join(overlay_host, "services", "sandbox", "SYSTEM_PROMPT.md")
+            overlay_prompt_host = os.path.join(
+                overlay_host, "services", "sandbox", "SYSTEM_PROMPT.md"
+            )
             if os.path.isfile(overlay_prompt_host):
                 binds.append(f"{overlay_prompt_host}:/home/agent/AGENTS_OVERLAY.md:ro")
 
@@ -367,7 +394,9 @@ class DockerSandboxBackend(SandboxBackend):
             if persona_info and persona_info.tool_dir.is_dir():
                 persona_host = _resolve_host_bind_path(persona_info.tool_dir)
                 if persona_host and os.path.isdir(persona_host):
-                    binds.append(f"{persona_host}:/home/agent/tools/personas/{persona}:ro")
+                    binds.append(
+                        f"{persona_host}:/home/agent/tools/personas/{persona}:ro"
+                    )
                 else:
                     log.warning(
                         "persona_bind_path_unresolved",
@@ -437,7 +466,9 @@ class DockerSandboxBackend(SandboxBackend):
         client = self._get_attach_client()
         container = await client.containers.get(session.sandbox_id)
         if rt.stdout_stream is None:
-            rt.stdout_stream = container.attach(stdin=False, stdout=True, stderr=False, logs=logs)
+            rt.stdout_stream = container.attach(
+                stdin=False, stdout=True, stderr=False, logs=logs
+            )
         if rt.stdin_stream is None:
             rt.stdin_stream = container.attach(stdin=True, stdout=False, stderr=False)
         log.info(
@@ -524,12 +555,16 @@ class DockerSandboxBackend(SandboxBackend):
         """Stop and remove a container by ID (no session needed)."""
         client = self._get_client()
         sandbox_name: str | None = None
+        container = None
         with contextlib.suppress(Exception):
             container = await client.containers.get(sandbox_id)
             info = await container.show()
             sandbox_name = info.get("Name", "").lstrip("/")
-            await container.stop(t=5)
-            await container.delete()
+        if container is not None:
+            with contextlib.suppress(Exception):
+                await container.stop(t=5)
+            with contextlib.suppress(Exception):
+                await container.delete()
         if sandbox_name:
             await self._stop_dind(sandbox_name)
 
@@ -614,7 +649,12 @@ class DockerSandboxBackend(SandboxBackend):
             )
 
     async def exec_run(
-        self, sandbox_id: str, cmd: list[str], *, environment: dict | None = None, user: str = ""
+        self,
+        sandbox_id: str,
+        cmd: list[str],
+        *,
+        environment: dict | None = None,
+        user: str = "",
     ) -> tuple[int, bytes]:
         """Run a command inside a container and return (exit_code, output)."""
         client = self._get_client()
@@ -685,11 +725,13 @@ class DockerSandboxBackend(SandboxBackend):
             name = info.get("Name", "").lstrip("/")
             created = info.get("Created", "")
             status = info.get("State", {}).get("Status", "unknown")
-            results.append({
-                "id": c.id,
-                "name": name,
-                "labels": labels,
-                "created": created,
-                "status": status,
-            })
+            results.append(
+                {
+                    "id": c.id,
+                    "name": name,
+                    "labels": labels,
+                    "created": created,
+                    "status": status,
+                }
+            )
         return results
