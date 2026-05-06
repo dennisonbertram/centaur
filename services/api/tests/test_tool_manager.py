@@ -8,13 +8,13 @@ from typing import Optional, Union
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pytest
-
-from api.tool_manager import (
+from api.tool_manager import (  # noqa: E402
     _LIFECYCLE_METHODS,
     _friendly_type_name,
     _normalize_for_serialization,
+    _tool_arg_validation_error,
     _to_toon,
+    ToolMethod,
 )
 
 
@@ -169,6 +169,50 @@ class TestFriendlyTypeName:
         result = _friendly_type_name(str | int)
         assert "string" in result
         assert "integer" in result
+
+
+class TestToolArgValidation:
+    def test_unexpected_argument_reports_suggestion(self):
+        def fn(channel: str, limit: int = 10):
+            return None
+
+        error = _tool_arg_validation_error(
+            ToolMethod("upload_file", fn),
+            {"channel_id": "C123", "limit": 5},
+        )
+
+        assert error == {
+            "error": "tool_argument_validation_failed",
+            "message": "Unexpected argument(s): channel_id",
+            "unexpected_args": ["channel_id"],
+            "accepted_args": ["channel", "limit"],
+            "did_you_mean": {"channel_id": "channel"},
+        }
+
+    def test_missing_required_argument_reports_shape(self):
+        def fn(spreadsheet_id: str, range_notation: str, values: list):
+            return None
+
+        error = _tool_arg_validation_error(
+            ToolMethod("sheets_update", fn),
+            {"spreadsheet_id": "sheet"},
+        )
+
+        assert error == {
+            "error": "tool_argument_validation_failed",
+            "message": "Missing required argument(s): range_notation, values",
+            "missing_args": ["range_notation", "values"],
+            "accepted_args": ["range_notation", "spreadsheet_id", "values"],
+        }
+
+    def test_var_kwargs_method_accepts_extra_arguments(self):
+        def fn(**kwargs):
+            return kwargs
+
+        assert (
+            _tool_arg_validation_error(ToolMethod("dynamic", fn), {"anything": True})
+            is None
+        )
 
 
 # ---------------------------------------------------------------------------

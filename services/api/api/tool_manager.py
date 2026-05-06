@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import difflib
 import importlib.util
 import inspect
 import json
@@ -67,10 +68,13 @@ async def _resolve_secrets(keys: list[str]) -> dict[str, str]:
                 pass
     return result
 
+
 _MAX_INLINE_TOOL_BINARY_BYTES = max(
     1024, int(os.getenv("TOOL_BINARY_INLINE_MAX_BYTES", str(1 * 1024 * 1024)))
 )
-_TOOL_BINARY_PREVIEW_BYTES = max(128, int(os.getenv("TOOL_BINARY_PREVIEW_BYTES", str(32 * 1024))))
+_TOOL_BINARY_PREVIEW_BYTES = max(
+    128, int(os.getenv("TOOL_BINARY_PREVIEW_BYTES", str(32 * 1024)))
+)
 
 # Threshold for extracting base64-encoded file data from tool results into
 # the attachments table.  Anything larger gets stored as an attachment and
@@ -115,7 +119,12 @@ async def _extract_tool_attachment(
     await pool.execute(
         "INSERT INTO attachments (id, thread_key, message_id, name, mime_type, data) "
         "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
-        att_id, thread_key or "", None, filename, mime_type, raw_bytes,
+        att_id,
+        thread_key or "",
+        None,
+        filename,
+        mime_type,
+        raw_bytes,
     )
     log.info(
         "tool_result_attachment_stored",
@@ -140,6 +149,74 @@ class ToolMethod:
 
 _LIFECYCLE_METHODS = frozenset({"close", "connect", "disconnect", "shutdown"})
 
+_COMMON_ARGUMENT_ALIASES: dict[str, str] = {
+    "channel_id": "channel",
+    "count": "limit",
+    "max_results": "limit",
+    "page_size": "limit",
+    "range": "range_notation",
+    "sql": "query",
+    "table": "table_name",
+}
+
+
+def _tool_arg_validation_error(
+    method: ToolMethod, args: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Return a structured argument error before invoking a tool method."""
+    sig = inspect.signature(method.fn)
+    params = sig.parameters
+    accepts_var_kwargs = any(
+        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+    valid_names = {
+        name
+        for name, param in params.items()
+        if param.kind
+        in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
+    }
+    if not accepts_var_kwargs:
+        unexpected = sorted(set(args) - valid_names)
+        if unexpected:
+            suggestions = {
+                key: (
+                    _COMMON_ARGUMENT_ALIASES.get(key)
+                    if _COMMON_ARGUMENT_ALIASES.get(key) in valid_names
+                    else (difflib.get_close_matches(key, valid_names, n=1) or [None])[0]
+                )
+                for key in unexpected
+            }
+            return {
+                "error": "tool_argument_validation_failed",
+                "message": f"Unexpected argument(s): {', '.join(unexpected)}",
+                "unexpected_args": unexpected,
+                "accepted_args": sorted(valid_names),
+                "did_you_mean": {k: v for k, v in suggestions.items() if v},
+            }
+
+    missing = sorted(
+        name
+        for name, param in params.items()
+        if param.default is inspect.Parameter.empty
+        and param.kind
+        in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
+        and name not in args
+    )
+    if missing:
+        return {
+            "error": "tool_argument_validation_failed",
+            "message": f"Missing required argument(s): {', '.join(missing)}",
+            "missing_args": missing,
+            "accepted_args": sorted(valid_names),
+        }
+    return None
+
 
 def _normalize_for_serialization(data: Any) -> Any:
     """Normalize rich Python values into JSON-friendly structures."""
@@ -150,7 +227,9 @@ def _normalize_for_serialization(data: Any) -> Any:
             return {
                 "encoding": "base64_preview",
                 "byte_length": len(data),
-                "content_base64": base64.b64encode(data[:_TOOL_BINARY_PREVIEW_BYTES]).decode(),
+                "content_base64": base64.b64encode(
+                    data[:_TOOL_BINARY_PREVIEW_BYTES]
+                ).decode(),
             }
         return {
             "encoding": "base64",
@@ -162,7 +241,9 @@ def _normalize_for_serialization(data: Any) -> Any:
     if is_dataclass(data):
         return _normalize_for_serialization(asdict(data))
     if isinstance(data, dict):
-        return {str(key): _normalize_for_serialization(value) for key, value in data.items()}
+        return {
+            str(key): _normalize_for_serialization(value) for key, value in data.items()
+        }
     if isinstance(data, (list, tuple, set)):
         return [_normalize_for_serialization(item) for item in data]
 
@@ -196,7 +277,9 @@ def _to_toon(data: Any) -> str:
 def _payload_size_bytes(value: Any) -> int:
     normalized = _normalize_for_serialization(value)
     try:
-        return len(json.dumps(normalized, separators=(",", ":"), default=str).encode("utf-8"))
+        return len(
+            json.dumps(normalized, separators=(",", ":"), default=str).encode("utf-8")
+        )
     except Exception:
         return len(str(normalized).encode("utf-8", errors="replace"))
 
@@ -357,11 +440,19 @@ class ToolManager:
                 # Validate host patterns
                 for h in hosts:
                     if h in ("*", "*.com", "*.org", "*.net", "*.io"):
-                        log.warning("tool_invalid_host", tool=name, host=h,
-                                    reason="catch-all domain not allowed")
+                        log.warning(
+                            "tool_invalid_host",
+                            tool=name,
+                            host=h,
+                            reason="catch-all domain not allowed",
+                        )
                     elif re.match(r"^\d+\.\d+\.\d+\.\d+$", h):
-                        log.warning("tool_invalid_host", tool=name, host=h,
-                                    reason="IP addresses not allowed")
+                        log.warning(
+                            "tool_invalid_host",
+                            tool=name,
+                            host=h,
+                            reason="IP addresses not allowed",
+                        )
 
                 # Skip persona entries — they are loaded separately
                 if tool_conf.get("type") == "persona":
@@ -378,7 +469,9 @@ class ToolManager:
 
                 if name in seen:
                     prev_idx = seen[name]
-                    prev_pos = next(i for i, (_, m) in enumerate(tools) if m["name"] == name)
+                    prev_pos = next(
+                        i for i, (_, m) in enumerate(tools) if m["name"] == name
+                    )
                     log.info(
                         "tool_shadowed",
                         tool=name,
@@ -420,7 +513,9 @@ class ToolManager:
                     personas.append((tool_dir, project, tool_conf))
         return personas
 
-    def _load_persona(self, tool_dir: Path, project: dict, tool_conf: dict) -> LoadedPersona:
+    def _load_persona(
+        self, tool_dir: Path, project: dict, tool_conf: dict
+    ) -> LoadedPersona:
         """Load a single persona from its directory."""
         name = tool_dir.name
         prompt_file = tool_conf.get("prompt", "PROMPT.md")
@@ -480,7 +575,9 @@ class ToolManager:
                 personas[persona.name] = persona
                 log.info("persona_loaded", persona=persona.name, engine=persona.engine)
             except Exception as exc:
-                log.warning("persona_load_failed", persona=tool_dir.name, error=str(exc))
+                log.warning(
+                    "persona_load_failed", persona=tool_dir.name, error=str(exc)
+                )
         self.personas = personas
 
         log.info(
@@ -700,7 +797,10 @@ class ToolManager:
         """
         lt = self.tools.get(tool_name)
         if not lt:
-            return {"error": f"Tool '{tool_name}' not found", "available": sorted(self.tools.keys())}
+            return {
+                "error": f"Tool '{tool_name}' not found",
+                "available": sorted(self.tools.keys()),
+            }
 
         method = next((m for m in lt.methods if m.method_name == method_name), None)
         if not method:
@@ -726,6 +826,14 @@ class ToolManager:
         }
         t0 = time.monotonic()
         log.info("tool_call_started", **call_fields)
+        validation_error = _tool_arg_validation_error(method, args)
+        if validation_error is not None:
+            log.warning(
+                "tool_argument_validation_failed",
+                error=validation_error["message"],
+                **call_fields,
+            )
+            return validation_error
 
         ctx = lt.ctx
         all_secret_keys = lt.secrets_keys + lt.optional_secrets_keys
@@ -735,8 +843,12 @@ class ToolManager:
                 ctx = ToolContext(
                     name=lt.name,
                     secrets={**lt.ctx.secrets, **resolved},
-                    thread_key=sandbox_claims.get("thread_key") if sandbox_claims else None,
-                    container_id=sandbox_claims.get("container_id") if sandbox_claims else None,
+                    thread_key=sandbox_claims.get("thread_key")
+                    if sandbox_claims
+                    else None,
+                    container_id=sandbox_claims.get("container_id")
+                    if sandbox_claims
+                    else None,
                 )
             elif sandbox_claims:
                 ctx = ToolContext(
@@ -801,7 +913,10 @@ class ToolManager:
         lt = self.tools.get(tool_name)
         if not lt:
             return json.dumps(
-                {"error": f"Tool '{tool_name}' not found", "available": sorted(self.tools.keys())}
+                {
+                    "error": f"Tool '{tool_name}' not found",
+                    "available": sorted(self.tools.keys()),
+                }
             )
 
         method = next((m for m in lt.methods if m.method_name == method_name), None)
@@ -830,19 +945,35 @@ class ToolManager:
         }
         t0 = time.monotonic()
         log.info("tool_call_started", **call_fields)
+        validation_error = _tool_arg_validation_error(method, args)
+        if validation_error is not None:
+            log.warning(
+                "tool_argument_validation_failed",
+                error=validation_error["message"],
+                **call_fields,
+            )
+            return json.dumps(validation_error)
 
         # Resolve real secrets for tools that declare them
         ctx = lt.ctx
         if lt.secrets_keys:
             resolved = await _resolve_secrets(lt.secrets_keys)
-            log.info("tool_secrets_resolved", tool=tool_name, keys=list(resolved.keys()),
-                     declared=lt.secrets_keys)
+            log.info(
+                "tool_secrets_resolved",
+                tool=tool_name,
+                keys=list(resolved.keys()),
+                declared=lt.secrets_keys,
+            )
             if resolved:
                 ctx = ToolContext(
                     name=lt.name,
                     secrets={**lt.ctx.secrets, **resolved},
-                    thread_key=sandbox_claims.get("thread_key") if sandbox_claims else None,
-                    container_id=sandbox_claims.get("container_id") if sandbox_claims else None,
+                    thread_key=sandbox_claims.get("thread_key")
+                    if sandbox_claims
+                    else None,
+                    container_id=sandbox_claims.get("container_id")
+                    if sandbox_claims
+                    else None,
                 )
             elif sandbox_claims:
                 ctx = ToolContext(
@@ -875,7 +1006,9 @@ class ToolManager:
             )
             record_tool_call(tool_name, method_name, True, duration_ms / 1000)
             if isinstance(result, dict):
-                thread_key = sandbox_claims.get("thread_key") if sandbox_claims else None
+                thread_key = (
+                    sandbox_claims.get("thread_key") if sandbox_claims else None
+                )
                 result = await _extract_tool_attachment(
                     result,
                     request=request,
@@ -897,7 +1030,9 @@ class ToolManager:
                 **call_fields,
             )
             record_tool_call(tool_name, method_name, False, duration_ms / 1000)
-            return json.dumps({"error": error_msg, "tool": tool_name, "method": method_name})
+            return json.dumps(
+                {"error": error_msg, "tool": tool_name, "method": method_name}
+            )
         finally:
             reset_tool_context(token)
 
@@ -957,7 +1092,9 @@ class ToolManager:
         async def get_persona_detail(name: str) -> dict:
             p = pm.personas.get(name)
             if not p:
-                raise HTTPException(status_code=404, detail=f"Persona '{name}' not found")
+                raise HTTPException(
+                    status_code=404, detail=f"Persona '{name}' not found"
+                )
             return {
                 "name": p.name,
                 "description": p.description,
@@ -972,7 +1109,9 @@ class ToolManager:
         async def get_persona_prompt(name: str):
             p = pm.personas.get(name)
             if not p:
-                raise HTTPException(status_code=404, detail=f"Persona '{name}' not found")
+                raise HTTPException(
+                    status_code=404, detail=f"Persona '{name}' not found"
+                )
             return PlainTextResponse(p.prompt_content)
 
         # ── Tool endpoints ───────────────────────────────────────────────────
@@ -984,7 +1123,10 @@ class ToolManager:
             if p and p.secrets_keys:
                 resolved = await _resolve_secrets(p.secrets_keys)
                 if len(resolved) < len(p.secrets_keys):
-                    raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' is not available (missing secrets)")
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Tool '{tool_name}' is not available (missing secrets)",
+                    )
             return pm.describe_tool(tool_name)
 
         @router.post("/{tool_name}/{method_name}")
@@ -995,16 +1137,24 @@ class ToolManager:
                 try:
                     body = json.loads(raw_body)
                 except json.JSONDecodeError as exc:
-                    raise HTTPException(status_code=400, detail="Request body must be valid JSON") from exc
+                    raise HTTPException(
+                        status_code=400, detail="Request body must be valid JSON"
+                    ) from exc
                 if not isinstance(body, dict):
-                    raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+                    raise HTTPException(
+                        status_code=400, detail="Request body must be a JSON object"
+                    )
             _require_tool_scope(request, tool_name)
             accept = request.headers.get("accept", "")
             want_toon = "text/plain" in accept
             fmt = "toon" if want_toon else "json"
-            result = await pm.call_tool(tool_name, method_name, body, request=request, format=fmt)
+            result = await pm.call_tool(
+                tool_name, method_name, body, request=request, format=fmt
+            )
             if want_toon:
-                return PlainTextResponse(result if isinstance(result, str) else _to_toon(result))
+                return PlainTextResponse(
+                    result if isinstance(result, str) else _to_toon(result)
+                )
             return {"tool": tool_name, "method": method_name, "result": result}
 
         return router
