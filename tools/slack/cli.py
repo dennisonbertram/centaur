@@ -326,7 +326,6 @@ def sync_history(
 
 @app.command()
 def channels(
-    include_private: bool = typer.Option(False, "--private", "-p", help="Include private channels"),
     limit: int = typer.Option(100, "--limit", "-n", help="Max channels"),
     query: str = typer.Option(None, "--query", "-q", help="Filter by name"),
     bot_member_only: bool = typer.Option(
@@ -339,9 +338,9 @@ def channels(
     from .client import list_bot_channels, list_channels
 
     if bot_member_only:
-        results = list_bot_channels(include_private=include_private, limit=limit)
+        results = list_bot_channels(limit=limit)
     else:
-        results = list_channels(include_private=include_private, limit=limit)
+        results = list_channels(limit=limit)
 
     if query:
         results = [c for c in results if query.lower() in c["name"].lower()]

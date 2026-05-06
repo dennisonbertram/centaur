@@ -387,13 +387,10 @@ class SlackClient:
             pass
         return user_cache
 
-    def list_bot_channels(
-        self, include_private: bool = True, limit: int = 500, force_refresh: bool = False
-    ) -> list[dict]:
-        """List channels the bot is a member of.
+    def list_bot_channels(self, limit: int = 500, force_refresh: bool = False) -> list[dict]:
+        """List public channels the bot is a member of.
 
         Args:
-            include_private: Include private channels
             limit: Maximum channels to return
             force_refresh: Ignore cache and fetch fresh data
 
@@ -409,13 +406,12 @@ class SlackClient:
 
         channels = []
         cursor = None
-        types = "public_channel,private_channel" if include_private else "public_channel"
 
         while True:
             try:
                 response = self._retry_on_ratelimit(
                     self._client.conversations_list,
-                    types=types,
+                    types="public_channel",
                     limit=min(limit - len(channels), 200),
                     cursor=cursor,
                     exclude_archived=True,
@@ -934,16 +930,15 @@ class SlackClient:
             "sync_state": next_state,
         }
 
-    def list_channels(self, include_private: bool = False, limit: int = 200) -> list[dict]:
-        """List all Slack channels (not just bot member channels)."""
+    def list_channels(self, limit: int = 200) -> list[dict]:
+        """List public Slack channels (not just bot member channels)."""
         channels = []
         cursor = None
-        types = "public_channel,private_channel" if include_private else "public_channel"
 
         while True:
             try:
                 response = self._client.conversations_list(
-                    types=types,
+                    types="public_channel",
                     limit=min(limit - len(channels), 200),
                     cursor=cursor,
                     exclude_archived=True,

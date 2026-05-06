@@ -23,7 +23,7 @@ DEFAULT_PAGE_LIMIT = 200
 class SlackSyncClient(Protocol):
     """Small protocol for the Slack client methods this workflow uses."""
 
-    def list_channels(self, include_private: bool = False, limit: int = 200) -> list[dict]:
+    def list_channels(self, limit: int = 200) -> list[dict]:
         ...
 
     def list_users(self, limit: int = 200) -> list[dict]:
@@ -449,7 +449,7 @@ def _resolve_channels(
     all_channels: list[dict[str, Any]],
     ctx: WorkflowContext,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]], set[str]]:
-    """Resolve configured channels, skipping private/unresolved entries with logs."""
+    """Resolve configured channels, skipping private or unresolved entries with logs."""
     public_channels = [ch for ch in all_channels if not ch.get("is_private")]
     matched_public: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
@@ -458,8 +458,8 @@ def _resolve_channels(
     for item in configured:
         matches = [ch for ch in all_channels if _channel_matches(item, ch)]
         if not matches:
-            ctx.log("slack_sync_channel_skipped_unresolved", channel=item)
-            skipped.append({"channel": item, "reason": "not_found"})
+            ctx.log("slack_sync_channel_skipped_not_public_or_not_found", channel=item)
+            skipped.append({"channel": item, "reason": "not_public_or_not_found"})
             continue
         channel = matches[0]
         if channel.get("is_private"):
@@ -513,7 +513,7 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     limit = _positive_int(inp.limit, DEFAULT_PAGE_LIMIT)
 
     client = _client()
-    all_channels = client.list_channels(include_private=True, limit=10_000)
+    all_channels = client.list_channels(limit=10_000)
     channels_to_sync, skipped, public_ids = _resolve_channels(configured, all_channels, ctx)
     public_channels = [ch for ch in all_channels if str(ch.get("id") or "") in public_ids]
     await _upsert_channels(

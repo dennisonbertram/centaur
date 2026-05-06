@@ -43,10 +43,8 @@ class FakeSlackClient:
         self.list_channels_calls = 0
         self.list_users_calls = 0
 
-    def list_channels(self, include_private: bool = False, limit: int = 200) -> list[dict]:
+    def list_channels(self, limit: int = 200) -> list[dict]:
         self.list_channels_calls += 1
-        if include_private:
-            return self.channels[:limit]
         return [ch for ch in self.channels if not ch.get("is_private")][:limit]
 
     def list_users(self, limit: int = 200) -> list[dict]:
@@ -203,14 +201,13 @@ async def test_private_only_config_logs_skip_without_run_row(db_pool, monkeypatc
     assert result["reason"] == "no_public_channels"
     assert await db_pool.fetchval("SELECT COUNT(*) FROM slack_sync_runs") == 0
     assert await db_pool.fetchval("SELECT COUNT(*) FROM slack_sync_channels") == 0
-    assert ("slack_sync_channel_skipped_private", {
-        "channel_id": "G_PRIVATE",
-        "channel_name": "private-room",
+    assert ("slack_sync_channel_skipped_not_public_or_not_found", {
+        "channel": "private-room",
     }) in ctx.logs
 
 
 @pytest.mark.asyncio
-async def test_mixed_config_syncs_public_channel_and_records_skipped_private(
+async def test_mixed_config_syncs_public_channel_and_records_skipped_non_public(
     db_pool,
     monkeypatch,
 ):
@@ -279,7 +276,7 @@ async def test_mixed_config_syncs_public_channel_and_records_skipped_private(
     )
     assert run is not None
     assert run["status"] == "completed"
-    assert json.loads(run["channels_skipped"])[0]["reason"] == "private_channel"
+    assert json.loads(run["channels_skipped"])[0]["reason"] == "not_public_or_not_found"
 
 
 @pytest.mark.asyncio
