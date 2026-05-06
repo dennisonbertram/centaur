@@ -64,6 +64,9 @@ class SlackClient:
     _CHANNEL_CACHE_TTL = 300  # 5 minutes
     _USER_CACHE_TTL = 600  # 10 minutes
     _MAX_PAGE_SIZE = 200
+    _DEFAULT_THREAD_REPLY_LIMIT = 50
+    _DEFAULT_DUMP_MESSAGE_LIMIT = 100
+    _DEFAULT_DUMP_THREAD_LIMIT = 25
     _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
     _NUMERIC_TS_RE = re.compile(r"^\d+(?:\.\d+)?$")
     _AUTH_ERROR_CODES: ClassVar[frozenset[str]] = frozenset(
@@ -685,7 +688,7 @@ class SlackClient:
     def get_channel_history_page(
         self,
         channel: str,
-        limit: int = 200,
+        limit: int = _DEFAULT_THREAD_REPLY_LIMIT,
         cursor: str | None = None,
         oldest: str | int | float | None = None,
         latest: str | int | float | None = None,
@@ -703,6 +706,8 @@ class SlackClient:
         channel_name = self._resolve_channel_name(channel, channel_id)
         normalized_oldest = self._normalize_ts(oldest)
         normalized_latest = self._normalize_ts(latest)
+
+        requested_limit = max(1, min(int(limit), self._MAX_PAGE_SIZE))
 
         def fetch_page(next_cursor: str | None, batch_limit: int) -> dict[str, Any]:
             kwargs: dict[str, Any] = {
@@ -727,7 +732,7 @@ class SlackClient:
             raw_messages, next_cursor, has_more = self._collect_cursor_pages(
                 fetch_page,
                 result_key="messages",
-                limit=limit,
+                limit=requested_limit,
                 cursor=cursor,
             )
         except SlackApiError as e:
@@ -779,7 +784,7 @@ class SlackClient:
         self,
         channel: str,
         thread_ts: str,
-        limit: int = 200,
+        limit: int = _DEFAULT_THREAD_REPLY_LIMIT,
         cursor: str | None = None,
         oldest: str | int | float | None = None,
         latest: str | int | float | None = None,
@@ -794,6 +799,8 @@ class SlackClient:
 
         if normalized_thread_ts is None:
             raise ValueError("thread_ts is required")
+
+        requested_limit = max(1, min(int(limit), self._MAX_PAGE_SIZE))
 
         def fetch_page(next_cursor: str | None, batch_limit: int) -> dict[str, Any]:
             kwargs: dict[str, Any] = {
@@ -818,7 +825,7 @@ class SlackClient:
             raw_messages, next_cursor, has_more = self._collect_cursor_pages(
                 fetch_page,
                 result_key="messages",
-                limit=limit,
+                limit=requested_limit,
                 cursor=cursor,
             )
         except SlackApiError as e:
@@ -837,8 +844,11 @@ class SlackClient:
             "thread_ts": normalized_thread_ts,
             "messages": messages,
             "count": len(messages),
+            "requested_limit": limit,
+            "effective_limit": requested_limit,
             "has_more": has_more,
             "next_cursor": next_cursor,
+            "continuation_available": has_more,
             "window": {
                 "oldest": normalized_oldest,
                 "latest": normalized_latest,
@@ -851,7 +861,7 @@ class SlackClient:
         self,
         channel_id: str,
         thread_ts: str,
-        limit: int = 100,
+        limit: int = _DEFAULT_THREAD_REPLY_LIMIT,
         cursor: str | None = None,
         oldest: str | int | float | None = None,
         latest: str | int | float | None = None,
@@ -1580,26 +1590,31 @@ class SlackClient:
     def dump_channel_with_threads(
         self,
         channel_name: str,
-        limit: int = 500,
+        limit: int = _DEFAULT_DUMP_MESSAGE_LIMIT,
         min_replies: int = 0,
         cursor: str | None = None,
         oldest: str | int | float | None = None,
         latest: str | int | float | None = None,
-        replies_limit: int = 200,
+        replies_limit: int = _DEFAULT_THREAD_REPLY_LIMIT,
+        max_threads: int = _DEFAULT_DUMP_THREAD_LIMIT,
     ) -> dict:
-        """Dump full channel history with all thread replies expanded.
+        """Dump a bounded channel history page with thread replies expanded.
 
         Args:
             channel_name: Channel name (without #)
             limit: Maximum messages to fetch from channel
             min_replies: Only include threads with >= this many replies (0 = all)
+            max_threads: Maximum thread reply lookups to expand for this page
 
         Returns:
             Dict with channel info, messages (with replies inline), and stats
         """
+        requested_limit = max(1, min(int(limit), self._MAX_PAGE_SIZE))
+        requested_replies_limit = max(1, min(int(replies_limit), self._MAX_PAGE_SIZE))
+        max_threads = max(0, int(max_threads))
         page = self.get_channel_history_page(
             channel_name,
-            limit=limit,
+            limit=requested_limit,
             cursor=cursor,
             oldest=oldest,
             latest=latest,
@@ -1608,6 +1623,8 @@ class SlackClient:
         channel_id = page["channel_id"]
 
         all_messages = []
+        expanded_threads = 0
+        skipped_threads = 0
         for msg in page["messages"]:
             ts = msg["timestamp"]
             reply_count = msg.get("reply_count", 0)
@@ -1621,17 +1638,23 @@ class SlackClient:
             }
 
             if reply_count > 0 and (min_replies == 0 or reply_count >= min_replies):
-                try:
-                    thread_page = self.get_thread_replies_page(
-                        channel=channel_id,
-                        thread_ts=thread_ts,
-                        limit=replies_limit,
-                    )
-                    message_data["replies"] = thread_page["messages"][1:]
-                    message_data["replies_has_more"] = thread_page["has_more"]
-                    message_data["replies_next_cursor"] = thread_page["next_cursor"]
-                except RuntimeError:
-                    pass
+                if expanded_threads >= max_threads:
+                    skipped_threads += 1
+                    message_data["replies_has_more"] = True
+                    message_data["replies_next_cursor"] = "not_fetched_thread_limit"
+                else:
+                    try:
+                        thread_page = self.get_thread_replies_page(
+                            channel=channel_id,
+                            thread_ts=thread_ts,
+                            limit=requested_replies_limit,
+                        )
+                        message_data["replies"] = thread_page["messages"][1:]
+                        message_data["replies_has_more"] = thread_page["has_more"]
+                        message_data["replies_next_cursor"] = thread_page["next_cursor"]
+                        expanded_threads += 1
+                    except RuntimeError:
+                        pass
 
             all_messages.append(message_data)
 
@@ -1644,10 +1667,18 @@ class SlackClient:
             "messages": all_messages,
             "has_more": page["has_more"],
             "next_cursor": page["next_cursor"],
+            "continuation_available": bool(page["has_more"] or skipped_threads),
             "window": page["window"],
+            "limits": {
+                "message_limit": requested_limit,
+                "reply_limit": requested_replies_limit,
+                "thread_limit": max_threads,
+            },
             "stats": {
                 "total_messages": len(all_messages),
                 "threads_fetched": threads_with_replies,
+                "threads_expanded": expanded_threads,
+                "threads_skipped_by_limit": skipped_threads,
                 "total_replies": total_replies,
             },
         }

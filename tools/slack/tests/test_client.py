@@ -21,6 +21,8 @@ class _FakeWebClient:
         self.last_kwargs = None
         self.history_calls: list[dict] = []
         self.history_pages: list[dict] = []
+        self.reply_calls: list[dict] = []
+        self.reply_pages: list[dict] = []
         self.api_calls: list[tuple[str, dict]] = []
         self.upload_exception: Exception | None = None
 
@@ -31,6 +33,10 @@ class _FakeWebClient:
     def conversations_history(self, **kwargs):
         self.history_calls.append(kwargs)
         return self.history_pages.pop(0)
+
+    def conversations_replies(self, **kwargs):
+        self.reply_calls.append(kwargs)
+        return self.reply_pages.pop(0)
 
     def files_upload_v2(self, **kwargs):
         self.last_kwargs = kwargs
@@ -198,6 +204,63 @@ def test_get_channel_history_page_preserves_non_auth_error_shape() -> None:
 
     with pytest.raises(RuntimeError, match="Slack API error: channel_not_found"):
         client.get_channel_history_page("paradigm-pulse")
+
+
+def test_get_thread_replies_page_uses_bounded_default() -> None:
+    client, fake_web_client = _make_client()
+    client._get_user_cache = lambda: {}  # type: ignore[method-assign]
+    fake_web_client.reply_pages = [
+        {
+            "messages": [{"user": "U1", "text": "root", "ts": "100.000000"}],
+            "response_metadata": {"next_cursor": ""},
+        }
+    ]
+
+    result = client.get_thread_replies_page("paradigm-pulse", "100.000000")
+
+    assert fake_web_client.reply_calls[0]["limit"] == 50
+    assert result["effective_limit"] == 50
+    assert result["continuation_available"] is False
+
+
+def test_dump_channel_with_threads_limits_thread_expansion() -> None:
+    client, fake_web_client = _make_client()
+    client._get_user_cache = lambda: {}  # type: ignore[method-assign]
+    fake_web_client.history_pages = [
+        {
+            "messages": [
+                {"user": "U1", "text": "root 1", "ts": "101.000000", "reply_count": 2},
+                {"user": "U2", "text": "root 2", "ts": "102.000000", "reply_count": 2},
+            ],
+            "response_metadata": {"next_cursor": ""},
+        }
+    ]
+    fake_web_client.reply_pages = [
+        {
+            "messages": [
+                {"user": "U1", "text": "root 1", "ts": "101.000000"},
+                {"user": "U2", "text": "reply", "ts": "101.000001"},
+            ],
+            "response_metadata": {"next_cursor": ""},
+        }
+    ]
+
+    result = client.dump_channel_with_threads(
+        "paradigm-pulse",
+        max_threads=1,
+        replies_limit=500,
+    )
+
+    assert fake_web_client.history_calls[0]["limit"] == 100
+    assert fake_web_client.reply_calls[0]["limit"] == 200
+    assert result["stats"]["threads_expanded"] == 1
+    assert result["stats"]["threads_skipped_by_limit"] == 1
+    assert result["continuation_available"] is True
+    assert result["limits"] == {
+        "message_limit": 100,
+        "reply_limit": 200,
+        "thread_limit": 1,
+    }
 
 
 def test_upload_file_surfaces_structured_auth_failure() -> None:
