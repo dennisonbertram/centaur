@@ -8,12 +8,102 @@ import { SlackBot, type BotAttachment, type BotMessage, type BotThread, type Pos
 import {
   markdownToPlainText,
   renderMarkdownForSlack,
+  SLACK_BLOCKS_PER_MESSAGE,
+  SLACK_PLAIN_TEXT_MESSAGE_CHARS,
   slackFormattedTextToAst,
   slackFormattedTextToMarkdown,
+  splitMarkdownForSlackMessages,
   type Root,
 } from "./markdown";
 import { classifySlackError, SlackApiCallError } from "./errors";
 import type { StreamChunk } from "./types";
+
+/**
+ * Slack streaming limits. We apply a safety margin so we never hit the server-
+ * side msg_too_long rejection.
+ */
+const STREAM_TEXT_LIMIT = Math.floor(SLACK_PLAIN_TEXT_MESSAGE_CHARS * 0.9);
+const STREAM_BLOCKS_LIMIT = SLACK_BLOCKS_PER_MESSAGE - 2; // leave room for metadata block
+
+function streamChunkTextLength(chunk: string | StreamChunk): number {
+  if (typeof chunk === "string") return chunk.length;
+  if (chunk.type === "markdown_text") return chunk.text.length;
+  if (chunk.type === "blocks") {
+    return chunk.blocks.reduce((sum, b) => {
+      return sum + (typeof b.text === "string" ? b.text.length : 0);
+    }, 0);
+  }
+  return 0;
+}
+
+function streamChunkBlockCount(chunk: string | StreamChunk): number {
+  if (typeof chunk === "string") return 0;
+  if (chunk.type === "blocks") return chunk.blocks.length;
+  return 0;
+}
+
+function textFromSlackValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(textFromSlackValue).filter(Boolean).join(" ");
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  const direct = typeof record.text === "string" ? record.text : "";
+  const nested = [record.elements, record.rows, record.cells]
+    .map(textFromSlackValue)
+    .filter(Boolean)
+    .join(" ");
+  return [direct, nested].filter(Boolean).join(" ").trim();
+}
+
+function tableBlockToMarkdown(block: Record<string, unknown>): string {
+  const rows = Array.isArray(block.rows) ? block.rows : [];
+  const cells = rows.map((row) => Array.isArray(row) ? row.map(textFromSlackValue) : []);
+  if (cells.length === 0) return "";
+  const widths = Array.from({ length: Math.max(...cells.map((row) => row.length)) }, (_, index) =>
+    Math.max(3, ...cells.map((row) => (row[index] || "").length)),
+  );
+  const format = (row: string[]) => widths.map((width, index) => (row[index] || "").padEnd(width)).join(" | ").trimEnd();
+  return [format(cells[0]), widths.map((width) => "-".repeat(width)).join("-|-"), ...cells.slice(1).map(format)].join("\n");
+}
+
+function slackBlockToOverflowMarkdown(block: Record<string, unknown>): string {
+  if (block.type === "markdown" && typeof block.text === "string") return block.text;
+  if (block.type === "table") return tableBlockToMarkdown(block);
+  return textFromSlackValue(block);
+}
+
+function extractOverflowMarkdown(chunk: string | StreamChunk): string {
+  if (typeof chunk === "string") return chunk;
+  if (chunk.type === "markdown_text") return chunk.text;
+  if (chunk.type === "blocks") {
+    return chunk.blocks
+      .map((block) => slackBlockToOverflowMarkdown(block as Record<string, unknown>))
+      .filter((text) => text.trim())
+      .join("\n\n");
+  }
+  // task_update and plan_update are streaming-only UI — skip in overflow
+  return "";
+}
+
+function isSlackStreamOverflowError(error: unknown): boolean {
+  const classified = classifySlackError(error);
+  const code = classified.code?.toLowerCase() || "";
+  const message = classified.message.toLowerCase();
+  return code === "msg_too_long"
+    || code === "msg_blocks_too_long"
+    || message.includes("msg_too_long")
+    || message.includes("msg_blocks_too_long");
+}
+
+function isSlackStreamAlreadyClosedError(error: unknown): boolean {
+  const classified = classifySlackError(error);
+  const code = classified.code?.toLowerCase() || "";
+  const message = classified.message.toLowerCase();
+  return code === "message_not_in_streaming_state"
+    || message.includes("message_not_in_streaming_state")
+    || code === "message_not_found"
+    || message.includes("message_not_found");
+}
 
 const PENDING_SUBSCRIPTION_TTL_MS = 2 * 60_000;
 // Must exceed the execution hard timeout (default 60 min) to prevent
@@ -274,18 +364,93 @@ class WebClientSlackAdapter implements SlackAdapter {
     });
     const ts = String(start.ts || "");
 
+    let accumulatedChars = streamChunkTextLength(first.value);
+    let accumulatedBlocks = streamChunkBlockCount(first.value);
+
     while (true) {
       const next = await iterator.next();
       if (next.done) break;
-      await this.call("chat.appendStream", {
-        channel,
-        ts,
-        ...this.streamPayloadForChunk(next.value),
-      });
+
+      const chunkChars = streamChunkTextLength(next.value);
+      const chunkBlocks = streamChunkBlockCount(next.value);
+
+      if (accumulatedChars + chunkChars > STREAM_TEXT_LIMIT
+        || accumulatedBlocks + chunkBlocks > STREAM_BLOCKS_LIMIT) {
+        // Approaching Slack's limit — stop stream and post overflow as follow-ups.
+        log.warn("slack_stream_overflow", {
+          thread_id: threadId,
+          reason: "proactive_limit",
+          accumulated_chars: accumulatedChars,
+          accumulated_blocks: accumulatedBlocks,
+        });
+        await this.stopStreamForOverflow(channel, ts, threadId);
+        await this.postStreamOverflow(threadId, iterator, next.value);
+        return { id: ts };
+      }
+
+      try {
+        await this.call("chat.appendStream", {
+          channel,
+          ts,
+          ...this.streamPayloadForChunk(next.value),
+        });
+      } catch (error) {
+        if (!isSlackStreamOverflowError(error)) {
+          throw error;
+        }
+        const classified = classifySlackError(error);
+        log.warn("slack_stream_overflow", {
+          thread_id: threadId,
+          reason: "slack_rejected",
+          error: classified.message,
+          error_code: classified.code,
+          error_class: classified.errorClass,
+        });
+        await this.stopStreamForOverflow(channel, ts, threadId);
+        await this.postStreamOverflow(threadId, iterator, next.value);
+        return { id: ts };
+      }
+      accumulatedChars += chunkChars;
+      accumulatedBlocks += chunkBlocks;
     }
 
     await this.call("chat.stopStream", { channel, ts });
     return { id: ts };
+  }
+
+  private async stopStreamForOverflow(channel: string, ts: string, threadId: string): Promise<void> {
+    try {
+      await this.call("chat.stopStream", { channel, ts });
+    } catch (error) {
+      if (!isSlackStreamAlreadyClosedError(error)) {
+        throw error;
+      }
+      const classified = classifySlackError(error);
+      log.info("slack_stream_already_closed", {
+        thread_id: threadId,
+        error: classified.message,
+        error_code: classified.code,
+        error_class: classified.errorClass,
+      });
+    }
+  }
+
+  private async postStreamOverflow(
+    threadId: string,
+    iterator: AsyncIterator<string | StreamChunk>,
+    firstOverflow: string | StreamChunk,
+  ): Promise<void> {
+    const parts: string[] = [extractOverflowMarkdown(firstOverflow)];
+    while (true) {
+      const remaining = await iterator.next();
+      if (remaining.done) break;
+      parts.push(extractOverflowMarkdown(remaining.value));
+    }
+    const combined = parts.filter((p) => p.trim()).join("\n\n");
+    if (!combined.trim()) return;
+    for (const md of splitMarkdownForSlackMessages(combined)) {
+      await this.postMessage(threadId, { markdown: md });
+    }
   }
 
   async setAssistantTitle(channel: string, threadTs: string, title: string): Promise<void> {

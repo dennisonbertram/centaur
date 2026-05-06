@@ -83,6 +83,95 @@ describe("Slack stream payloads", () => {
     expect(appends[1]).not.toHaveProperty("markdown_text");
   });
 
+  it("splits into follow-up messages when approaching Slack's text limit", async () => {
+    const adapter = createAdapter();
+
+    // 90% of 40k = 36k. Use a chunk that fills most of the budget so the
+    // next markdown_text chunk pushes it over.
+    const bigText = "x".repeat(36_000);
+
+    await adapter.stream("slack:C123:1700000000.000001", (async function* () {
+      yield { type: "markdown_text", text: bigText } satisfies StreamChunk;
+      yield { type: "markdown_text", text: "overflow A" } satisfies StreamChunk;
+      yield { type: "plan_update", title: "Done" } satisfies StreamChunk;
+      yield { type: "markdown_text", text: "overflow B" } satisfies StreamChunk;
+    })());
+
+    // Stream was stopped before limit was hit
+    const stops = streamCallParams("chat.stopStream");
+    expect(stops).toHaveLength(1);
+    // No appends — bigText was in startStream, "overflow A" exceeded the limit
+    const appends = streamCallParams("chat.appendStream");
+    expect(appends).toHaveLength(0);
+
+    // Overflow posted as follow-up messages
+    const posts = streamCallParams("chat.postMessage");
+    expect(posts.length).toBeGreaterThanOrEqual(1);
+    const postedText = posts.map((p) => p.text).join(" ");
+    expect(postedText).toContain("overflow A");
+    expect(postedText).toContain("overflow B");
+    // plan_update is streaming-only UI — skipped
+    expect(postedText).not.toContain("Done");
+  });
+
+  it("preserves table and rich text block content when overflow is posted as follow-ups", async () => {
+    slackApiCall.mockImplementation(async (method: string) => {
+      if (method === "chat.startStream") return { ok: true, ts: "1700000000.000100" };
+      if (method === "chat.appendStream") return { ok: false, error: "msg_too_long" };
+      return { ok: true };
+    });
+    const adapter = createAdapter();
+
+    await adapter.stream("slack:C123:1700000000.000001", (async function* () {
+      yield { type: "markdown_text", text: "first" } satisfies StreamChunk;
+      yield {
+        type: "blocks",
+        blocks: [
+          {
+            type: "table",
+            rows: [
+              [{ type: "raw_text", text: "Asset" }, { type: "raw_text", text: "Move" }],
+              [{ type: "raw_text", text: "BTC" }, { type: "raw_text", text: "+5%" }],
+            ],
+          },
+          {
+            type: "rich_text",
+            elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "View in Amp" }] }],
+          },
+        ],
+      } satisfies StreamChunk;
+    })());
+
+    const postedText = streamCallParams("chat.postMessage").map((p) => p.text).join(" ");
+    expect(postedText).toContain("Asset");
+    expect(postedText).toContain("BTC");
+    expect(postedText).toContain("+5%");
+    expect(postedText).toContain("View in Amp");
+  });
+
+  it("posts rejected overflow chunks as follow-up messages when Slack returns msg_too_long", async () => {
+    slackApiCall.mockImplementation(async (method: string) => {
+      if (method === "chat.startStream") return { ok: true, ts: "1700000000.000100" };
+      if (method === "chat.appendStream") return { ok: false, error: "msg_too_long" };
+      return { ok: true };
+    });
+    const adapter = createAdapter();
+
+    await adapter.stream("slack:C123:1700000000.000001", (async function* () {
+      yield { type: "markdown_text", text: "first" } satisfies StreamChunk;
+      yield { type: "markdown_text", text: "rejected overflow" } satisfies StreamChunk;
+      yield { type: "markdown_text", text: "remaining overflow" } satisfies StreamChunk;
+    })());
+
+    const stops = streamCallParams("chat.stopStream");
+    expect(stops).toHaveLength(1);
+    const posts = streamCallParams("chat.postMessage");
+    expect(posts.length).toBeGreaterThanOrEqual(1);
+    const postedText = posts.map((p) => p.text).join(" ");
+    expect(postedText).toContain("rejected overflow");
+    expect(postedText).toContain("remaining overflow");
+  });
+
   it("can start directly with a structured chunk", async () => {
     const adapter = createAdapter();
 
