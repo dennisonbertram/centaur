@@ -495,6 +495,42 @@ async def test_execute_dev_delivery_does_not_create_outbox(
 
 
 @pytest.mark.asyncio
+async def test_execute_rejects_recent_failure_loop(client, db_pool, api_key: str):
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}:failure-loop"
+    await _insert_assignment(db_pool, thread_key, generation=1)
+
+    for i in range(3):
+        await db_pool.execute(
+            "INSERT INTO agent_execution_requests ("
+            "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+            "delivery, metadata, terminal_reason, error_text, completed_at"
+            ") VALUES ($1, $2, 1, $3, $4, 'failed_permanent', '{}'::jsonb, '{}'::jsonb, "
+            "'harness_error', 'amp crashed', NOW() - make_interval(secs => $5::double precision))",
+            f"exe-{uuid.uuid4().hex[:12]}",
+            thread_key,
+            f"exec-failed-{i}",
+            f"hash-failed-{i}",
+            float(i),
+        )
+
+    res = await client.post(
+        "/agent/execute",
+        headers=_auth(api_key),
+        json={
+            "thread_key": thread_key,
+            "assignment_generation": 1,
+            "execute_id": "exec-blocked",
+            "delivery": {"platform": "slack", "channel": "C-test"},
+        },
+    )
+
+    assert res.status_code == 409
+    body = res.json()
+    assert body["code"] == "THREAD_FAILURE_LOOP"
+    assert "harness_error" in body["message"]
+
+
+@pytest.mark.asyncio
 async def test_final_delivery_claim_and_mark_delivered(client, db_pool, api_key: str):
     execution_id = f"exe-{uuid.uuid4().hex[:10]}"
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"

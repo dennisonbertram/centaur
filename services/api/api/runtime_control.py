@@ -56,6 +56,8 @@ EXECUTION_WATCHDOG_POLL_S = float(os.getenv("EXECUTION_WATCHDOG_POLL_S", "1.0"))
 EXECUTION_RECONCILE_INTERVAL_S = float(
     os.getenv("EXECUTION_RECONCILE_INTERVAL_S", "0.5")
 )
+THREAD_FAILURE_LOOP_WINDOW_S = int(os.getenv("THREAD_FAILURE_LOOP_WINDOW_S", "300"))
+THREAD_FAILURE_LOOP_THRESHOLD = int(os.getenv("THREAD_FAILURE_LOOP_THRESHOLD", "3"))
 EXECUTION_STREAM_EOF_RETRY_DELAY_S = max(
     float(os.getenv("EXECUTION_STREAM_EOF_RETRY_DELAY_S", "1.0")),
     0.0,
@@ -975,6 +977,39 @@ async def enqueue_execution(
                 raise ControlPlaneError(
                     "ASSIGNMENT_GENERATION_STALE",
                     "assignment_generation does not match the active assignment",
+                    409,
+                )
+
+            recent_failures = await conn.fetch(
+                "SELECT terminal_reason, error_text, completed_at "
+                "FROM agent_execution_requests "
+                "WHERE thread_key = $1 "
+                "  AND status = 'failed_permanent' "
+                "  AND completed_at > NOW() - make_interval(secs => $2::double precision) "
+                "ORDER BY completed_at DESC "
+                "LIMIT $3",
+                thread_key,
+                float(THREAD_FAILURE_LOOP_WINDOW_S),
+                THREAD_FAILURE_LOOP_THRESHOLD,
+            )
+            if len(recent_failures) >= THREAD_FAILURE_LOOP_THRESHOLD:
+                reasons = [
+                    str(row["terminal_reason"] or "unknown") for row in recent_failures
+                ]
+                log.warning(
+                    "thread_failure_loop_detected",
+                    thread_key=thread_key,
+                    assignment_generation=assignment_generation,
+                    recent_failure_count=len(recent_failures),
+                    terminal_reasons=reasons,
+                )
+                raise ControlPlaneError(
+                    "THREAD_FAILURE_LOOP",
+                    (
+                        "This thread failed repeatedly in the last few minutes, "
+                        "so Centaur is pausing instead of retrying the same failure loop. "
+                        f"Recent reasons: {', '.join(reasons)}"
+                    ),
                     409,
                 )
 
