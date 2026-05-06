@@ -39,7 +39,11 @@ from api.routers import workflows as workflow_router_mod
 from api.tool_manager import ToolManager, load_plugins_config
 from api.agent import reconcile_tick
 from api.runtime_guardrails import assert_runtime_credentials_ready
-from api.runtime_control import start_execution_worker, stop_execution_worker
+from api.runtime_control import (
+    recover_interrupted_executions_on_startup,
+    start_execution_worker,
+    stop_execution_worker,
+)
 from api.workflow_engine import (
     get_workflow_dirs,
     discover_workflow_handlers,
@@ -163,6 +167,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     discover_workflow_handlers()
     await sync_registered_workflow_schedules(app.state.db_pool)
     if execution_worker_enabled:
+        await recover_interrupted_executions_on_startup(app.state.db_pool)
         await start_execution_worker(app.state.db_pool)
     if workflow_worker_enabled:
         await start_workflow_worker(app.state.db_pool)
@@ -170,7 +175,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await _push_injection_map()
     watcher_task = asyncio.create_task(_watch_tools(tool_manager))
     wf_watcher_task = asyncio.create_task(_watch_workflows())
-    reconcile_task = asyncio.create_task(_reconcile_loop()) if execution_worker_enabled else None
+    reconcile_task = (
+        asyncio.create_task(_reconcile_loop()) if execution_worker_enabled else None
+    )
     if warm_pool_enabled:
         await start_replenish_loop()
     await app_manager.recover_apps(app.state.db_pool)

@@ -2246,14 +2246,35 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
     )
 
 
-async def _recover_stale_running(pool) -> None:
-    await pool.execute(
+def _updated_count(command_tag: str) -> int:
+    with contextlib.suppress(Exception):
+        return int(str(command_tag).rsplit(" ", 1)[-1])
+    return 0
+
+
+async def _recover_stale_running(pool) -> int:
+    result = await pool.execute(
         "UPDATE agent_execution_requests SET "
         "status = CASE WHEN status IN ('running', 'retry_wait') THEN 'queued' ELSE status END, "
         "worker_id = NULL, worker_lease_expires_at = NULL, updated_at = NOW() "
         "WHERE status IN ('running', 'retry_wait', 'cancel_requested') "
         "AND (worker_lease_expires_at IS NULL OR worker_lease_expires_at <= NOW())",
     )
+    recovered = _updated_count(result)
+    if recovered:
+        log.warning(
+            "execution_requeued_after_stale_lease",
+            recovered=recovered,
+        )
+    return recovered
+
+
+async def recover_interrupted_executions_on_startup(pool) -> int:
+    """Recover interrupted executions whose worker lease is already stale."""
+    recovered = await _recover_stale_running(pool)
+    if recovered:
+        log.warning("startup_execution_requeued", recovered=recovered)
+    return recovered
 
 
 async def _recover_stale_running_if_due(pool) -> None:

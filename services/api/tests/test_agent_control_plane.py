@@ -1688,6 +1688,70 @@ async def test_recover_stale_running_requeues_expired_execution(db_pool):
 
 
 @pytest.mark.asyncio
+async def test_startup_recovery_preserves_running_execution_with_live_lease(
+    db_pool,
+):
+    from api.runtime_control import recover_interrupted_executions_on_startup
+
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, worker_id, worker_lease_expires_at"
+        ") VALUES ($1, $2, 1, 'exec-startup', 'hash-startup', 'running', '{}'::jsonb, "
+        "'{}'::jsonb, 'old-worker', NOW() + INTERVAL '10 minutes')",
+        execution_id,
+        thread_key,
+    )
+
+    recovered = await recover_interrupted_executions_on_startup(db_pool)
+
+    row = await db_pool.fetchrow(
+        "SELECT status, worker_id, worker_lease_expires_at "
+        "FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert recovered == 0
+    assert row is not None
+    assert row["status"] == "running"
+    assert row["worker_id"] == "old-worker"
+    assert row["worker_lease_expires_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_startup_recovery_requeues_expired_running_execution(db_pool):
+    from api.runtime_control import recover_interrupted_executions_on_startup
+
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, worker_id, worker_lease_expires_at"
+        ") VALUES ($1, $2, 1, 'exec-startup-expired', 'hash-startup-expired', "
+        "'running', '{}'::jsonb, '{}'::jsonb, 'old-worker', NOW() - INTERVAL '1 minute')",
+        execution_id,
+        thread_key,
+    )
+
+    recovered = await recover_interrupted_executions_on_startup(db_pool)
+
+    row = await db_pool.fetchrow(
+        "SELECT status, worker_id, worker_lease_expires_at "
+        "FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert recovered >= 1
+    assert row is not None
+    assert row["status"] == "queued"
+    assert row["worker_id"] is None
+    assert row["worker_lease_expires_at"] is None
+
+
+@pytest.mark.asyncio
 async def test_release_stale_runtime_assignments_releases_gone_idle_assignment(db_pool):
     from api.agent import _release_stale_runtime_assignments
 
