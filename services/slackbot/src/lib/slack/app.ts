@@ -313,13 +313,15 @@ class WebClientSlackAdapter implements SlackAdapter {
       ts = String(response.ts || "");
     }
     for (const file of message.files || []) {
-      await this.client.filesUploadV2({
+      const baseArgs = {
         channel_id: channel,
-        ...(threadTs ? { thread_ts: threadTs } : {}),
         filename: file.filename,
         title: file.filename,
         file: Buffer.from(file.data),
-      });
+      };
+      await this.client.filesUploadV2(
+        threadTs ? { ...baseArgs, thread_ts: threadTs } : baseArgs,
+      );
     }
     return { id: ts || threadTs };
   }
