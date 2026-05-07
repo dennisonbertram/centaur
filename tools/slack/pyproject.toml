@@ -26,4 +26,4 @@ packages = ["."]
 module = "client.py"
 hosts = ["slack.com"]
 secrets = ["SLACK_BOT_TOKEN"]
-optional_secrets = ["SLACK_SEARCH_TOKEN"]
+optional_secrets = ["SLACK_SEARCH_TOKEN", "SLACK_ETL_TOKEN"]

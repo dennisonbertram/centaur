@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,8 +19,9 @@ WORKFLOW_NAME = "slack_sync"
 DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_THREAD_LOOKBACK_DAYS = 3
 DEFAULT_PAGE_LIMIT = 200
-DEFAULT_SYNC_INTERVAL_SECONDS = 3600
+DEFAULT_SYNC_INTERVAL_SECONDS = 14_400
 FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+CHANNEL_ALLOWLIST_ENV = "SLACK_ETL_CHANNEL_ALLOWLIST"
 
 
 def _positive_int(value: int | str | None, default: int) -> int:
@@ -39,6 +41,30 @@ def _env_flag_enabled(name: str, default: bool = True) -> bool:
     return value.strip().lower() not in FALSE_ENV_VALUES
 
 
+def _parse_channel_allowlist(value: str | None) -> set[str]:
+    """Parse channel IDs or names from comma or whitespace separated config."""
+    if value is None:
+        return set()
+    return {
+        item.lstrip("#").lower()
+        for item in re.split(r"[\s,]+", value.strip())
+        if item.strip()
+    }
+
+
+def _filter_allowed_channels(
+    channels: list[dict[str, Any]],
+    allowlist: set[str],
+) -> list[dict[str, Any]]:
+    """Return only channels matching an allow-list of Slack IDs or names."""
+    return [
+        channel
+        for channel in channels
+        if str(channel.get("id") or "").lower() in allowlist
+        or str(channel.get("name") or "").lower() in allowlist
+    ]
+
+
 SCHEDULE = {
     "schedule_id": "slack_sync",
     "interval_seconds": _positive_int(
@@ -53,13 +79,16 @@ SCHEDULE = {
 class SlackSyncClient(Protocol):
     """Small protocol for the Slack client methods this workflow uses."""
 
-    def list_bot_channels(self, limit: int = 200, force_refresh: bool = False) -> list[dict]:
+    def _etl_access_mode(self) -> str:
         ...
 
-    def list_users(self, limit: int = 200) -> list[dict]:
+    def _list_etl_channels(self, limit: int = 200, force_refresh: bool = False) -> list[dict]:
         ...
 
-    def sync_channel_history(
+    def _list_etl_users(self, limit: int = 200) -> list[dict]:
+        ...
+
+    def _sync_etl_channel_history(
         self,
         channel: str,
         state: dict[str, Any] | None = None,
@@ -70,7 +99,7 @@ class SlackSyncClient(Protocol):
     ) -> dict[str, Any]:
         ...
 
-    def get_thread_replies_page(
+    def _get_etl_thread_replies_page(
         self,
         channel: str,
         thread_ts: str,
@@ -168,7 +197,7 @@ def _channel_ref(channel: dict[str, Any], reason: str | None = None) -> dict[str
 
 
 async def _upsert_channels(pool, channels: list[dict[str, Any]]) -> None:
-    """Refresh public bot-member channel rows and mark absent channels inactive."""
+    """Refresh public Slack sync channel rows and mark absent channels inactive."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
@@ -443,7 +472,7 @@ def _client() -> SlackSyncClient:
 
 
 async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
-    """Sync public Slack channels that the bot has been added to into Postgres."""
+    """Sync public Slack channels visible through the configured ETL user token."""
     if not _env_flag_enabled("SLACK_ETL_ENABLED", default=True):
         ctx.log("slack_sync_skipped_disabled")
         return {
@@ -461,20 +490,31 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         DEFAULT_THREAD_LOOKBACK_DAYS,
     )
     limit = _positive_int(inp.limit, DEFAULT_PAGE_LIMIT)
-
-    client = _client()
-    channels_to_sync = client.list_bot_channels(limit=10_000, force_refresh=True)
-    await _upsert_channels(ctx._pool, channels_to_sync)
-
-    if not channels_to_sync:
-        ctx.log("slack_sync_skipped_no_bot_member_channels")
+    channel_allowlist = _parse_channel_allowlist(os.getenv(CHANNEL_ALLOWLIST_ENV))
+    if not channel_allowlist:
+        ctx.log("slack_sync_skipped_no_channel_allowlist")
         return {
             "status": "skipped",
-            "reason": "no_bot_member_channels",
+            "reason": "no_channel_allowlist",
             "channels_skipped": [],
         }
 
-    users = client.list_users(limit=10_000)
+    client = _client()
+    access_mode = client._etl_access_mode()
+    channels = client._list_etl_channels(limit=10_000, force_refresh=True)
+    channels_to_sync = _filter_allowed_channels(channels, channel_allowlist)
+    await _upsert_channels(ctx._pool, channels_to_sync)
+
+    if not channels_to_sync:
+        reason = "no_matching_allowlisted_channels"
+        ctx.log("slack_sync_skipped_no_public_channels", access_mode=access_mode, reason=reason)
+        return {
+            "status": "skipped",
+            "reason": reason,
+            "channels_skipped": [],
+        }
+
+    users = client._list_etl_users(limit=10_000)
     users_upserted = await _upsert_users(ctx._pool, users)
 
     run_id = f"slack_sync_{uuid.uuid4().hex[:16]}"
@@ -485,7 +525,12 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         mode=inp.mode,
         requested=[_channel_ref(channel) for channel in channels_to_sync],
         skipped=[],
-        metadata={**inp.metadata, "users_upserted": users_upserted},
+        metadata={
+            **inp.metadata,
+            "channel_allowlist": sorted(channel_allowlist),
+            "slack_access_mode": access_mode,
+            "users_upserted": users_upserted,
+        },
     )
 
     synced: list[dict[str, str]] = []
@@ -514,7 +559,7 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             if oldest is None and state.get("watermark"):
                 oldest = _ts_minus_days(str(state["watermark"]), thread_lookback_days)
 
-            page = client.sync_channel_history(
+            page = client._sync_etl_channel_history(
                 channel_id,
                 state=state,
                 limit=limit,
@@ -533,7 +578,7 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
                 if msg.get("timestamp") and int(msg.get("reply_count") or 0) > 0
             }
             for thread_ts in sorted(thread_roots):
-                replies_page = client.get_thread_replies_page(
+                replies_page = client._get_etl_thread_replies_page(
                     channel_id,
                     thread_ts=thread_ts,
                     limit=limit,

@@ -59,6 +59,7 @@
     "api": {
       "type": "object",
       "properties": {
+        "slackEtlChannelAllowlist": { "type": "string" },
         "egressDiscovery": {
           "type": "object",
           "properties": {

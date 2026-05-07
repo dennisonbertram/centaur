@@ -21,6 +21,10 @@ features:
 
 oauth_config:
   scopes:
+    user:
+      - channels:history
+      - channels:read
+      - users:read
     bot:
       - app_mentions:read
       - channels:history
