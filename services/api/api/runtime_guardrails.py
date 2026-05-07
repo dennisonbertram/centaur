@@ -80,6 +80,34 @@ def runtime_credential_probe_keys(required_keys: list[str]) -> list[str]:
     return _unique_keys(required_provider_keys)
 
 
+async def fetch_runtime_secret_values(keys: list[str]) -> dict[str, str]:
+    """Fetch runtime secrets from the configured secret manager.
+
+    This is intentionally separate from the readiness report so callers that
+    need to materialize credentials into a sandbox can do so without exposing
+    the values in health/status payloads.
+    """
+
+    values: dict[str, str] = {}
+    if not keys:
+        return values
+
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for key in _unique_keys(keys):
+            url = f"{secrets_url()}/secrets/{quote(key, safe='')}"
+            response = await client.get(url, headers=secrets_headers())
+            if response.status_code != 200:
+                continue
+            try:
+                payload = response.json()
+            except Exception:
+                continue
+            value = payload.get("value")
+            if isinstance(value, str) and value:
+                values[key] = value
+    return values
+
+
 def _runtime_credential_cache_key(
     *,
     enabled: bool,

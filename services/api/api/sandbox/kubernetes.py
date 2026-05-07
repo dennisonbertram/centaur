@@ -25,8 +25,15 @@ from kubernetes_asyncio.stream.ws_client import (
 )
 import structlog
 
+from api.runtime_guardrails import fetch_runtime_secret_values, required_runtime_secret_keys
 from api.sandbox.base import SandboxBackend, SandboxSession
-from api.sandbox.config import build_harness_cmd, container_env, image, runtime_for_session
+from api.sandbox.config import (
+    agent_local_dev_enabled,
+    build_harness_cmd,
+    container_env,
+    image,
+    runtime_for_session,
+)
 
 log = structlog.get_logger()
 
@@ -113,6 +120,24 @@ def _firewall_ca_secret_name() -> str:
     if not value:
         raise ValueError("KUBERNETES_FIREWALL_CA_SECRET_NAME is required for kubernetes backend")
     return value
+
+
+async def _runtime_secret_values_for_sandbox() -> dict[str, str]:
+    if agent_local_dev_enabled():
+        return {}
+
+    required_keys = required_runtime_secret_keys()
+    if not required_keys:
+        return {}
+
+    values = await fetch_runtime_secret_values(required_keys)
+    missing = [key for key in required_keys if not values.get(key)]
+    if missing:
+        raise RuntimeError(
+            "runtime credentials unavailable for sandbox: "
+            f"missing_keys={','.join(missing)}"
+        )
+    return values
 
 
 def _resource_name(prefix: str, raw: str, *, max_length: int = 63) -> str:
@@ -374,7 +399,13 @@ class KubernetesExecutorBackend(SandboxBackend):
 
         pod_name = _resource_name("centaur-sandbox", thread_key)
         secret_name = _prompt_secret_name(pod_name)
-        env = container_env(thread_key, pod_name, resume_thread_id=resume_thread_id)
+        runtime_secret_values = await _runtime_secret_values_for_sandbox()
+        env = container_env(
+            thread_key,
+            pod_name,
+            resume_thread_id=resume_thread_id,
+            runtime_secret_values=runtime_secret_values,
+        )
         overlay_image = _overlay_image()
         if overlay_image:
             env.append(f"CENTAUR_OVERLAY_DIR={_SANDBOX_OVERLAY_DIR}")

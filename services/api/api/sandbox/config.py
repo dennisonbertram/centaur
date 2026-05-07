@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from urllib.parse import urlsplit
 
 from api.deps import mint_sandbox_token
@@ -14,6 +15,10 @@ def image() -> str:
 
 
 _HARNESS_STUB_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AMP_API_KEY", "GITHUB_TOKEN")
+
+
+def agent_local_dev_enabled() -> bool:
+    return os.getenv("AGENT_LOCAL_DEV", "").lower() in ("1", "true")
 
 
 def amp_mode() -> str:
@@ -50,9 +55,10 @@ def container_env(
     container_name: str,
     *,
     resume_thread_id: str | None = None,
+    runtime_secret_values: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Build env vars for sandbox pods."""
-    local_dev = os.getenv("AGENT_LOCAL_DEV", "").lower() in ("1", "true")
+    local_dev = agent_local_dev_enabled()
 
     api_key = mint_sandbox_token(thread_key, container_name)
     api_url = os.getenv("AGENT_API_URL", "http://api:8000")
@@ -75,6 +81,7 @@ def container_env(
             if real:
                 env.append(f"{key}={real}")
     else:
+        runtime_secret_values = runtime_secret_values or {}
         firewall_host = os.getenv("FIREWALL_HOST", "iron-proxy")
         no_proxy_hosts = ["localhost", "127.0.0.1", firewall_host]
         api_host = urlsplit(api_url).hostname
@@ -82,7 +89,7 @@ def container_env(
             no_proxy_hosts.append(api_host)
         no_proxy = ",".join(dict.fromkeys(no_proxy_hosts))
         for key in _HARNESS_STUB_KEYS:
-            env.append(f"{key}={key}")
+            env.append(f"{key}={runtime_secret_values.get(key) or key}")
         env.extend(
             [
                 f"FIREWALL_HOST={firewall_host}",
