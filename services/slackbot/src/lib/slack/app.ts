@@ -177,10 +177,10 @@ function threadIdFromEvent(event: SlackMessageEvent): string | null {
 
 function splitSlackThreadId(threadId: string): { channel: string; threadTs: string } {
   const parts = threadId.split(":");
-  if (parts.length !== 3 || parts[0] !== "slack" || !parts[1] || !parts[2]) {
+  if (parts[0] !== "slack" || !parts[1] || (parts.length !== 2 && parts.length !== 3)) {
     throw new Error(`Invalid Slack thread id: ${threadId}`);
   }
-  return { channel: parts[1], threadTs: parts[2] };
+  return { channel: parts[1], threadTs: parts[2] || "" };
 }
 
 function isIgnoredMessageSubtype(subtype?: string): boolean {
@@ -304,7 +304,7 @@ class WebClientSlackAdapter implements SlackAdapter {
     if (message.markdown.trim() || !message.files?.length) {
       const response = await this.call<{ ts?: string }>("chat.postMessage", {
         channel,
-        thread_ts: threadTs,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
         text: rendered.text || STREAM_BOOTSTRAP_TEXT,
         ...(rendered.blocks ? { blocks: rendered.blocks } : {}),
         unfurl_links: false,
@@ -315,7 +315,7 @@ class WebClientSlackAdapter implements SlackAdapter {
     for (const file of message.files || []) {
       await this.client.filesUploadV2({
         channel_id: channel,
-        thread_ts: threadTs,
+        ...(threadTs ? { thread_ts: threadTs } : {}),
         filename: file.filename,
         title: file.filename,
         file: Buffer.from(file.data),
