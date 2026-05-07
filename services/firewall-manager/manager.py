@@ -153,7 +153,12 @@ def _render_config(injection_map: dict[str, list[str]]) -> str:
 
     secret_transform = _build_secret_transform(injection_map)
     if secret_transform is not None:
-        transforms.append(secret_transform)
+        for index, transform in enumerate(transforms):
+            if (transform or {}).get("name") == "header_allowlist":
+                transforms.insert(index, secret_transform)
+                break
+        else:
+            transforms.append(secret_transform)
 
     cfg["transforms"] = transforms
     return yaml.safe_dump(cfg, sort_keys=False)
