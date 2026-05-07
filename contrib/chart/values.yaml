@@ -54,7 +54,6 @@ api:
   workflowWorkerEnabled: true
   warmPoolEnabled: false
   slackEtlEnabled: true
-  slackEtlChannelAllowlist: ""
   slackSyncIntervalSeconds: 14400
   victoriaMetricsPushEnabled: false
   runtimeCredentialGuardEnabled: true

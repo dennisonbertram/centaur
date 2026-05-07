@@ -470,10 +470,6 @@ spec:
             - name: SLACK_SYNC_INTERVAL_SECONDS
               value: {{ .Values.api.slackSyncIntervalSeconds | quote }}
 {{- end }}
-{{- if and (not (hasKey $apiExtraEnv "SLACK_ETL_CHANNEL_ALLOWLIST")) .Values.api.slackEtlChannelAllowlist }}
-            - name: SLACK_ETL_CHANNEL_ALLOWLIST
-              value: {{ .Values.api.slackEtlChannelAllowlist | quote }}
-{{- end }}
             - name: AGENT_IMAGE
               value: {{ printf "%s:%s" .Values.sandbox.image.repository .Values.sandbox.image.tag | quote }}
             - name: KUBERNETES_AGENT_IMAGE_PULL_POLICY

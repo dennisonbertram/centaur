@@ -5,7 +5,6 @@ from __future__ import annotations
 import datetime as dt
 import importlib.util
 import os
-import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,10 +17,10 @@ WORKFLOW_NAME = "slack_sync"
 
 DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_THREAD_LOOKBACK_DAYS = 3
-DEFAULT_PAGE_LIMIT = 200
+DEFAULT_CHANNEL_PAGE_LIMIT = 600
+DEFAULT_THREAD_REPLY_PAGE_LIMIT = 200
 DEFAULT_SYNC_INTERVAL_SECONDS = 14_400
 FALSE_ENV_VALUES = {"0", "false", "no", "off"}
-CHANNEL_ALLOWLIST_ENV = "SLACK_ETL_CHANNEL_ALLOWLIST"
 
 
 def _positive_int(value: int | str | None, default: int) -> int:
@@ -39,30 +38,6 @@ def _env_flag_enabled(name: str, default: bool = True) -> bool:
     if value is None:
         return default
     return value.strip().lower() not in FALSE_ENV_VALUES
-
-
-def _parse_channel_allowlist(value: str | None) -> set[str]:
-    """Parse channel IDs or names from comma or whitespace separated config."""
-    if value is None:
-        return set()
-    return {
-        item.lstrip("#").lower()
-        for item in re.split(r"[\s,]+", value.strip())
-        if item.strip()
-    }
-
-
-def _filter_allowed_channels(
-    channels: list[dict[str, Any]],
-    allowlist: set[str],
-) -> list[dict[str, Any]]:
-    """Return only channels matching an allow-list of Slack IDs or names."""
-    return [
-        channel
-        for channel in channels
-        if str(channel.get("id") or "").lower() in allowlist
-        or str(channel.get("name") or "").lower() in allowlist
-    ]
 
 
 SCHEDULE = {
@@ -92,7 +67,7 @@ class SlackSyncClient(Protocol):
         self,
         channel: str,
         state: dict[str, Any] | None = None,
-        limit: int = 200,
+        limit: int = DEFAULT_CHANNEL_PAGE_LIMIT,
         lookback_days: int = 30,
         oldest: str | int | float | None = None,
         latest: str | int | float | None = None,
@@ -103,7 +78,7 @@ class SlackSyncClient(Protocol):
         self,
         channel: str,
         thread_ts: str,
-        limit: int = 200,
+        limit: int = DEFAULT_THREAD_REPLY_PAGE_LIMIT,
         cursor: str | None = None,
         oldest: str | int | float | None = None,
         latest: str | int | float | None = None,
@@ -118,7 +93,8 @@ class Input:
 
     lookback_days: int | None = None
     thread_lookback_days: int | None = None
-    limit: int = DEFAULT_PAGE_LIMIT
+    limit: int = DEFAULT_CHANNEL_PAGE_LIMIT
+    thread_reply_limit: int = DEFAULT_THREAD_REPLY_PAGE_LIMIT
     oldest: str | None = None
     latest: str | None = None
     mode: str = "incremental"
@@ -489,24 +465,15 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         inp.thread_lookback_days or os.getenv("SLACK_SYNC_THREAD_LOOKBACK_DAYS"),
         DEFAULT_THREAD_LOOKBACK_DAYS,
     )
-    limit = _positive_int(inp.limit, DEFAULT_PAGE_LIMIT)
-    channel_allowlist = _parse_channel_allowlist(os.getenv(CHANNEL_ALLOWLIST_ENV))
-    if not channel_allowlist:
-        ctx.log("slack_sync_skipped_no_channel_allowlist")
-        return {
-            "status": "skipped",
-            "reason": "no_channel_allowlist",
-            "channels_skipped": [],
-        }
-
+    limit = _positive_int(inp.limit, DEFAULT_CHANNEL_PAGE_LIMIT)
+    thread_reply_limit = _positive_int(inp.thread_reply_limit, DEFAULT_THREAD_REPLY_PAGE_LIMIT)
     client = _client()
     access_mode = client._etl_access_mode()
-    channels = client._list_etl_channels(limit=10_000, force_refresh=True)
-    channels_to_sync = _filter_allowed_channels(channels, channel_allowlist)
+    channels_to_sync = client._list_etl_channels(limit=10_000, force_refresh=True)
     await _upsert_channels(ctx._pool, channels_to_sync)
 
     if not channels_to_sync:
-        reason = "no_matching_allowlisted_channels"
+        reason = "no_public_channels"
         ctx.log("slack_sync_skipped_no_public_channels", access_mode=access_mode, reason=reason)
         return {
             "status": "skipped",
@@ -527,7 +494,6 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         skipped=[],
         metadata={
             **inp.metadata,
-            "channel_allowlist": sorted(channel_allowlist),
             "slack_access_mode": access_mode,
             "users_upserted": users_upserted,
         },
@@ -585,7 +551,7 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
                     replies_page = client._get_etl_thread_replies_page(
                         channel_id,
                         thread_ts=thread_ts,
-                        limit=limit,
+                        limit=thread_reply_limit,
                         cursor=reply_cursor,
                         oldest=oldest,
                         latest=inp.latest,

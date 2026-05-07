@@ -141,8 +141,7 @@ class FakeSlackClient:
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _clear_slack_sync_tables(db_pool, monkeypatch):
-    monkeypatch.delenv("SLACK_ETL_CHANNEL_ALLOWLIST", raising=False)
+async def _clear_slack_sync_tables(db_pool):
     await db_pool.execute(
         "TRUNCATE TABLE slack_sync_checkpoints, slack_sync_messages, slack_sync_runs, "
         "slack_sync_users, slack_sync_channels CASCADE",
@@ -244,18 +243,6 @@ def test_schedule_respects_env_overrides(monkeypatch):
     assert reloaded.SCHEDULE["interval_seconds"] == 900
 
 
-def test_channel_allowlist_parses_names_and_ids():
-    from workflows import slack_sync
-
-    assert slack_sync._parse_channel_allowlist(None) == set()
-    assert slack_sync._parse_channel_allowlist(" #Team-Eng, C123  random ") == {
-        "team-eng",
-        "c123",
-        "random",
-    }
-    assert slack_sync._parse_channel_allowlist(" ,  ") == set()
-
-
 @pytest.mark.asyncio
 async def test_slack_etl_disabled_noops_without_run_row(db_pool, monkeypatch):
     from workflows import slack_sync
@@ -284,7 +271,7 @@ async def test_slack_etl_disabled_noops_without_run_row(db_pool, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_no_channel_allowlist_noops_without_run_row(db_pool):
+async def test_no_public_channels_noops_without_run_row(db_pool):
     from workflows import slack_sync
 
     await db_pool.execute(
@@ -298,49 +285,34 @@ async def test_no_channel_allowlist_noops_without_run_row(db_pool):
         result = await slack_sync.handler(slack_sync.Input(), ctx)
 
     assert result["status"] == "skipped"
-    assert result["reason"] == "no_channel_allowlist"
-    assert fake.list_etl_channels_calls == 0
+    assert result["reason"] == "no_public_channels"
+    assert fake.list_etl_channels_calls == 1
     assert fake.list_bot_channels_calls == 0
     assert await db_pool.fetchval("SELECT COUNT(*) FROM slack_sync_runs") == 0
     assert await db_pool.fetchval(
         "SELECT is_member FROM slack_sync_channels WHERE channel_id = 'C_OLD'",
-    ) is True
+    ) is False
 
 
 @pytest.mark.asyncio
-async def test_empty_channel_allowlist_noops_without_run_row(db_pool, monkeypatch):
+async def test_syncs_all_public_channels_by_default(db_pool):
     from workflows import slack_sync
 
-    fake = FakeSlackClient(channels=[_public_channel()])
+    fake = FakeSlackClient(channels=[_public_channel(), _other_public_channel(), _private_channel()])
     ctx = FakeCtx(db_pool)
-    monkeypatch.setenv("SLACK_ETL_CHANNEL_ALLOWLIST", " , ")
-
-    with patch.object(slack_sync, "_client", return_value=fake):
-        result = await slack_sync.handler(slack_sync.Input(), ctx)
-
-    assert result["status"] == "skipped"
-    assert result["reason"] == "no_channel_allowlist"
-    assert fake.list_etl_channels_calls == 0
-    assert fake.list_etl_users_calls == 0
-    assert await db_pool.fetchval("SELECT COUNT(*) FROM slack_sync_runs") == 0
-
-
-@pytest.mark.asyncio
-async def test_channel_allowlist_filters_public_channels(db_pool, monkeypatch):
-    from workflows import slack_sync
-
-    fake = FakeSlackClient(channels=[_public_channel(), _other_public_channel()])
-    ctx = FakeCtx(db_pool)
-    monkeypatch.setenv("SLACK_ETL_CHANNEL_ALLOWLIST", "#ai-agent")
 
     with patch.object(slack_sync, "_client", return_value=fake):
         result = await slack_sync.handler(slack_sync.Input(), ctx)
 
     assert result["status"] == "completed"
-    assert result["channels_synced"] == 1
-    assert fake.history_calls[0]["channel"] == "C_PUBLIC"
+    assert result["channels_synced"] == 2
+    assert [call["channel"] for call in fake.history_calls] == ["C_PUBLIC", "C_OTHER"]
+    assert [call["limit"] for call in fake.history_calls] == [600, 600]
     assert await db_pool.fetchval(
         "SELECT COUNT(*) FROM slack_sync_channels WHERE channel_id = 'C_OTHER'",
+    ) == 1
+    assert await db_pool.fetchval(
+        "SELECT COUNT(*) FROM slack_sync_channels WHERE channel_id = 'G_PRIVATE'",
     ) == 0
 
     run = await db_pool.fetchrow(
@@ -348,17 +320,16 @@ async def test_channel_allowlist_filters_public_channels(db_pool, monkeypatch):
         result["run_id"],
     )
     assert run is not None
-    assert json.loads(run["channels_requested"]) == [{
-        "channel_id": "C_PUBLIC",
-        "channel_name": "ai-agent",
-    }]
-    assert json.loads(run["metadata"])["channel_allowlist"] == ["ai-agent"]
+    assert json.loads(run["channels_requested"]) == [
+        {"channel_id": "C_PUBLIC", "channel_name": "ai-agent"},
+        {"channel_id": "C_OTHER", "channel_name": "other-channel"},
+    ]
+    assert json.loads(run["metadata"])["slack_access_mode"] == "user_token"
 
 
 @pytest.mark.asyncio
 async def test_syncs_user_token_public_channels(
     db_pool,
-    monkeypatch,
 ):
     from workflows import slack_sync
 
@@ -375,7 +346,6 @@ async def test_syncs_user_token_public_channels(
         replies={"3000000.000000": [_root_message(), _reply_message()]},
     )
     ctx = FakeCtx(db_pool)
-    monkeypatch.setenv("SLACK_ETL_CHANNEL_ALLOWLIST", "ai-agent")
 
     with patch.object(slack_sync, "_client", return_value=fake):
         result = await slack_sync.handler(slack_sync.Input(), ctx)
@@ -436,7 +406,7 @@ async def test_syncs_user_token_public_channels(
 
 
 @pytest.mark.asyncio
-async def test_syncs_all_thread_reply_pages_before_advancing_checkpoint(db_pool, monkeypatch):
+async def test_syncs_all_thread_reply_pages_before_advancing_checkpoint(db_pool):
     from workflows import slack_sync
 
     second_reply = {
@@ -463,7 +433,6 @@ async def test_syncs_all_thread_reply_pages_before_advancing_checkpoint(db_pool,
         },
     )
     ctx = FakeCtx(db_pool)
-    monkeypatch.setenv("SLACK_ETL_CHANNEL_ALLOWLIST", "ai-agent")
 
     with patch.object(slack_sync, "_client", return_value=fake):
         result = await slack_sync.handler(slack_sync.Input(), ctx)
@@ -471,6 +440,7 @@ async def test_syncs_all_thread_reply_pages_before_advancing_checkpoint(db_pool,
     assert result["status"] == "completed"
     assert result["replies_upserted"] == 2
     assert [call["cursor"] for call in fake.reply_calls] == [None, "cursor-2"]
+    assert [call["limit"] for call in fake.reply_calls] == [200, 200]
     assert await db_pool.fetchval(
         "SELECT COUNT(*) FROM slack_sync_messages WHERE parent_message_ts = '3000000.000000'",
     ) == 2
@@ -485,7 +455,7 @@ async def test_syncs_all_thread_reply_pages_before_advancing_checkpoint(db_pool,
 
 
 @pytest.mark.asyncio
-async def test_incremental_oldest_uses_thread_lookback(db_pool, monkeypatch):
+async def test_incremental_oldest_uses_thread_lookback(db_pool):
     from workflows import slack_sync
 
     await db_pool.execute(
@@ -498,7 +468,6 @@ async def test_incremental_oldest_uses_thread_lookback(db_pool, monkeypatch):
     )
     fake = FakeSlackClient(channels=[_public_channel()], messages=[], replies={})
     ctx = FakeCtx(db_pool)
-    monkeypatch.setenv("SLACK_ETL_CHANNEL_ALLOWLIST", "ai-agent")
 
     with patch.object(slack_sync, "_client", return_value=fake):
         await slack_sync.handler(slack_sync.Input(), ctx)
@@ -507,12 +476,11 @@ async def test_incremental_oldest_uses_thread_lookback(db_pool, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_failed_write_does_not_advance_watermark(db_pool, monkeypatch):
+async def test_failed_write_does_not_advance_watermark(db_pool):
     from workflows import slack_sync
 
     fake = FakeSlackClient(channels=[_public_channel()], messages=[_root_message()])
     ctx = FakeCtx(db_pool)
-    monkeypatch.setenv("SLACK_ETL_CHANNEL_ALLOWLIST", "ai-agent")
 
     with (
         patch.object(slack_sync, "_client", return_value=fake),
