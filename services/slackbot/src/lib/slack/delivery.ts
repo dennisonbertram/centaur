@@ -194,3 +194,61 @@ export function renderTerminalResultCopy(opts: {
 
   return resultText;
 }
+
+export function isRuntimeError(opts: {
+  status?: unknown;
+  terminalReason?: unknown;
+  resultText?: unknown;
+  errorText?: unknown;
+  isError?: unknown;
+}): boolean {
+  const status = normalizedTerminalString(opts.status);
+  const terminalReason = normalizedTerminalString(opts.terminalReason);
+  const resultText = normalizedTerminalString(opts.resultText);
+  const errorText = normalizedTerminalString(opts.errorText);
+  const rawValues = [terminalReason, resultText, errorText]
+    .map((value) => value.toLowerCase())
+    .filter(Boolean);
+  const rawBlob = rawValues.join("\n");
+
+  if (isCancellationTerminalState(status, terminalReason, resultText, errorText)) return false;
+  if (terminalReason === "silence_deadline_exceeded"
+    || rawBlob.includes("execution made no progress before silence deadline")
+    || rawBlob.includes("silence deadline")) return false;
+
+  return (
+    status === "failed_permanent"
+    || Boolean(opts.isError)
+    || rawValues.includes("harness_error")
+    || rawValues.includes("amp_reconnect_timeout")
+    || rawValues.includes("execution_error")
+    || rawValues.includes("stream_ended_without_turn_done")
+    || rawValues.includes("assignment_missing")
+    || rawValues.includes("hard_deadline_exceeded")
+    || rawBlob.includes("connection error")
+  );
+}
+
+export function buildRuntimeErrorDetail(opts: {
+  threadKey?: string;
+  executionId?: string;
+  status?: string;
+  terminalReason?: string;
+  errorText?: string;
+  resultText?: string;
+}): string {
+  const lines: string[] = [];
+  if (opts.executionId) lines.push(`*Execution:* \`${opts.executionId}\``);
+  if (opts.threadKey) lines.push(`*Thread:* \`${opts.threadKey}\``);
+  if (opts.status) lines.push(`*Status:* \`${opts.status}\``);
+  if (opts.terminalReason) lines.push(`*Terminal reason:* \`${opts.terminalReason}\``);
+  if (opts.errorText) {
+    const redacted = redactErrorDetail(opts.errorText);
+    lines.push(`*Error:*\n${codeFence(redacted)}`);
+  }
+  if (opts.resultText) {
+    const redacted = redactErrorDetail(opts.resultText);
+    lines.push(`*Result text:*\n${codeFence(truncate(redacted, 1000))}`);
+  }
+  return lines.join("\n");
+}

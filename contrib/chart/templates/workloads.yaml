@@ -649,6 +649,10 @@ spec:
               value: {{ printf "localhost,127.0.0.1,%s,%s,%s,%s,%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "pgbouncer")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.componentName" (dict "root" . "component" "secrets")) (include "centaur.firewallNoProxyHosts" .) | quote }}
             - name: no_proxy
               value: {{ printf "localhost,127.0.0.1,%s,%s,%s,%s,%s,centaur-egress.svc.cluster.local,.centaur-egress.svc.cluster.local" (include "centaur.componentName" (dict "root" . "component" "postgres")) (include "centaur.componentName" (dict "root" . "component" "pgbouncer")) (include "centaur.componentName" (dict "root" . "component" "api")) (include "centaur.componentName" (dict "root" . "component" "secrets")) (include "centaur.firewallNoProxyHosts" .) | quote }}
+{{- if .Values.slackbot.runtimeErrorAlertChannel }}
+            - name: RUNTIME_ERROR_ALERT_CHANNEL
+              value: {{ .Values.slackbot.runtimeErrorAlertChannel | quote }}
+{{- end }}
 {{- range $name, $value := .Values.slackbot.extraEnv }}
             - name: {{ $name }}
               value: {{ $value | quote }}

@@ -127,6 +127,7 @@ slackbot:
     repository: centaur-slackbot
     tag: latest
     pullPolicy: IfNotPresent
+  runtimeErrorAlertChannel: ""
   extraEnv: {}
   resources: {}
 

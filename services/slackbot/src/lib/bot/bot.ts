@@ -13,8 +13,10 @@ import {
 } from "@/lib/slack/markdown";
 import { classifySlackError } from "@/lib/slack/errors";
 import {
+  buildRuntimeErrorDetail,
   flattenMarkdownTables,
   isCancellationTerminalState,
+  isRuntimeError,
   isSlackInvalidBlocksError,
   normalizedTerminalString,
   renderTerminalResultCopy,
@@ -458,6 +460,7 @@ export class SlackBot {
     readonly client: CentaurClient,
     private viewerUrl = "",
     private slack?: SlackAdapter,
+    private runtimeErrorChannelId = "",
   ) {
     this.chartRenderer = createChartRenderer(client);
   }
@@ -471,6 +474,7 @@ export class SlackBot {
       }),
       process.env.THREAD_VIEWER_URL || "",
       slack,
+      process.env.RUNTIME_ERROR_ALERT_CHANNEL || "",
     );
   }
 
@@ -1139,11 +1143,27 @@ export class SlackBot {
               isError: payload.is_error,
             });
             if (rendered) tracker.resultText = rendered;
-            terminal = true;
-            break;
-          }
+            if (isRuntimeError({ resultText: result, errorText, isError: payload.is_error })) {
+              this.notifyRuntimeErrorChannel({
+                threadKey,
+                executionId,
+                status: "turn_error",
+                terminalReason: "",
+                errorText,
+                resultText: result,
+              }).catch((err) => {
+                log.warn("runtime_error_alert_failed", {
+                  thread_key: threadKey,
+                  execution_id: executionId,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              });
+            }
+              terminal = true;
+              break;
+            }
 
-          if (eventType === "execution.state") {
+            if (eventType === "execution.state") {
             const status = String(payload.status || "");
             tracker.agentThreadId = agentThreadIdFromRecord(payload) || tracker.agentThreadId;
             tracker.observeRepoContext(normalizeRepoContext(payload.repo_context));
@@ -1155,6 +1175,22 @@ export class SlackBot {
                 errorText: payload.error_text,
               });
               if (rendered) tracker.resultText = rendered;
+              if (isRuntimeError({ status, terminalReason: payload.terminal_reason, errorText: payload.error_text, isError: payload.is_error })) {
+                this.notifyRuntimeErrorChannel({
+                  threadKey,
+                  executionId,
+                  status,
+                  terminalReason: typeof payload.terminal_reason === "string" ? payload.terminal_reason : "",
+                  errorText: typeof payload.error_text === "string" ? payload.error_text : "",
+                  resultText: typeof payload.result_text === "string" ? payload.result_text : "",
+                }).catch((err) => {
+                  log.warn("runtime_error_alert_failed", {
+                    thread_key: threadKey,
+                    execution_id: executionId,
+                    error: err instanceof Error ? err.message : String(err),
+                  });
+                });
+              }
               terminal = true;
               break;
             }
@@ -1354,6 +1390,29 @@ export class SlackBot {
     }
 
     const { markdown, files } = await this.renderFinalDeliveryMarkdown(threadKey, finalPayload);
+
+    // Notify runtime error alert channel (fire-and-forget)
+    const fpStatus = typeof finalPayload.status === "string" ? finalPayload.status : "";
+    const fpTerminalReason = typeof finalPayload.terminal_reason === "string" ? finalPayload.terminal_reason : "";
+    const fpErrorText = typeof finalPayload.error_text === "string" ? finalPayload.error_text : "";
+    const fpResultText = typeof finalPayload.result_text === "string" ? finalPayload.result_text : "";
+    if (isRuntimeError({ status: fpStatus, terminalReason: fpTerminalReason, errorText: fpErrorText })) {
+      this.notifyRuntimeErrorChannel({
+        threadKey,
+        executionId,
+        status: fpStatus,
+        terminalReason: fpTerminalReason,
+        errorText: fpErrorText,
+        resultText: fpResultText,
+      }).catch((err) => {
+        log.warn("runtime_error_alert_failed", {
+          thread_key: threadKey,
+          execution_id: executionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+
     try {
       await this.postSlackMarkdown(threadKey, delivery, markdown, files);
       await this.ackFinalDelivery(executionId, threadKey);
@@ -1396,6 +1455,37 @@ export class SlackBot {
       await this.failFinalDelivery(executionId, threadKey, classified.message, {
         nonRetryable: !classified.retryable,
         errorClass: classified.errorClass,
+      });
+    }
+  }
+
+  private async notifyRuntimeErrorChannel(opts: {
+    threadKey: string;
+    executionId: string;
+    status: string;
+    terminalReason: string;
+    errorText: string;
+    resultText: string;
+  }): Promise<void> {
+    if (!this.runtimeErrorChannelId || !this.slack) return;
+    try {
+      const summary = `⚠️ Agent hit a runtime issue before finishing\n*Thread:* \`${opts.threadKey}\`  |  *Execution:* \`${opts.executionId}\``;
+      const { id: alertTs } = await this.slack.postMessage(
+        `slack:${this.runtimeErrorChannelId}`,
+        { markdown: summary },
+      );
+      const detail = buildRuntimeErrorDetail(opts);
+      if (detail) {
+        await this.slack.postMessage(
+          `slack:${this.runtimeErrorChannelId}:${alertTs}`,
+          { markdown: detail },
+        );
+      }
+    } catch (err) {
+      log.warn("runtime_error_channel_post_failed", {
+        thread_key: opts.threadKey,
+        execution_id: opts.executionId,
+        error: err instanceof Error ? err.message : String(err),
       });
     }
   }

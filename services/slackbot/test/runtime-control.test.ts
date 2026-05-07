@@ -908,4 +908,97 @@ describe("SlackBot runtime control", () => {
     );
     expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-silent", expect.any(String));
   });
+
+  it("posts runtime error alert to the configured error channel with detail in thread", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-err",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: {
+            status: "failed_permanent",
+            terminal_reason: "harness_error",
+            error_text: "sandbox crashed with OOM",
+            result_text: "",
+          },
+        },
+      ],
+    }));
+    const postMessage = vi.fn(async () => ({ id: "alert-msg-ts" }));
+    const slack = createSlackAdapter({ postMessage });
+    const bot = new SlackBot(client as any, "", slack, "C_ERROR_CHANNEL");
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    // Should have posted to the original thread + alert channel summary + alert channel detail
+    expect(postMessage).toHaveBeenCalledWith(
+      "slack:C_ERROR_CHANNEL",
+      expect.objectContaining({
+        markdown: expect.stringContaining("Agent hit a runtime issue"),
+      }),
+    );
+    expect(postMessage).toHaveBeenCalledWith(
+      "slack:C_ERROR_CHANNEL:alert-msg-ts",
+      expect.objectContaining({
+        markdown: expect.stringContaining("harness_error"),
+      }),
+    );
+  });
+
+  it("does not post to error channel for non-error final deliveries", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-ok",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: {
+            status: "completed",
+            result_text: "all good",
+          },
+        },
+      ],
+    }));
+    const postMessage = vi.fn(async () => ({ id: "msg-ok" }));
+    const slack = createSlackAdapter({ postMessage });
+    const bot = new SlackBot(client as any, "", slack, "C_ERROR_CHANNEL");
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    // Should post to the original thread only, not the error channel
+    const errorChannelCalls = postMessage.mock.calls.filter(
+      (call: any) => typeof call[0] === "string" && call[0].includes("C_ERROR_CHANNEL"),
+    );
+    expect(errorChannelCalls).toHaveLength(0);
+  });
+
+  it("does not post to error channel when no channel is configured", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-err-no-channel",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: {
+            status: "failed_permanent",
+            terminal_reason: "harness_error",
+            error_text: "oops",
+          },
+        },
+      ],
+    }));
+    const postMessage = vi.fn(async () => ({ id: "msg-1" }));
+    const slack = createSlackAdapter({ postMessage });
+    const bot = new SlackBot(client as any, "", slack);
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    // Should only post the error to the original thread, not an alert channel
+    const allCalls = postMessage.mock.calls.map((c: any) => c[0]);
+    expect(allCalls.every((id: string) => id.includes(normalizedThreadKey))).toBe(true);
+  });
 });
