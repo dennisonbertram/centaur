@@ -94,7 +94,7 @@ async def _push_injection_map() -> None:
                 f"{firewall_url}/injection-map",
                 json=injection_map,
                 headers=control_headers(),
-                timeout=5,
+                timeout=30,
             )
             resp.raise_for_status()
         log.info(

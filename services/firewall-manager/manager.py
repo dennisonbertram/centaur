@@ -182,7 +182,7 @@ def _atomic_write(path: Path, content: str) -> None:
 
 def _trigger_iron_proxy_reload() -> None:
     headers = {"Authorization": f"Bearer {IRON_MANAGEMENT_API_KEY}"} if IRON_MANAGEMENT_API_KEY else {}
-    with httpx.Client(timeout=5.0) as client:
+    with httpx.Client(timeout=30.0) as client:
         resp = client.post(f"{IRON_PROXY_MANAGEMENT_URL}/v1/reload", headers=headers)
         resp.raise_for_status()
 
