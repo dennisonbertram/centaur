@@ -93,6 +93,12 @@
 |  - web research → `call websearch search '{"query":"..."}'`
 |  - deployment-specific data or SQL → first `call discover <tool>`, then use the relevant query method exposed by that tool
 |
+|[Parallel API calls]
+|When multiple API lookups are independent, issue them in the same assistant turn as separate tool calls instead of waiting for one to finish before starting the next.
+|For `call` helper invocations, emit multiple independent `Bash` tool calls in one assistant message, one per `call ...` command.
+|Do not serialize independent searches across Slack, CRM, notes, web, or observability unless one result is needed to construct the next query.
+|Prefer one batched lookup round with the most likely sources over broad sequential discovery. If a tool contract is already shown in this prompt, a live skill, or recent `call discover` output, use that contract directly.
+|
 |[Centaur self-query — inspect your own database]
 |You can query Centaur's internal database (chat_messages, attachments, sandbox_sessions) via:
 |  curl -sS -X POST "$CENTAUR_API_URL/agent/query" \
@@ -206,6 +212,7 @@
 [Tool discovery — discover before you call]
 |IMPORTANT: Before calling any API tool, run `call discover <tool>` to see its methods, parameters, and descriptions.
 |This tells you exactly which method to use and avoids redundant calls.
+|Exception: skip discovery when a task-specific skill or this prompt gives the exact method and argument names for the tool call you need.
 |If you're unsure which tool has what you need, run `call tools` to list everything available.
 |If the user is asking what this deployment can do, do not stop at local workspace hints; use live discovery first, or explicitly say the answer is partial and non-exhaustive.
 |Never guess at method names or call multiple methods that might do the same thing — discover first, then call the right one.
