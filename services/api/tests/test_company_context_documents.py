@@ -170,6 +170,61 @@ async def test_projects_channel_day_and_thread_documents(db_pool):
 
 
 @pytest.mark.asyncio
+async def test_projects_documents_without_user_rows(db_pool):
+    from workflows import company_context_documents
+
+    await db_pool.execute(
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_member) "
+        "VALUES ('C_PUBLIC', 'team-eng', TRUE)",
+    )
+    base = dt.datetime(2026, 5, 6, 12, 0, tzinfo=dt.timezone.utc)
+    updated = dt.datetime(2026, 5, 7, 10, 0, tzinfo=dt.timezone.utc)
+    thread_ts = "1770000000.000000"
+    messages = [
+        ("1770000000.000000", "UMISSING1", "Root mentions <@UMISSING2>", None, 4),
+        ("1770000001.000000", "UMISSING2", "Reply one", thread_ts, 0),
+        ("1770000002.000000", "UMISSING3", "Reply two", thread_ts, 0),
+        ("1770000003.000000", "UMISSING1", "Reply three", thread_ts, 0),
+        ("1770000004.000000", "UMISSING2", "Reply four", thread_ts, 0),
+    ]
+    for offset, (message_ts, user_id, text, parent_ts, reply_count) in enumerate(messages):
+        await _insert_message(
+            db_pool,
+            message_ts=message_ts,
+            occurred_at=base + dt.timedelta(minutes=offset),
+            updated_at=updated + dt.timedelta(seconds=offset),
+            user_id=user_id,
+            text=text,
+            thread_ts=thread_ts,
+            parent_message_ts=parent_ts,
+            reply_count=reply_count,
+        )
+
+    result = await company_context_documents.handler(
+        company_context_documents.Input(watermark_overlap_seconds=0),
+        FakeCtx(db_pool),
+    )
+
+    assert result["status"] == "completed"
+    assert result["documents_upserted"] == 2
+
+    rows = await db_pool.fetch(
+        "SELECT source_type, title, body, author_name, metadata "
+        "FROM company_context_documents ORDER BY source_type",
+    )
+    assert [row["source_type"] for row in rows] == ["slack_channel_day", "slack_thread"]
+    assert "@UMISSING2" in rows[0]["body"]
+    assert "UMISSING1 - 2026-05-06 12:00:00 UTC - 4 replies" in rows[0]["body"]
+    assert rows[1]["title"] == "Root mentions @UMISSING2"
+    assert rows[1]["author_name"] == "UMISSING1"
+    assert json.loads(rows[1]["metadata"])["participants"] == [
+        "UMISSING1",
+        "UMISSING2",
+        "UMISSING3",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_uses_previous_successful_watermark_for_incremental_projection(db_pool):
     from workflows import company_context_documents
 
