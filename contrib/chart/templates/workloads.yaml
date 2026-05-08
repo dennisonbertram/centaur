@@ -177,6 +177,10 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ include "centaur.secretEnvName" . }}
+{{- if and (eq .Values.ironProxy.manager.secretSource "onepassword") .Values.secrets.bootstrapSecretName }}
+            - secretRef:
+                name: {{ .Values.secrets.bootstrapSecretName | quote }}
+{{- end }}
           ports:
             - containerPort: {{ .Values.ironProxy.service.proxyPort }}
               name: proxy
@@ -233,6 +237,8 @@ spec:
               value: {{ .Values.ironProxy.manager.secretSource | quote }}
             - name: FIREWALL_MANAGER_SECRET_TTL
               value: {{ .Values.ironProxy.manager.secretTtl | quote }}
+            - name: FIREWALL_MANAGER_INJECTION_MAP_URL
+              value: {{ printf "http://%s:8000/internal/injection-map" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
           envFrom:
             - secretRef:
                 name: {{ include "centaur.secretEnvName" . }}
