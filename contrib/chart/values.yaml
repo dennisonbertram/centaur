@@ -94,6 +94,7 @@ sandbox:
     pullPolicy: IfNotPresent
   runtimeClassName: ""
   reposPath: ""
+  extraEnv: {}
   resources:
     limits: {}
     requests:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
 from urllib.parse import urlsplit
@@ -105,6 +106,11 @@ def container_env(
                 "GIT_SSL_CAINFO=/firewall-certs/ca-cert.pem",
             ]
         )
+
+    raw_extra = (os.getenv("KUBERNETES_SANDBOX_EXTRA_ENV") or "").strip()
+    if raw_extra:
+        for item in json.loads(raw_extra):
+            env.append(f"{item['name']}={item['value']}")
 
     return env
 

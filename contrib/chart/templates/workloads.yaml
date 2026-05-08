@@ -506,6 +506,14 @@ spec:
             - name: REPOS_PATH
               value: {{ $reposPath | quote }}
 {{- end }}
+{{- with .Values.sandbox.extraEnv }}
+{{- $envList := list }}
+{{- range $k, $v := . }}
+{{- $envList = append $envList (dict "name" $k "value" ($v | toString)) }}
+{{- end }}
+            - name: KUBERNETES_SANDBOX_EXTRA_ENV
+              value: {{ $envList | toJson | quote }}
+{{- end }}
 {{- if .Values.global.imagePullSecrets }}
             - name: KUBERNETES_SANDBOX_IMAGE_PULL_SECRETS
               value: "{{- range $index, $secret := .Values.global.imagePullSecrets }}{{- if $index }},{{ end -}}{{ $secret.name }}{{- end }}"
