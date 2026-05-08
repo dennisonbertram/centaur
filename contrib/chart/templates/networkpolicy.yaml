@@ -84,6 +84,9 @@ spec:
         - podSelector:
             matchLabels:
 {{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              centaur.ai/iron-proxy: "true"
       ports:
         - protocol: TCP
           port: 8100
@@ -160,6 +163,9 @@ spec:
         - podSelector:
             matchLabels:
               centaur.ai/managed: "true"
+        - podSelector:
+            matchLabels:
+              centaur.ai/iron-proxy: "true"
 {{- range .Values.networkPolicy.apiIngressSourceNamespaces }}
         - namespaceSelector:
             matchLabels:
@@ -284,9 +290,6 @@ spec:
             matchLabels:
 {{ include "centaur.componentSelectorLabels" (dict "root" . "component" "slackbot") | nindent 14 }}
 {{- end }}
-        - podSelector:
-            matchLabels:
-              centaur.ai/managed: "true"
 {{- range .Values.runnerAccess.allowedCidrs }}
         - ipBlock:
             cidr: {{ . | quote }}
@@ -352,11 +355,4 @@ spec:
       ports:
         - protocol: TCP
           port: 8000
-    - to:
-        - podSelector:
-            matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 14 }}
-      ports:
-        - protocol: TCP
-          port: {{ .Values.ironProxy.service.proxyPort }}
 {{- end }}

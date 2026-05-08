@@ -89,6 +89,15 @@
     "sandbox": {
       "type": "object",
       "properties": {
+        "perWorkloadProxy": {
+          "type": "object",
+          "properties": {
+            "pollIntervalSeconds": { "type": "integer" },
+            "pollJitterSeconds": { "type": "integer" },
+            "startupBackoffInitialSeconds": { "type": "number" },
+            "startupBackoffMaxSeconds": { "type": "number" }
+          }
+        },
         "runtimeClassName": { "type": "string" },
         "reposPath": { "type": "string" },
         "resources": { "type": "object" }

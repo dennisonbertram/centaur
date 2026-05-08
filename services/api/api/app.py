@@ -9,7 +9,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
-import httpx
 import structlog
 import structlog.contextvars
 from fastapi import FastAPI
@@ -18,7 +17,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.api_keys import bootstrap_service_api_keys
 from api.config import settings
 from api.db import close_pool, create_pool
-from api.firewall import control_headers, control_url
 from api.logging_config import configure_structlog
 from api.vm_metrics import (
     HTTP_REQUESTS_IN_PROGRESS,
@@ -73,36 +71,8 @@ async def _watch_tools(pm: ToolManager) -> None:
         try:
             result = await run_in_threadpool(pm.reload)
             log.info("tools_auto_reloaded", **result)
-            await _push_injection_map()
         except Exception as e:
             log.error("tool_auto_reload_failed", error=str(e))
-
-
-async def _push_injection_map() -> None:
-    """Push the tool injection map to the firewall on startup.
-
-    The API depends on the firewall (service_healthy), so the firewall is
-    guaranteed to be up.  This eliminates the race condition where the
-    firewall polls the API for the map before the API is ready.
-    """
-    firewall_url = control_url()
-    injection_map = tool_manager.build_injection_map()
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{firewall_url}/injection-map",
-                json=injection_map,
-                headers=control_headers(),
-                timeout=30,
-            )
-            resp.raise_for_status()
-        log.info(
-            "injection_map_pushed",
-            hosts=len(injection_map),
-            keys=sum(len(v) for v in injection_map.values()),
-        )
-    except Exception:
-        log.warning("injection_map_push_failed", exc_info=True)
 
 
 async def _watch_workflows() -> None:
@@ -168,7 +138,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if workflow_worker_enabled:
         await start_workflow_worker(app.state.db_pool)
     start_push_loop(app.state.db_pool)
-    await _push_injection_map()
     watcher_task = asyncio.create_task(_watch_tools(tool_manager))
     wf_watcher_task = asyncio.create_task(_watch_workflows())
     reconcile_task = (

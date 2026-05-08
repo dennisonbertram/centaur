@@ -19,8 +19,10 @@ class FakeCoreApi:
     def __init__(self) -> None:
         self.deleted_secrets: list[tuple[str, str]] = []
         self.deleted_pods: list[tuple[str, str, int]] = []
+        self.deleted_services: list[tuple[str, str]] = []
         self.created_secrets: list[tuple[str, dict]] = []
         self.created_pods: list[tuple[str, dict]] = []
+        self.created_services: list[tuple[str, dict]] = []
         self.pods_to_read: list[SimpleNamespace] = []
         self.pod_list_items: list[SimpleNamespace] = []
 
@@ -40,6 +42,12 @@ class FakeCoreApi:
 
     async def create_namespaced_pod(self, namespace: str, body: dict) -> None:
         self.created_pods.append((namespace, body))
+
+    async def delete_namespaced_service(self, name: str, namespace: str) -> None:
+        self.deleted_services.append((namespace, name))
+
+    async def create_namespaced_service(self, namespace: str, body: dict) -> None:
+        self.created_services.append((namespace, body))
 
     async def read_namespaced_pod(self, name: str, namespace: str) -> SimpleNamespace:  # noqa: ARG002
         if self.pods_to_read:
@@ -82,15 +90,37 @@ class FakeWsCoreApi:
         self.websocket = websocket
         self.exec_calls: list[tuple[str, str, dict]] = []
 
-    async def connect_get_namespaced_pod_exec(self, name: str, namespace: str, **kwargs):
+    async def connect_get_namespaced_pod_exec(
+        self, name: str, namespace: str, **kwargs
+    ):
         self.exec_calls.append((name, namespace, kwargs))
         return FakeWebSocketContext(self.websocket)
+
+
+class FakeNetworkingApi:
+    def __init__(self) -> None:
+        self.deleted_network_policies: list[tuple[str, str]] = []
+        self.created_network_policies: list[tuple[str, dict]] = []
+
+    async def delete_namespaced_network_policy(self, name: str, namespace: str) -> None:
+        self.deleted_network_policies.append((namespace, name))
+
+    async def create_namespaced_network_policy(
+        self, namespace: str, body: dict
+    ) -> None:
+        self.created_network_policies.append((namespace, body))
 
 
 class FakeWsApiClient:
     @staticmethod
     def parse_error_data(error_data: str) -> int:
         return 17 if error_data else 0
+
+
+@pytest.fixture(autouse=True)
+def _default_per_sandbox_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
+    monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
 
 
 def test_pod_resources_uses_default_limits_when_unset(
@@ -138,6 +168,24 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
     assert env_map["no_proxy"] == env_map["NO_PROXY"]
 
 
+def test_container_env_materializes_runtime_secret_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENT_LOCAL_DEV", raising=False)
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
+
+    env = sandbox_container_env(
+        "thread-key",
+        "sandbox-id",
+        runtime_secret_values={"AMP_API_KEY": "real-amp-key"},
+    )
+    env_map = dict(item.split("=", 1) for item in env)
+
+    assert env_map["AMP_API_KEY"] == "real-amp-key"
+    assert env_map["OPENAI_API_KEY"] == "OPENAI_API_KEY"
+
+
 def test_prompt_bundle_includes_live_capability_inventory_guidance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -162,24 +210,36 @@ def test_prompt_bundle_includes_named_skill_resolution_guidance(
     prompt = _prompt_bundle(None)
 
     assert "[Named skill resolution]" in prompt
-    assert "resolve that request against local skill definitions before doing broad semantic matching" in prompt
-    assert "Treat \"exists locally\" and \"is live in this deployment\" as separate questions" in prompt
+    assert (
+        "resolve that request against local skill definitions before doing broad semantic matching"
+        in prompt
+    )
+    assert (
+        'Treat "exists locally" and "is live in this deployment" as separate questions'
+        in prompt
+    )
     assert "ask one targeted clarification instead of guessing" in prompt
 
 
 @pytest.mark.asyncio
-async def test_ensure_clients_disables_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_ensure_clients_disables_proxy_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakeApiClient:
         def __init__(self, configuration=None, heartbeat=None) -> None:  # noqa: ANN001
             self.configuration = configuration
             self.heartbeat = heartbeat
-            self.rest_client = SimpleNamespace(pool_manager=SimpleNamespace(_trust_env=True))
+            self.rest_client = SimpleNamespace(
+                pool_manager=SimpleNamespace(_trust_env=True)
+            )
 
     backend = KubernetesExecutorBackend()
     default_config = object()
     created_clients: list[FakeApiClient] = []
 
-    monkeypatch.setattr("api.sandbox.kubernetes.config.load_incluster_config", lambda: None)
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.config.load_incluster_config", lambda: None
+    )
     monkeypatch.setattr(
         "api.sandbox.kubernetes.client.Configuration.get_default_copy",
         lambda: default_config,
@@ -201,19 +261,32 @@ async def test_ensure_clients_disables_proxy_env(monkeypatch: pytest.MonkeyPatch
         "api.sandbox.kubernetes.client.CoreV1Api",
         lambda api_client=None: SimpleNamespace(api_client=api_client),
     )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.client.NetworkingV1Api",
+        lambda api_client=None: SimpleNamespace(api_client=api_client),
+    )
 
     await backend._ensure_clients()
 
     assert len(created_clients) == 2
-    assert all(created_client.configuration is default_config for created_client in created_clients)
-    assert all(created_client.rest_client.pool_manager._trust_env is False for created_client in created_clients)
+    assert all(
+        created_client.configuration is default_config
+        for created_client in created_clients
+    )
+    assert all(
+        created_client.rest_client.pool_manager._trust_env is False
+        for created_client in created_clients
+    )
     assert backend._core.api_client is created_clients[0]
+    assert backend._networking.api_client is created_clients[0]
     assert backend._ws_api_client is created_clients[1]
     assert backend._ws_core.api_client is created_clients[1]
 
 
 @pytest.mark.asyncio
-async def test_create_requires_repo_cache_volume_for_repo(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_requires_repo_cache_volume_for_repo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     backend = KubernetesExecutorBackend()
 
     monkeypatch.setenv("AGENT_API_URL", "http://api:8000")
@@ -235,10 +308,14 @@ async def test_create_requires_repo_cache_volume_for_repo(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_create_builds_pod_and_prompt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_builds_pod_and_prompt_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     backend = KubernetesExecutorBackend()
     fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
     backend._core = fake_core
+    backend._networking = fake_networking
 
     monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
     monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
@@ -262,7 +339,17 @@ async def test_create_builds_pod_and_prompt_secret(monkeypatch: pytest.MonkeyPat
             "AMP_API_KEY=AMP_API_KEY",
         ],
     )
-    monkeypatch.setattr("api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"])
+
+    async def fake_runtime_secret_values_for_sandbox() -> dict[str, str]:
+        return {"AMP_API_KEY": "real-amp-key"}
+
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._runtime_secret_values_for_sandbox",
+        fake_runtime_secret_values_for_sandbox,
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"]
+    )
     monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
 
     async def fake_ensure_clients() -> None:
@@ -272,6 +359,7 @@ async def test_create_builds_pod_and_prompt_secret(monkeypatch: pytest.MonkeyPat
         return 0.01
 
     monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fake_wait_ready)
     monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
 
     session = await backend.create(
@@ -283,12 +371,12 @@ async def test_create_builds_pod_and_prompt_secret(monkeypatch: pytest.MonkeyPat
         resume_thread_id="T-123",
     )
 
-    assert session.sandbox_id.startswith("centaur-sandbox-")
+    assert session.sandbox_id.startswith("centaur-centaur-sandbox-")
     assert fake_core.created_secrets[0][0] == "centaur-sandbox"
     secret_body = fake_core.created_secrets[0][1]
     assert secret_body["stringData"]["AGENTS_BASE.md"] == "prompt:eng"
 
-    pod_body = fake_core.created_pods[0][1]
+    pod_body = fake_core.created_pods[1][1]
     container = pod_body["spec"]["containers"][0]
     env = {item["name"]: item["value"] for item in container["env"]}
 
@@ -313,12 +401,17 @@ async def test_create_builds_pod_and_prompt_secret(monkeypatch: pytest.MonkeyPat
     assert env["CENTAUR_OVERLAY_DIR"] == "/home/agent/overlay/org"
     assert env["AGENT_PERSONA"] == "eng"
     assert env["AGENT_REPO"] == "paradigmxyz/centaur"
-    assert pod_body["metadata"]["annotations"]["centaur.ai/thread-key"] == "slack:C123:123.456"
+    assert (
+        pod_body["metadata"]["annotations"]["centaur.ai/thread-key"]
+        == "slack:C123:123.456"
+    )
     assert {
         "name": "repos",
         "hostPath": {"path": "/var/lib/centaur/repos", "type": "Directory"},
     } in pod_body["spec"]["volumes"]
-    assert any(volume["name"] == "overlay-root" for volume in pod_body["spec"]["volumes"])
+    assert any(
+        volume["name"] == "overlay-root" for volume in pod_body["spec"]["volumes"]
+    )
     assert pod_body["spec"]["initContainers"] == [
         {
             "name": "overlay-bootstrap",
@@ -359,23 +452,229 @@ async def test_create_builds_pod_and_prompt_secret(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
+async def test_create_builds_per_sandbox_proxy_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.delenv("FIREWALL_HOST", raising=False)
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
+    monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.setenv("KUBERNETES_IRON_PROXY_IMAGE", "centaur-iron-proxy:test")
+    monkeypatch.setenv(
+        "KUBERNETES_FIREWALL_MANAGER_IMAGE", "centaur-firewall-manager:test"
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"]
+    )
+    monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
+
+    async def fake_runtime_secret_values_for_sandbox() -> dict[str, str]:
+        return {"AMP_API_KEY": "real-amp-key"}
+
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._runtime_secret_values_for_sandbox",
+        fake_runtime_secret_values_for_sandbox,
+    )
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    async def fake_wait_ready(_pod_name: str) -> float:
+        return 0.01
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fake_wait_ready)
+    monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
+
+    session = await backend.create("slack:C123:123.456", "amp", "amp")
+
+    proxy_service = fake_core.created_services[0][1]
+    proxy_pod = fake_core.created_pods[0][1]
+    sandbox_pod = fake_core.created_pods[1][1]
+    proxy_service_name = proxy_service["metadata"]["name"]
+    sandbox_env = {
+        item["name"]: item["value"]
+        for item in sandbox_pod["spec"]["containers"][0]["env"]
+    }
+
+    assert session.sandbox_id == sandbox_pod["metadata"]["name"]
+    assert (
+        sandbox_pod["metadata"]["labels"]["centaur.ai/sandbox-id"] == session.sandbox_id
+    )
+    assert sandbox_env["FIREWALL_HOST"] == proxy_service_name
+    assert sandbox_env["HTTPS_PROXY"] == f"http://{proxy_service_name}:8080"
+    assert (
+        sandbox_env["NO_PROXY"]
+        == f"localhost,127.0.0.1,{proxy_service_name},api.internal"
+    )
+    assert proxy_pod["metadata"]["labels"] == {
+        "centaur.ai/iron-proxy": "true",
+        "centaur.ai/sandbox-id": session.sandbox_id,
+    }
+    assert [container["name"] for container in proxy_pod["spec"]["containers"]] == [
+        "iron-proxy",
+        "firewall-manager",
+    ]
+    assert proxy_pod["spec"]["containers"][0]["image"] == "centaur-iron-proxy:test"
+    assert proxy_pod["spec"]["containers"][0]["readinessProbe"]["periodSeconds"] == 5
+    assert (
+        proxy_pod["spec"]["containers"][0]["readinessProbe"]["failureThreshold"] == 30
+    )
+    assert (
+        proxy_pod["spec"]["containers"][1]["image"] == "centaur-firewall-manager:test"
+    )
+    assert (
+        proxy_pod["spec"]["containers"][1]["readinessProbe"]["httpGet"]["path"]
+        == "/health/ready"
+    )
+    assert proxy_pod["spec"]["containers"][1]["readinessProbe"]["periodSeconds"] == 5
+    assert (
+        proxy_pod["spec"]["containers"][1]["readinessProbe"]["failureThreshold"] == 30
+    )
+    assert fake_networking.created_network_policies[0][1]["spec"]["podSelector"][
+        "matchLabels"
+    ] == {
+        "centaur.ai/managed": "true",
+        "centaur.ai/sandbox-id": session.sandbox_id,
+    }
+    assert fake_networking.created_network_policies[1][1]["spec"]["podSelector"][
+        "matchLabels"
+    ] == {
+        "centaur.ai/iron-proxy": "true",
+        "centaur.ai/sandbox-id": session.sandbox_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_create_cleans_up_per_sandbox_proxy_when_proxy_readiness_times_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
+    monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"]
+    )
+    monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
+
+    async def fake_runtime_secret_values_for_sandbox() -> dict[str, str]:
+        return {"AMP_API_KEY": "real-amp-key"}
+
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._runtime_secret_values_for_sandbox",
+        fake_runtime_secret_values_for_sandbox,
+    )
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    async def fail_wait_ready(_pod_name: str) -> float:
+        raise TimeoutError("proxy readiness timed out")
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fail_wait_ready)
+
+    with pytest.raises(TimeoutError, match="proxy readiness timed out"):
+        await backend.create("slack:C123:123.456", "amp", "amp")
+
+    sandbox_id = fake_core.created_services[0][1]["metadata"]["labels"][
+        "centaur.ai/sandbox-id"
+    ]
+    assert ("centaur-sandbox", sandbox_id, 5) in fake_core.deleted_pods
+    assert (
+        "centaur-sandbox",
+        fake_core.created_pods[0][1]["metadata"]["name"],
+        5,
+    ) in fake_core.deleted_pods
+    assert (
+        "centaur-sandbox",
+        fake_core.created_services[0][1]["metadata"]["name"],
+    ) in fake_core.deleted_services
+    assert fake_networking.deleted_network_policies
+
+
+@pytest.mark.asyncio
+async def test_stop_by_id_removes_per_sandbox_proxy_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
+    monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+
+    await backend.stop_by_id("sandbox-pod")
+
+    assert ("centaur-sandbox", "sandbox-pod", 5) in fake_core.deleted_pods
+    assert any(
+        name.startswith("centaur-centaur-proxy-")
+        for _, name, _ in fake_core.deleted_pods
+    )
+    assert any(
+        name.startswith("centaur-centaur-proxy-")
+        for _, name in fake_core.deleted_services
+    )
+    assert len(fake_networking.deleted_network_policies) == 2
+
+
+@pytest.mark.asyncio
 async def test_create_cleans_up_pod_and_prompt_secret_when_readiness_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     backend = KubernetesExecutorBackend()
     fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
     backend._core = fake_core
+    backend._networking = fake_networking
 
     monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
     monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
     monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
     monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
-    monkeypatch.setattr("api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt")
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
+    )
     monkeypatch.setattr(
         "api.sandbox.kubernetes.container_env",
         lambda *_args, **_kwargs: ["CENTAUR_API_URL=http://api.internal:8000"],
     )
-    monkeypatch.setattr("api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"])
+
+    async def fake_runtime_secret_values_for_sandbox() -> dict[str, str]:
+        return {"AMP_API_KEY": "real-amp-key"}
+
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._runtime_secret_values_for_sandbox",
+        fake_runtime_secret_values_for_sandbox,
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"]
+    )
     monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
 
     async def fake_ensure_clients() -> None:
@@ -384,24 +683,32 @@ async def test_create_cleans_up_pod_and_prompt_secret_when_readiness_times_out(
     async def fake_wait_ready(_pod_name: str) -> float:
         raise TimeoutError("sandbox readiness timed out after 60s")
 
+    async def fake_proxy_wait_ready(_pod_name: str) -> float:
+        return 0.01
+
     monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fake_proxy_wait_ready)
     monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
 
     with pytest.raises(TimeoutError, match="readiness timed out"):
         await backend.create("slack:C123:123.456", "amp", "amp")
 
-    pod_name = fake_core.created_pods[0][1]["metadata"]["name"]
+    pod_name = fake_core.created_pods[1][1]["metadata"]["name"]
     secret_name = fake_core.created_secrets[0][1]["metadata"]["name"]
 
-    assert fake_core.deleted_pods[-1] == ("centaur-sandbox", pod_name, 5)
+    assert ("centaur-sandbox", pod_name, 5) in fake_core.deleted_pods
     assert fake_core.deleted_secrets[-1] == ("centaur-sandbox", secret_name)
 
 
 @pytest.mark.asyncio
-async def test_create_mounts_repo_cache_host_path(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_create_mounts_repo_cache_host_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     backend = KubernetesExecutorBackend()
     fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
     backend._core = fake_core
+    backend._networking = fake_networking
 
     monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
     monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
@@ -419,7 +726,17 @@ async def test_create_mounts_repo_cache_host_path(monkeypatch: pytest.MonkeyPatc
             "CENTAUR_API_KEY=sandbox-token",
         ],
     )
-    monkeypatch.setattr("api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"])
+
+    async def fake_runtime_secret_values_for_sandbox() -> dict[str, str]:
+        return {"AMP_API_KEY": "real-amp-key"}
+
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._runtime_secret_values_for_sandbox",
+        fake_runtime_secret_values_for_sandbox,
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["amp-wrapper"]
+    )
     monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
 
     async def fake_ensure_clients() -> None:
@@ -429,6 +746,7 @@ async def test_create_mounts_repo_cache_host_path(monkeypatch: pytest.MonkeyPatc
         return 0.01
 
     monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fake_wait_ready)
     monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
 
     await backend.create(
@@ -438,7 +756,7 @@ async def test_create_mounts_repo_cache_host_path(monkeypatch: pytest.MonkeyPatc
         repo="paradigmxyz/centaur",
     )
 
-    pod_body = fake_core.created_pods[0][1]
+    pod_body = fake_core.created_pods[1][1]
     container = pod_body["spec"]["containers"][0]
 
     assert any(
@@ -459,7 +777,9 @@ async def test_exec_run_prefixes_environment_and_collects_output(
 ) -> None:
     websocket = FakeWebSocket(
         [
-            SimpleNamespace(type=WSMsgType.BINARY, data=bytes([STDOUT_CHANNEL]) + b"hello\n"),
+            SimpleNamespace(
+                type=WSMsgType.BINARY, data=bytes([STDOUT_CHANNEL]) + b"hello\n"
+            ),
             SimpleNamespace(type=WSMsgType.CLOSED, data=b""),
         ]
     )
@@ -553,7 +873,9 @@ async def test_stream_stdout_yields_prefetched_and_live_lines() -> None:
     rt.prefetched_stdout = ["prefetched line"]
     rt.stdout_stream = FakeWebSocket(
         [
-            SimpleNamespace(type=WSMsgType.BINARY, data=bytes([STDOUT_CHANNEL]) + b"live line\n"),
+            SimpleNamespace(
+                type=WSMsgType.BINARY, data=bytes([STDOUT_CHANNEL]) + b"live line\n"
+            ),
             SimpleNamespace(type=WSMsgType.CLOSED, data=b""),
         ]
     )
@@ -624,7 +946,9 @@ async def _collect_stdout(
     return [line async for line in backend.stream_stdout(session)]
 
 
-def test_auto_configure_selects_kubernetes_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auto_configure_selects_kubernetes_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     backend = auto_configure()
 
     assert isinstance(backend, KubernetesExecutorBackend)
@@ -694,9 +1018,15 @@ async def test_recover_warm_returns_running_warm_pods_and_cleans_stale(
 
     sessions = await backend.recover_warm("amp")
 
-    assert [session.sandbox_id for session in sessions] == ["centaur-sandbox-warm-running"]
+    assert [session.sandbox_id for session in sessions] == [
+        "centaur-sandbox-warm-running"
+    ]
     assert sessions[0].backend_name == "kubernetes"
-    assert ("centaur-sandbox", "centaur-sandbox-warm-finished", 5) in fake_core.deleted_pods
+    assert (
+        "centaur-sandbox",
+        "centaur-sandbox-warm-finished",
+        5,
+    ) in fake_core.deleted_pods
     assert (
         "centaur-sandbox",
         "centaur-sandbox-warm-finished-cfg",

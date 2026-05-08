@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import os
+from collections.abc import Mapping
 from urllib.parse import urlsplit
 
 from api.deps import mint_sandbox_token
@@ -14,7 +14,12 @@ def image() -> str:
     return os.getenv("AGENT_IMAGE", "centaur-agent:latest")
 
 
-_HARNESS_STUB_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AMP_API_KEY", "GITHUB_TOKEN")
+_HARNESS_STUB_KEYS = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "AMP_API_KEY",
+    "GITHUB_TOKEN",
+)
 
 
 def agent_local_dev_enabled() -> bool:
@@ -55,6 +60,8 @@ def container_env(
     container_name: str,
     *,
     resume_thread_id: str | None = None,
+    firewall_host: str | None = None,
+    runtime_secret_values: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Build env vars for sandbox pods."""
     local_dev = agent_local_dev_enabled()
@@ -80,21 +87,24 @@ def container_env(
             if real:
                 env.append(f"{key}={real}")
     else:
-        firewall_host = os.getenv("FIREWALL_HOST", "iron-proxy")
-        no_proxy_hosts = ["localhost", "127.0.0.1", firewall_host]
+        runtime_secret_values = runtime_secret_values or {}
+        resolved_firewall_host = firewall_host or os.getenv(
+            "FIREWALL_HOST", "iron-proxy"
+        )
+        no_proxy_hosts = ["localhost", "127.0.0.1", resolved_firewall_host]
         api_host = urlsplit(api_url).hostname
         if api_host:
             no_proxy_hosts.append(api_host)
         no_proxy = ",".join(dict.fromkeys(no_proxy_hosts))
         for key in _HARNESS_STUB_KEYS:
-            env.append(f"{key}={key}")
+            env.append(f"{key}={runtime_secret_values.get(key) or key}")
         env.extend(
             [
-                f"FIREWALL_HOST={firewall_host}",
-                f"HTTPS_PROXY=http://{firewall_host}:8080",
-                f"HTTP_PROXY=http://{firewall_host}:8080",
-                f"https_proxy=http://{firewall_host}:8080",
-                f"http_proxy=http://{firewall_host}:8080",
+                f"FIREWALL_HOST={resolved_firewall_host}",
+                f"HTTPS_PROXY=http://{resolved_firewall_host}:8080",
+                f"HTTP_PROXY=http://{resolved_firewall_host}:8080",
+                f"https_proxy=http://{resolved_firewall_host}:8080",
+                f"http_proxy=http://{resolved_firewall_host}:8080",
                 f"NO_PROXY={no_proxy}",
                 f"no_proxy={no_proxy}",
                 "NODE_EXTRA_CA_CERTS=/firewall-certs/ca-cert.pem",
@@ -103,11 +113,6 @@ def container_env(
                 "GIT_SSL_CAINFO=/firewall-certs/ca-cert.pem",
             ]
         )
-
-    raw_extra = (os.getenv("KUBERNETES_SANDBOX_EXTRA_ENV") or "").strip()
-    if raw_extra:
-        for item in json.loads(raw_extra):
-            env.append(f"{item['name']}={item['value']}")
 
     return env
 

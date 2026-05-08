@@ -90,6 +90,11 @@ sandbox:
     repository: centaur-agent
     tag: latest
     pullPolicy: IfNotPresent
+  perWorkloadProxy:
+    pollIntervalSeconds: 30
+    pollJitterSeconds: 10
+    startupBackoffInitialSeconds: 0.5
+    startupBackoffMaxSeconds: 5
   runtimeClassName: ""
   reposPath: ""
   extraEnv: {}

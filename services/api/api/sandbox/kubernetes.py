@@ -12,7 +12,9 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+import httpx
 from aiohttp import WSMsgType
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.config.config_exception import ConfigException
@@ -25,8 +27,10 @@ from kubernetes_asyncio.stream.ws_client import (
 )
 import structlog
 
+from api.firewall import secrets_headers, secrets_url
 from api.sandbox.base import SandboxBackend, SandboxSession
 from api.sandbox.config import (
+    agent_local_dev_enabled,
     build_harness_cmd,
     container_env,
     image,
@@ -41,6 +45,7 @@ _CONTAINER_NAME = "sandbox"
 _AGENT_UID = 1001
 _SANDBOX_OVERLAY_ROOT = "/home/agent/overlay"
 _SANDBOX_OVERLAY_DIR = f"{_SANDBOX_OVERLAY_ROOT}/org"
+_PROXY_LABEL = "centaur.ai/iron-proxy"
 
 
 def _get_rt(session: SandboxSession):
@@ -63,7 +68,9 @@ def _overlay_root() -> Path | None:
 
 
 def _namespace() -> str:
-    configured = (os.getenv("KUBERNETES_NAMESPACE") or os.getenv("POD_NAMESPACE") or "").strip()
+    configured = (
+        os.getenv("KUBERNETES_NAMESPACE") or os.getenv("POD_NAMESPACE") or ""
+    ).strip()
     if configured:
         return configured
     namespace_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
@@ -84,6 +91,93 @@ def _runtime_class_name() -> str | None:
 def _service_account_name() -> str | None:
     value = (os.getenv("KUBERNETES_SANDBOX_SERVICE_ACCOUNT_NAME") or "").strip()
     return value or None
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    return int(raw) if raw else default
+
+
+def _proxy_port() -> int:
+    return _env_int("KUBERNETES_IRON_PROXY_PORT", 8080)
+
+
+def _proxy_management_port() -> int:
+    return _env_int("KUBERNETES_IRON_PROXY_MANAGEMENT_PORT", 9092)
+
+
+def _proxy_health_port() -> int:
+    return _env_int("KUBERNETES_IRON_PROXY_HEALTH_PORT", 9090)
+
+
+def _proxy_manager_port() -> int:
+    return _env_int("KUBERNETES_FIREWALL_MANAGER_PORT", 8081)
+
+
+def _proxy_image() -> str:
+    return os.getenv("KUBERNETES_IRON_PROXY_IMAGE", "centaur-iron-proxy:latest")
+
+
+def _proxy_image_pull_policy() -> str:
+    return (
+        os.getenv("KUBERNETES_IRON_PROXY_IMAGE_PULL_POLICY") or _image_pull_policy()
+    ).strip()
+
+
+def _proxy_manager_image() -> str:
+    return os.getenv(
+        "KUBERNETES_FIREWALL_MANAGER_IMAGE", "centaur-firewall-manager:latest"
+    )
+
+
+def _proxy_manager_image_pull_policy() -> str:
+    return (
+        os.getenv("KUBERNETES_FIREWALL_MANAGER_IMAGE_PULL_POLICY")
+        or _image_pull_policy()
+    ).strip()
+
+
+def _secret_env_name() -> str:
+    value = (os.getenv("KUBERNETES_SECRET_ENV_NAME") or "").strip()
+    if not value:
+        raise ValueError("KUBERNETES_SECRET_ENV_NAME is required for per-sandbox proxy")
+    return value
+
+
+def _secret_env_key(name: str) -> str:
+    return f"{os.getenv('KUBERNETES_SECRET_ENV_PREFIX', '')}{name}"
+
+
+def _api_pod_match_labels() -> dict[str, str]:
+    return _parse_match_labels(
+        os.getenv(
+            "KUBERNETES_API_POD_LABEL_SELECTOR", "app.kubernetes.io/component=api"
+        )
+    )
+
+
+def _secrets_pod_match_labels() -> dict[str, str]:
+    return _parse_match_labels(
+        os.getenv(
+            "KUBERNETES_SECRETS_POD_LABEL_SELECTOR",
+            "app.kubernetes.io/component=secrets",
+        )
+    )
+
+
+def _parse_match_labels(raw: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        key, sep, value = item.partition("=")
+        if not sep:
+            raise ValueError(
+                f"invalid label selector item {item!r}; expected key=value"
+            )
+        result[key.strip()] = value.strip()
+    return result
 
 
 def _repos_path() -> str | None:
@@ -116,8 +210,67 @@ def _image_pull_secrets() -> list[dict[str, str]]:
 def _firewall_ca_secret_name() -> str:
     value = (os.getenv("KUBERNETES_FIREWALL_CA_SECRET_NAME") or "").strip()
     if not value:
-        raise ValueError("KUBERNETES_FIREWALL_CA_SECRET_NAME is required for kubernetes backend")
+        raise ValueError(
+            "KUBERNETES_FIREWALL_CA_SECRET_NAME is required for kubernetes backend"
+        )
     return value
+
+
+def _firewall_ca_key_secret_name() -> str:
+    value = (os.getenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME") or "").strip()
+    if not value:
+        raise ValueError(
+            "KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME is required for per-sandbox proxy"
+        )
+    return value
+
+
+def _required_runtime_secret_keys() -> list[str]:
+    raw = os.getenv("REQUIRED_RUNTIME_SECRET_KEYS", "AMP_API_KEY")
+    keys: list[str] = []
+    for token in raw.split(","):
+        key = token.strip()
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+async def _fetch_runtime_secret_values(keys: list[str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not keys:
+        return values
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for key in keys:
+            url = f"{secrets_url()}/secrets/{quote(key, safe='')}"
+            response = await client.get(url, headers=secrets_headers())
+            if response.status_code != 200:
+                continue
+            try:
+                payload = response.json()
+            except Exception:
+                continue
+            value = payload.get("value")
+            if isinstance(value, str) and value:
+                values[key] = value
+    return values
+
+
+async def _runtime_secret_values_for_sandbox() -> dict[str, str]:
+    if agent_local_dev_enabled():
+        return {}
+
+    required_keys = _required_runtime_secret_keys()
+    if not required_keys:
+        return {}
+
+    values = await _fetch_runtime_secret_values(required_keys)
+    missing = [key for key in required_keys if not values.get(key)]
+    if missing:
+        raise RuntimeError(
+            "runtime credentials unavailable for sandbox: "
+            f"missing_keys={','.join(missing)}"
+        )
+    return values
 
 
 def _resource_name(prefix: str, raw: str, *, max_length: int = 63) -> str:
@@ -129,8 +282,24 @@ def _resource_name(prefix: str, raw: str, *, max_length: int = 63) -> str:
 
 
 def _prompt_secret_name(pod_name: str) -> str:
-    base = pod_name[: 63 - len("-cfg")].rstrip("-") or "centaur-sandbox"
+    base = pod_name[: 63 - len("-cfg")].rstrip("-") or "centaur-centaur-sandbox"
     return f"{base}-cfg"
+
+
+def _proxy_pod_name(sandbox_id: str) -> str:
+    return _resource_name("centaur-centaur-proxy", sandbox_id)
+
+
+def _proxy_service_name(sandbox_id: str) -> str:
+    return _resource_name("centaur-centaur-proxy", sandbox_id)
+
+
+def _sandbox_egress_policy_name(sandbox_id: str) -> str:
+    return _resource_name("centaur-centaur-sbx-egress", sandbox_id)
+
+
+def _proxy_policy_name(sandbox_id: str) -> str:
+    return _resource_name("centaur-centaur-proxy-net", sandbox_id)
 
 
 def _local_dev_mode() -> bool:
@@ -142,8 +311,6 @@ def _ensure_kubernetes_env() -> None:
         return
     if not (os.getenv("AGENT_API_URL") or "").strip():
         raise ValueError("AGENT_API_URL is required for kubernetes backend")
-    if not (os.getenv("FIREWALL_HOST") or "").strip():
-        raise ValueError("FIREWALL_HOST is required for kubernetes backend")
 
 
 def _pod_resources() -> dict[str, Any]:
@@ -203,7 +370,9 @@ def _prompt_bundle(persona: str | None) -> str:
                 )
                 prompt += f"\n\n---\n\n{persona_prompt.read_text()}"
             else:
-                log.warning("persona_prompt_missing", persona=persona, path=str(persona_prompt))
+                log.warning(
+                    "persona_prompt_missing", persona=persona, path=str(persona_prompt)
+                )
         else:
             log.warning("persona_not_found_for_kubernetes_backend", persona=persona)
 
@@ -227,6 +396,7 @@ class KubernetesExecutorBackend(SandboxBackend):
 
     def __init__(self) -> None:
         self._core: client.CoreV1Api | None = None
+        self._networking: client.NetworkingV1Api | None = None
         self._ws_api_client: WsApiClient | None = None
         self._ws_core: client.CoreV1Api | None = None
         self._lock = asyncio.Lock()
@@ -242,6 +412,7 @@ class KubernetesExecutorBackend(SandboxBackend):
     async def _ensure_clients(self) -> None:
         ready = (
             self._core is not None
+            and self._networking is not None
             and self._ws_api_client is not None
             and self._ws_core is not None
         )
@@ -250,6 +421,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         async with self._lock:
             ready = (
                 self._core is not None
+                and self._networking is not None
                 and self._ws_api_client is not None
                 and self._ws_core is not None
             )
@@ -263,9 +435,12 @@ class KubernetesExecutorBackend(SandboxBackend):
                     config.load_incluster_config()
                 except ConfigException:
                     await config.load_kube_config()
-            core_api_client = client.ApiClient(configuration=client.Configuration.get_default_copy())
+            core_api_client = client.ApiClient(
+                configuration=client.Configuration.get_default_copy()
+            )
             _disable_proxy_env(core_api_client)
             self._core = client.CoreV1Api(api_client=core_api_client)
+            self._networking = client.NetworkingV1Api(api_client=core_api_client)
 
             self._ws_api_client = WsApiClient(
                 configuration=client.Configuration.get_default_copy(),
@@ -278,6 +453,11 @@ class KubernetesExecutorBackend(SandboxBackend):
         if self._core is None:
             raise RuntimeError("kubernetes client not initialized")
         return self._core
+
+    def _networking_api(self) -> client.NetworkingV1Api:
+        if self._networking is None:
+            raise RuntimeError("kubernetes client not initialized")
+        return self._networking
 
     def _ws_core_api(self) -> client.CoreV1Api:
         if self._ws_core is None:
@@ -311,7 +491,32 @@ class KubernetesExecutorBackend(SandboxBackend):
             if not self._is_not_found(exc):
                 raise
 
-    async def _create_prompt_secret(self, secret_name: str, persona: str | None) -> None:
+    async def _delete_service(self, service_name: str) -> None:
+        try:
+            await self._core_api().delete_namespaced_service(service_name, _namespace())
+        except Exception as exc:
+            if not self._is_not_found(exc):
+                raise
+
+    async def _delete_network_policy(self, policy_name: str) -> None:
+        try:
+            await self._networking_api().delete_namespaced_network_policy(
+                policy_name,
+                _namespace(),
+            )
+        except Exception as exc:
+            if not self._is_not_found(exc):
+                raise
+
+    async def _delete_proxy_resources(self, sandbox_id: str) -> None:
+        await self._delete_pod(_proxy_pod_name(sandbox_id))
+        await self._delete_service(_proxy_service_name(sandbox_id))
+        await self._delete_network_policy(_sandbox_egress_policy_name(sandbox_id))
+        await self._delete_network_policy(_proxy_policy_name(sandbox_id))
+
+    async def _create_prompt_secret(
+        self, secret_name: str, persona: str | None
+    ) -> None:
         await self._delete_prompt_secret(secret_name)
         await self._core_api().create_namespaced_secret(
             _namespace(),
@@ -329,6 +534,384 @@ class KubernetesExecutorBackend(SandboxBackend):
                     "AGENTS_BASE.md": _prompt_bundle(persona),
                 },
             },
+        )
+
+    async def _create_proxy_service(self, sandbox_id: str) -> None:
+        service_name = _proxy_service_name(sandbox_id)
+        await self._delete_service(service_name)
+        await self._core_api().create_namespaced_service(
+            _namespace(),
+            {
+                "apiVersion": "v1",
+                "kind": "Service",
+                "metadata": {
+                    "name": service_name,
+                    "labels": {
+                        _PROXY_LABEL: "true",
+                        "centaur.ai/sandbox-id": sandbox_id,
+                    },
+                },
+                "spec": {
+                    "selector": {
+                        _PROXY_LABEL: "true",
+                        "centaur.ai/sandbox-id": sandbox_id,
+                    },
+                    "ports": [
+                        {
+                            "name": "proxy",
+                            "port": _proxy_port(),
+                            "targetPort": _proxy_port(),
+                            "protocol": "TCP",
+                        }
+                    ],
+                },
+            },
+        )
+
+    async def _create_proxy_network_policies(self, sandbox_id: str) -> None:
+        await self._delete_network_policy(_sandbox_egress_policy_name(sandbox_id))
+        await self._delete_network_policy(_proxy_policy_name(sandbox_id))
+
+        await self._networking_api().create_namespaced_network_policy(
+            _namespace(),
+            {
+                "apiVersion": "networking.k8s.io/v1",
+                "kind": "NetworkPolicy",
+                "metadata": {
+                    "name": _sandbox_egress_policy_name(sandbox_id),
+                    "labels": {
+                        "centaur.ai/sandbox-id": sandbox_id,
+                    },
+                },
+                "spec": {
+                    "podSelector": {
+                        "matchLabels": {
+                            "centaur.ai/managed": "true",
+                            "centaur.ai/sandbox-id": sandbox_id,
+                        }
+                    },
+                    "policyTypes": ["Egress"],
+                    "egress": [
+                        {
+                            "to": [
+                                {
+                                    "podSelector": {
+                                        "matchLabels": _api_pod_match_labels()
+                                    }
+                                }
+                            ],
+                            "ports": [{"protocol": "TCP", "port": 8000}],
+                        },
+                        {
+                            "to": [
+                                {
+                                    "podSelector": {
+                                        "matchLabels": {
+                                            _PROXY_LABEL: "true",
+                                            "centaur.ai/sandbox-id": sandbox_id,
+                                        }
+                                    }
+                                }
+                            ],
+                            "ports": [{"protocol": "TCP", "port": _proxy_port()}],
+                        },
+                    ],
+                },
+            },
+        )
+        await self._networking_api().create_namespaced_network_policy(
+            _namespace(),
+            {
+                "apiVersion": "networking.k8s.io/v1",
+                "kind": "NetworkPolicy",
+                "metadata": {
+                    "name": _proxy_policy_name(sandbox_id),
+                    "labels": {
+                        "centaur.ai/sandbox-id": sandbox_id,
+                    },
+                },
+                "spec": {
+                    "podSelector": {
+                        "matchLabels": {
+                            _PROXY_LABEL: "true",
+                            "centaur.ai/sandbox-id": sandbox_id,
+                        }
+                    },
+                    "policyTypes": ["Ingress", "Egress"],
+                    "ingress": [
+                        {
+                            "from": [
+                                {
+                                    "podSelector": {
+                                        "matchLabels": {
+                                            "centaur.ai/managed": "true",
+                                            "centaur.ai/sandbox-id": sandbox_id,
+                                        }
+                                    }
+                                }
+                            ],
+                            "ports": [{"protocol": "TCP", "port": _proxy_port()}],
+                        }
+                    ],
+                    "egress": [
+                        {
+                            "to": [
+                                {
+                                    "podSelector": {
+                                        "matchLabels": _api_pod_match_labels()
+                                    }
+                                }
+                            ],
+                            "ports": [{"protocol": "TCP", "port": 8000}],
+                        },
+                        {
+                            "to": [
+                                {
+                                    "podSelector": {
+                                        "matchLabels": _secrets_pod_match_labels()
+                                    }
+                                }
+                            ],
+                            "ports": [{"protocol": "TCP", "port": 8100}],
+                        },
+                        {
+                            "ports": [{"protocol": "TCP", "port": 443}],
+                        },
+                    ],
+                },
+            },
+        )
+
+    async def _create_proxy_pod(self, sandbox_id: str) -> None:
+        proxy_pod_name = _proxy_pod_name(sandbox_id)
+        secret_name = _secret_env_name()
+        env_secret_ref = {"secretRef": {"name": secret_name}}
+        secret_key_refs = {
+            "FIREWALL_CONTROL_TOKEN": _secret_env_key("FIREWALL_CONTROL_TOKEN"),
+            "SECRETS_AUTH_TOKEN": _secret_env_key("SECRETS_AUTH_TOKEN"),
+            "IRON_MANAGEMENT_API_KEY": _secret_env_key("IRON_MANAGEMENT_API_KEY"),
+        }
+        manager_env = [
+            {
+                "name": env_name,
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": secret_name,
+                        "key": secret_key,
+                    }
+                },
+            }
+            for env_name, secret_key in secret_key_refs.items()
+        ]
+        manager_env.extend(
+            [
+                {
+                    "name": "SECRET_MANAGER_URL",
+                    "value": os.getenv("SECRET_MANAGER_URL", "http://secrets:8100"),
+                },
+                {
+                    "name": "IRON_PROXY_CONFIG_PATH",
+                    "value": "/etc/iron-proxy/proxy.yaml",
+                },
+                {
+                    "name": "IRON_PROXY_MANAGEMENT_URL",
+                    "value": f"http://127.0.0.1:{_proxy_management_port()}",
+                },
+                {"name": "FIREWALL_MANAGER_PORT", "value": str(_proxy_manager_port())},
+                {
+                    "name": "FIREWALL_MANAGER_INJECTION_MAP_URL",
+                    "value": (
+                        os.getenv("KUBERNETES_FIREWALL_MANAGER_INJECTION_MAP_URL")
+                        or f"{os.getenv('AGENT_API_URL', 'http://api:8000').rstrip('/')}/internal/injection-map"
+                    ),
+                },
+                {
+                    "name": "FIREWALL_MANAGER_POLL_INTERVAL_SECONDS",
+                    "value": os.getenv(
+                        "KUBERNETES_FIREWALL_MANAGER_POLL_INTERVAL_SECONDS", "30"
+                    ),
+                },
+                {
+                    "name": "FIREWALL_MANAGER_POLL_JITTER_SECONDS",
+                    "value": os.getenv(
+                        "KUBERNETES_FIREWALL_MANAGER_POLL_JITTER_SECONDS", "10"
+                    ),
+                },
+                {
+                    "name": "FIREWALL_MANAGER_STARTUP_BACKOFF_INITIAL_SECONDS",
+                    "value": os.getenv(
+                        "KUBERNETES_FIREWALL_MANAGER_STARTUP_BACKOFF_INITIAL_SECONDS",
+                        "0.5",
+                    ),
+                },
+                {
+                    "name": "FIREWALL_MANAGER_STARTUP_BACKOFF_MAX_SECONDS",
+                    "value": os.getenv(
+                        "KUBERNETES_FIREWALL_MANAGER_STARTUP_BACKOFF_MAX_SECONDS", "5"
+                    ),
+                },
+                {
+                    "name": "FIREWALL_MANAGER_SECRET_SOURCE",
+                    "value": os.getenv(
+                        "KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword"
+                    ),
+                },
+                {
+                    "name": "FIREWALL_MANAGER_SECRET_TTL",
+                    "value": os.getenv("KUBERNETES_FIREWALL_MANAGER_SECRET_TTL", "10m"),
+                },
+            ]
+        )
+        await self._delete_pod(proxy_pod_name)
+        await self._core_api().create_namespaced_pod(
+            _namespace(),
+            {
+                "apiVersion": "v1",
+                "kind": "Pod",
+                "metadata": {
+                    "name": proxy_pod_name,
+                    "labels": {
+                        _PROXY_LABEL: "true",
+                        "centaur.ai/sandbox-id": sandbox_id,
+                    },
+                },
+                "spec": {
+                    "automountServiceAccountToken": False,
+                    "restartPolicy": "Never",
+                    "imagePullSecrets": _image_pull_secrets(),
+                    "containers": [
+                        {
+                            "name": "iron-proxy",
+                            "image": _proxy_image(),
+                            "imagePullPolicy": _proxy_image_pull_policy(),
+                            "env": [
+                                {
+                                    "name": "IRON_MANAGEMENT_API_KEY",
+                                    "valueFrom": {
+                                        "secretKeyRef": {
+                                            "name": secret_name,
+                                            "key": _secret_env_key(
+                                                "IRON_MANAGEMENT_API_KEY"
+                                            ),
+                                        }
+                                    },
+                                }
+                            ],
+                            "envFrom": [env_secret_ref],
+                            "ports": [
+                                {"containerPort": _proxy_port(), "name": "proxy"},
+                                {
+                                    "containerPort": _proxy_management_port(),
+                                    "name": "management",
+                                },
+                                {
+                                    "containerPort": _proxy_health_port(),
+                                    "name": "health",
+                                },
+                            ],
+                            "readinessProbe": {
+                                "httpGet": {
+                                    "path": "/healthz",
+                                    "port": _proxy_health_port(),
+                                },
+                                "periodSeconds": 5,
+                                "failureThreshold": 30,
+                            },
+                            "livenessProbe": {
+                                "httpGet": {
+                                    "path": "/healthz",
+                                    "port": _proxy_health_port(),
+                                }
+                            },
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {"drop": ["ALL"]},
+                                "seccompProfile": {"type": "RuntimeDefault"},
+                            },
+                            "volumeMounts": [
+                                {
+                                    "name": "iron-proxy-config",
+                                    "mountPath": "/etc/iron-proxy",
+                                },
+                                {"name": "iron-proxy-certs", "mountPath": "/certs"},
+                                {
+                                    "name": "iron-proxy-ca",
+                                    "mountPath": "/etc/iron-proxy-ca",
+                                    "readOnly": True,
+                                },
+                            ],
+                        },
+                        {
+                            "name": "firewall-manager",
+                            "image": _proxy_manager_image(),
+                            "imagePullPolicy": _proxy_manager_image_pull_policy(),
+                            "env": manager_env,
+                            "envFrom": [env_secret_ref],
+                            "ports": [
+                                {
+                                    "containerPort": _proxy_manager_port(),
+                                    "name": "control",
+                                }
+                            ],
+                            "readinessProbe": {
+                                "httpGet": {
+                                    "path": "/health/ready",
+                                    "port": _proxy_manager_port(),
+                                },
+                                "periodSeconds": 5,
+                                "failureThreshold": 30,
+                            },
+                            "livenessProbe": {
+                                "httpGet": {
+                                    "path": "/health",
+                                    "port": _proxy_manager_port(),
+                                }
+                            },
+                            "securityContext": {
+                                "allowPrivilegeEscalation": False,
+                                "capabilities": {"drop": ["ALL"]},
+                                "seccompProfile": {"type": "RuntimeDefault"},
+                            },
+                            "volumeMounts": [
+                                {
+                                    "name": "iron-proxy-config",
+                                    "mountPath": "/etc/iron-proxy",
+                                },
+                            ],
+                        },
+                    ],
+                    "volumes": [
+                        {"name": "iron-proxy-config", "emptyDir": {}},
+                        {"name": "iron-proxy-certs", "emptyDir": {}},
+                        {
+                            "name": "iron-proxy-ca",
+                            "secret": {"secretName": _firewall_ca_key_secret_name()},
+                        },
+                    ],
+                },
+            },
+        )
+
+    async def _wait_pod_ready(self, pod_name: str) -> float:
+        deadline = time.monotonic() + _READY_TIMEOUT_S
+        while time.monotonic() < deadline:
+            pod = await self._core_api().read_namespaced_pod(pod_name, _namespace())
+            phase = (pod.status.phase or "").lower()
+            if phase in {"failed", "succeeded"}:
+                raise RuntimeError(
+                    f"pod exited before ready (pod={pod_name}, phase={phase})"
+                )
+            if phase == "running":
+                conditions = pod.status.conditions or []
+                if any(
+                    (condition.type or "").lower() == "ready"
+                    and (condition.status or "").lower() == "true"
+                    for condition in conditions
+                ):
+                    return round(_READY_TIMEOUT_S - (deadline - time.monotonic()), 3)
+            await asyncio.sleep(0.5)
+        raise TimeoutError(
+            f"pod readiness timed out after {_READY_TIMEOUT_S}s: {pod_name}"
         )
 
     async def _wait_ready(self, pod_name: str) -> float:
@@ -352,7 +935,9 @@ class KubernetesExecutorBackend(SandboxBackend):
                         ["test", "-f", "/home/agent/.ready"],
                     )
                     if exit_code == 0:
-                        return round(_READY_TIMEOUT_S - (deadline - time.monotonic()), 3)
+                        return round(
+                            _READY_TIMEOUT_S - (deadline - time.monotonic()), 3
+                        )
                 except Exception:
                     pass
             await asyncio.sleep(0.5)
@@ -377,12 +962,16 @@ class KubernetesExecutorBackend(SandboxBackend):
         if repo and not repos_path:
             raise ValueError("REPOS_PATH is required when AGENT_REPO is set")
 
-        pod_name = _resource_name("centaur-sandbox", thread_key)
+        pod_name = _resource_name("centaur-centaur-sandbox", thread_key)
         secret_name = _prompt_secret_name(pod_name)
+        firewall_host = _proxy_service_name(pod_name)
+        runtime_secret_values = await _runtime_secret_values_for_sandbox()
         env = container_env(
             thread_key,
             pod_name,
             resume_thread_id=resume_thread_id,
+            firewall_host=firewall_host,
+            runtime_secret_values=runtime_secret_values,
         )
         overlay_image = _overlay_image()
         if overlay_image:
@@ -393,6 +982,7 @@ class KubernetesExecutorBackend(SandboxBackend):
             env.append(f"AGENT_REPO={repo}")
 
         labels = {
+            "centaur.ai/sandbox-id": pod_name,
             "centaur.ai/managed": "true",
             "centaur.ai/harness": re.sub(r"[^a-z0-9-]+", "-", harness.lower()),
             "centaur.ai/engine": re.sub(r"[^a-z0-9-]+", "-", engine.lower()),
@@ -525,7 +1115,10 @@ class KubernetesExecutorBackend(SandboxBackend):
                         "tty": False,
                         "workingDir": "/home/agent",
                         "env": [
-                            {"name": item.split("=", 1)[0], "value": item.split("=", 1)[1]}
+                            {
+                                "name": item.split("=", 1)[0],
+                                "value": item.split("=", 1)[1],
+                            }
                             for item in env
                         ],
                         "resources": _pod_resources(),
@@ -547,13 +1140,20 @@ class KubernetesExecutorBackend(SandboxBackend):
             pod_spec["spec"]["serviceAccountName"] = service_account_name
 
         await self._delete_pod(pod_name)
-        await self._create_prompt_secret(secret_name, persona)
-        await self._core_api().create_namespaced_pod(_namespace(), pod_spec)
+        await self._delete_proxy_resources(pod_name)
         try:
+            await self._create_prompt_secret(secret_name, persona)
+            await self._create_proxy_service(pod_name)
+            await self._create_proxy_network_policies(pod_name)
+            await self._create_proxy_pod(pod_name)
+            await self._wait_pod_ready(_proxy_pod_name(pod_name))
+            await self._core_api().create_namespaced_pod(_namespace(), pod_spec)
             await self._wait_ready(pod_name)
         except Exception:
             with contextlib.suppress(Exception):
                 await self._delete_pod(pod_name)
+            with contextlib.suppress(Exception):
+                await self._delete_proxy_resources(pod_name)
             with contextlib.suppress(Exception):
                 await self._delete_prompt_secret(secret_name)
             raise
@@ -574,6 +1174,7 @@ class KubernetesExecutorBackend(SandboxBackend):
             engine=engine,
             warm=warm,
             backend=self.name,
+            per_sandbox_proxy=True,
         )
         return session
 
@@ -628,7 +1229,9 @@ class KubernetesExecutorBackend(SandboxBackend):
         if rt.stdin_stream is None:
             raise RuntimeError("not attached (stdin)")
         payload = json.dumps(obj, separators=(",", ":")) + "\n"
-        await rt.stdin_stream.send_bytes(bytes([STDIN_CHANNEL]) + payload.encode("utf-8"))
+        await rt.stdin_stream.send_bytes(
+            bytes([STDIN_CHANNEL]) + payload.encode("utf-8")
+        )
         log.info(
             "sandbox_stdin_write",
             thread_key=session.thread_key,
@@ -714,7 +1317,10 @@ class KubernetesExecutorBackend(SandboxBackend):
             if self._is_not_found(exc):
                 return "gone"
             raise
-        if getattr(getattr(pod, "metadata", None), "deletion_timestamp", None) is not None:
+        if (
+            getattr(getattr(pod, "metadata", None), "deletion_timestamp", None)
+            is not None
+        ):
             return "stopped"
         phase = (pod.status.phase or "").lower()
         if phase == "running":
@@ -729,6 +1335,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         await self._ensure_clients()
         await self._delete_pod(sandbox_id)
         await self._delete_prompt_secret(_prompt_secret_name(sandbox_id))
+        await self._delete_proxy_resources(sandbox_id)
 
     async def interrupt_by_id(self, sandbox_id: str) -> None:
         with contextlib.suppress(Exception):
@@ -759,7 +1366,11 @@ class KubernetesExecutorBackend(SandboxBackend):
 
         command = list(cmd)
         if environment:
-            command = ["env", *[f"{key}={value}" for key, value in environment.items()], *command]
+            command = [
+                "env",
+                *[f"{key}={value}" for key, value in environment.items()],
+                *command,
+            ]
 
         websocket_ctx = await self._ws_core_api().connect_get_namespaced_pod_exec(
             sandbox_id,
@@ -797,7 +1408,9 @@ class KubernetesExecutorBackend(SandboxBackend):
             user="agent",
         )
         if exit_code != 0:
-            log.warning("sandbox_token_refresh_failed", sandbox=sandbox_id, exit_code=exit_code)
+            log.warning(
+                "sandbox_token_refresh_failed", sandbox=sandbox_id, exit_code=exit_code
+            )
 
     async def recover_warm(self, pool_harness: str) -> list[SandboxSession]:
         await self._ensure_clients()
@@ -837,7 +1450,9 @@ class KubernetesExecutorBackend(SandboxBackend):
                     sandbox_id=pod_name,
                     thread_key="",
                     harness=annotations.get("centaur.ai/harness", pool_harness),
-                    engine=annotations.get("centaur.ai/engine", labels.get("centaur.ai/engine", "amp")),
+                    engine=annotations.get(
+                        "centaur.ai/engine", labels.get("centaur.ai/engine", "amp")
+                    ),
                     started_at=time.time(),
                     backend_name=self.name,
                 )

@@ -192,6 +192,8 @@ spec:
             httpGet:
               path: /healthz
               port: {{ .Values.ironProxy.service.healthPort }}
+            periodSeconds: 5
+            failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /healthz
@@ -233,12 +235,20 @@ spec:
               value: {{ printf "http://127.0.0.1:%v" .Values.ironProxy.service.managementPort | quote }}
             - name: FIREWALL_MANAGER_PORT
               value: {{ .Values.ironProxy.manager.service.controlPort | quote }}
+            - name: FIREWALL_MANAGER_INJECTION_MAP_URL
+              value: {{ printf "http://%s:8000/internal/injection-map" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
+            - name: FIREWALL_MANAGER_POLL_INTERVAL_SECONDS
+              value: {{ .Values.sandbox.perWorkloadProxy.pollIntervalSeconds | quote }}
+            - name: FIREWALL_MANAGER_POLL_JITTER_SECONDS
+              value: {{ .Values.sandbox.perWorkloadProxy.pollJitterSeconds | quote }}
+            - name: FIREWALL_MANAGER_STARTUP_BACKOFF_INITIAL_SECONDS
+              value: {{ .Values.sandbox.perWorkloadProxy.startupBackoffInitialSeconds | quote }}
+            - name: FIREWALL_MANAGER_STARTUP_BACKOFF_MAX_SECONDS
+              value: {{ .Values.sandbox.perWorkloadProxy.startupBackoffMaxSeconds | quote }}
             - name: FIREWALL_MANAGER_SECRET_SOURCE
               value: {{ .Values.ironProxy.manager.secretSource | quote }}
             - name: FIREWALL_MANAGER_SECRET_TTL
               value: {{ .Values.ironProxy.manager.secretTtl | quote }}
-            - name: FIREWALL_MANAGER_INJECTION_MAP_URL
-              value: {{ printf "http://%s:8000/internal/injection-map" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
           envFrom:
             - secretRef:
                 name: {{ include "centaur.secretEnvName" . }}
@@ -247,8 +257,10 @@ spec:
               name: control
           readinessProbe:
             httpGet:
-              path: /health
+              path: /health/ready
               port: {{ .Values.ironProxy.manager.service.controlPort }}
+            periodSeconds: 5
+            failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /health
@@ -482,8 +494,48 @@ spec:
               value: {{ .Values.sandbox.image.pullPolicy | quote }}
             - name: KUBERNETES_FIREWALL_CA_SECRET_NAME
               value: {{ include "centaur.trustedCaSecretName" . | quote }}
+            - name: KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME
+              value: {{ include "centaur.trustedCaKeySecretName" . | quote }}
+            - name: KUBERNETES_SECRET_ENV_NAME
+              value: {{ include "centaur.secretEnvName" . | quote }}
+            - name: KUBERNETES_SECRET_ENV_PREFIX
+              value: {{ .Values.secretManager.envPrefix | quote }}
             - name: KUBERNETES_NAMESPACE
               value: {{ .Release.Namespace | quote }}
+            - name: KUBERNETES_IRON_PROXY_IMAGE
+              value: {{ printf "%s:%s" .Values.ironProxy.image.repository .Values.ironProxy.image.tag | quote }}
+            - name: KUBERNETES_IRON_PROXY_IMAGE_PULL_POLICY
+              value: {{ .Values.ironProxy.image.pullPolicy | quote }}
+            - name: KUBERNETES_FIREWALL_MANAGER_IMAGE
+              value: {{ printf "%s:%s" .Values.ironProxy.manager.image.repository .Values.ironProxy.manager.image.tag | quote }}
+            - name: KUBERNETES_FIREWALL_MANAGER_IMAGE_PULL_POLICY
+              value: {{ .Values.ironProxy.manager.image.pullPolicy | quote }}
+            - name: KUBERNETES_IRON_PROXY_PORT
+              value: {{ .Values.ironProxy.service.proxyPort | quote }}
+            - name: KUBERNETES_IRON_PROXY_MANAGEMENT_PORT
+              value: {{ .Values.ironProxy.service.managementPort | quote }}
+            - name: KUBERNETES_IRON_PROXY_HEALTH_PORT
+              value: {{ .Values.ironProxy.service.healthPort | quote }}
+            - name: KUBERNETES_FIREWALL_MANAGER_PORT
+              value: {{ .Values.ironProxy.manager.service.controlPort | quote }}
+            - name: KUBERNETES_FIREWALL_MANAGER_POLL_INTERVAL_SECONDS
+              value: {{ .Values.sandbox.perWorkloadProxy.pollIntervalSeconds | quote }}
+            - name: KUBERNETES_FIREWALL_MANAGER_POLL_JITTER_SECONDS
+              value: {{ .Values.sandbox.perWorkloadProxy.pollJitterSeconds | quote }}
+            - name: KUBERNETES_FIREWALL_MANAGER_STARTUP_BACKOFF_INITIAL_SECONDS
+              value: {{ .Values.sandbox.perWorkloadProxy.startupBackoffInitialSeconds | quote }}
+            - name: KUBERNETES_FIREWALL_MANAGER_STARTUP_BACKOFF_MAX_SECONDS
+              value: {{ .Values.sandbox.perWorkloadProxy.startupBackoffMaxSeconds | quote }}
+            - name: KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE
+              value: {{ .Values.ironProxy.manager.secretSource | quote }}
+            - name: KUBERNETES_FIREWALL_MANAGER_SECRET_TTL
+              value: {{ .Values.ironProxy.manager.secretTtl | quote }}
+            - name: KUBERNETES_FIREWALL_MANAGER_INJECTION_MAP_URL
+              value: {{ printf "http://%s:8000/internal/injection-map" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
+            - name: KUBERNETES_API_POD_LABEL_SELECTOR
+              value: {{ printf "app.kubernetes.io/name=%s,app.kubernetes.io/instance=%s,app.kubernetes.io/component=api" (include "centaur.name" .) .Release.Name | quote }}
+            - name: KUBERNETES_SECRETS_POD_LABEL_SELECTOR
+              value: {{ printf "app.kubernetes.io/name=%s,app.kubernetes.io/instance=%s,app.kubernetes.io/component=secrets" (include "centaur.name" .) .Release.Name | quote }}
 {{- with .Values.sandbox.resources.limits }}
 {{- if and .cpu (not (hasKey $apiExtraEnv "KUBERNETES_SANDBOX_CPU_LIMIT")) }}
             - name: KUBERNETES_SANDBOX_CPU_LIMIT
