@@ -55,6 +55,7 @@ api:
   warmPoolEnabled: false
   slackEtlEnabled: true
   slackSyncIntervalSeconds: 14400
+  slackEtlExcludedChannelPatterns: ""
   victoriaMetricsPushEnabled: false
   startupProbe:
     failureThreshold: 30

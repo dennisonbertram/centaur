@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import fnmatch
 import importlib.util
 import os
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ DEFAULT_CHANNEL_PAGE_LIMIT = 600
 DEFAULT_THREAD_REPLY_PAGE_LIMIT = 200
 DEFAULT_SYNC_INTERVAL_SECONDS = 14_400
 FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+EXCLUDED_CHANNELS_ENV = "SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS"
 
 
 def _positive_int(value: int | str | None, default: int) -> int:
@@ -37,6 +39,50 @@ def _env_flag_enabled(name: str, default: bool = True) -> bool:
     if value is None:
         return default
     return value.strip().lower() not in FALSE_ENV_VALUES
+
+
+def _channel_exclusion_patterns(value: str | None) -> list[str]:
+    """Parse comma-separated Slack channel exclusion globs."""
+    if not value:
+        return []
+    patterns = []
+    for raw_pattern in value.split(","):
+        pattern = raw_pattern.strip().lower().lstrip("#")
+        if pattern:
+            patterns.append(pattern)
+    return patterns
+
+
+def _channel_name(channel: dict[str, Any]) -> str:
+    """Return the normalized channel name used for config matching."""
+    return str(channel.get("name") or "").strip().lower().lstrip("#")
+
+
+def _channel_exclusion_reason(channel: dict[str, Any], patterns: list[str]) -> str | None:
+    """Return the configured pattern excluding a channel, if any."""
+    name = _channel_name(channel)
+    if not name:
+        return None
+    for pattern in patterns:
+        if fnmatch.fnmatchcase(name, pattern):
+            return f"excluded_by_config:{pattern}"
+    return None
+
+
+def _filter_excluded_channels(
+    channels: list[dict[str, Any]],
+    patterns: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """Split Slack channels into included channels and configured exclusions."""
+    included = []
+    excluded = []
+    for channel in channels:
+        reason = _channel_exclusion_reason(channel, patterns)
+        if reason:
+            excluded.append(_channel_ref(channel, reason))
+        else:
+            included.append(channel)
+    return included, excluded
 
 
 SCHEDULE = {
@@ -512,16 +558,42 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     thread_reply_limit = _positive_int(inp.thread_reply_limit, DEFAULT_THREAD_REPLY_PAGE_LIMIT)
     client = _client()
     access_mode = client._etl_access_mode()
-    channels_to_sync = client._list_etl_channels(limit=10_000, force_refresh=True)
+    public_channels = client._list_etl_channels(limit=10_000, force_refresh=True)
+    exclusion_patterns = _channel_exclusion_patterns(os.getenv(EXCLUDED_CHANNELS_ENV))
+    channels_to_sync, excluded_channels = _filter_excluded_channels(
+        public_channels,
+        exclusion_patterns,
+    )
+    if excluded_channels:
+        ctx.log(
+            "slack_sync_channels_excluded",
+            count=len(excluded_channels),
+            patterns=exclusion_patterns,
+            channels=excluded_channels,
+        )
     await _upsert_channels(ctx._pool, channels_to_sync)
 
-    if not channels_to_sync:
+    if not public_channels:
         reason = "no_public_channels"
         ctx.log("slack_sync_skipped_no_public_channels", access_mode=access_mode, reason=reason)
         return {
             "status": "skipped",
             "reason": reason,
             "channels_skipped": [],
+        }
+
+    if not channels_to_sync:
+        reason = "all_channels_excluded"
+        ctx.log(
+            "slack_sync_skipped_all_channels_excluded",
+            access_mode=access_mode,
+            reason=reason,
+            channels_skipped=excluded_channels,
+        )
+        return {
+            "status": "skipped",
+            "reason": reason,
+            "channels_skipped": excluded_channels,
         }
 
     users = client._list_etl_users(limit=10_000)
@@ -534,16 +606,17 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         workflow_run_id=ctx.run_id,
         mode=inp.mode,
         requested=[_channel_ref(channel) for channel in channels_to_sync],
-        skipped=[],
+        skipped=excluded_channels,
         metadata={
             **inp.metadata,
             "slack_access_mode": access_mode,
             "users_upserted": users_upserted,
+            "excluded_channel_patterns": exclusion_patterns,
         },
     )
 
     synced: list[dict[str, str]] = []
-    skipped: list[dict[str, str]] = []
+    skipped: list[dict[str, str]] = list(excluded_channels)
     failed: list[dict[str, str]] = []
     counts = {
         "messages_fetched": 0,

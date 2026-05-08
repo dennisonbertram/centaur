@@ -141,7 +141,8 @@ class FakeSlackClient:
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _clear_slack_sync_tables(db_pool):
+async def _clear_slack_sync_tables(db_pool, monkeypatch):
+    monkeypatch.delenv("SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS", raising=False)
     await db_pool.execute(
         "TRUNCATE TABLE slack_sync_checkpoints, slack_sync_messages, slack_sync_runs, "
         "slack_sync_users, slack_sync_channels CASCADE",
@@ -182,6 +183,19 @@ def _other_public_channel() -> dict[str, Any]:
         "topic": "Other",
         "purpose": "Also public",
         "member_count": 5,
+    }
+
+
+def _alert_channel() -> dict[str, Any]:
+    return {
+        "id": "C_ALERTS",
+        "name": "eng-cyclops-alerts",
+        "is_private": False,
+        "is_archived": False,
+        "is_member": True,
+        "topic": "Alerts",
+        "purpose": "Monitoring noise",
+        "member_count": 3,
     }
 
 
@@ -334,6 +348,78 @@ async def test_syncs_all_public_channels_by_default(db_pool):
         {"channel_id": "C_OTHER", "channel_name": "other-channel"},
     ]
     assert json.loads(run["metadata"])["slack_access_mode"] == "user_token"
+
+
+@pytest.mark.asyncio
+async def test_excludes_channels_matching_configured_patterns(db_pool, monkeypatch):
+    from workflows import slack_sync
+
+    fake = FakeSlackClient(channels=[_public_channel(), _alert_channel()])
+    ctx = FakeCtx(db_pool)
+    monkeypatch.setenv("SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS", "#eng-*-alerts, *-monitor-*")
+
+    with patch.object(slack_sync, "_client", return_value=fake):
+        result = await slack_sync.handler(slack_sync.Input(), ctx)
+
+    assert result["status"] == "completed"
+    assert result["channels_synced"] == 1
+    assert result["channels_skipped"] == 1
+    assert [call["channel"] for call in fake.history_calls] == ["C_PUBLIC"]
+    assert await db_pool.fetchval(
+        "SELECT COUNT(*) FROM slack_sync_channels WHERE channel_id = 'C_ALERTS'",
+    ) == 0
+
+    run = await db_pool.fetchrow(
+        "SELECT channels_requested, channels_skipped, metadata FROM slack_sync_runs WHERE run_id = $1",
+        result["run_id"],
+    )
+    assert json.loads(run["channels_requested"]) == [
+        {"channel_id": "C_PUBLIC", "channel_name": "ai-agent"},
+    ]
+    assert json.loads(run["channels_skipped"]) == [
+        {
+            "channel_id": "C_ALERTS",
+            "channel_name": "eng-cyclops-alerts",
+            "reason": "excluded_by_config:eng-*-alerts",
+        },
+    ]
+    assert json.loads(run["metadata"])["excluded_channel_patterns"] == [
+        "eng-*-alerts",
+        "*-monitor-*",
+    ]
+    assert any(log[0] == "slack_sync_channels_excluded" for log in ctx.logs)
+
+
+@pytest.mark.asyncio
+async def test_all_channels_excluded_noops_without_run_row(db_pool, monkeypatch):
+    from workflows import slack_sync
+
+    await db_pool.execute(
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_member) "
+        "VALUES ('C_OLD', 'old-channel', TRUE)",
+    )
+    fake = FakeSlackClient(channels=[_alert_channel()])
+    ctx = FakeCtx(db_pool)
+    monkeypatch.setenv("SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS", "*-alerts")
+
+    with patch.object(slack_sync, "_client", return_value=fake):
+        result = await slack_sync.handler(slack_sync.Input(), ctx)
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "all_channels_excluded"
+    assert result["channels_skipped"] == [
+        {
+            "channel_id": "C_ALERTS",
+            "channel_name": "eng-cyclops-alerts",
+            "reason": "excluded_by_config:*-alerts",
+        },
+    ]
+    assert fake.history_calls == []
+    assert fake.list_etl_users_calls == 0
+    assert await db_pool.fetchval("SELECT COUNT(*) FROM slack_sync_runs") == 0
+    assert await db_pool.fetchval(
+        "SELECT is_member FROM slack_sync_channels WHERE channel_id = 'C_OLD'",
+    ) is False
 
 
 @pytest.mark.asyncio
