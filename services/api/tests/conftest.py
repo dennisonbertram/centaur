@@ -164,7 +164,7 @@ def pg():
 
     port = _pick_free_port()
     container_name = f"centaur-test-pg-{uuid.uuid4().hex[:8]}"
-    image = os.environ.get("CENTAUR_TEST_PG_IMAGE", "pgvector/pgvector:pg16")
+    image = os.environ.get("CENTAUR_TEST_PG_IMAGE", "paradedb/paradedb:0.23.0-pg16")
     admin_dsn = f"postgresql://postgres@127.0.0.1:{port}/postgres?sslmode=disable"
     dsn = _dsn_with_db(admin_dsn, database)
 
@@ -184,6 +184,8 @@ def pg():
                 "-p",
                 f"127.0.0.1:{port}:5432",
                 image,
+                "-c",
+                "shared_preload_libraries=pg_search,pg_cron",
             ],
             capture_output=True,
             text=True,

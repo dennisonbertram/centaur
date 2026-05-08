@@ -149,9 +149,12 @@ pgbouncer:
 postgres:
   enabled: true
   image:
-    repository: pgvector/pgvector
-    tag: pg16
+    repository: paradedb/paradedb
+    tag: 0.23.0-pg16
     pullPolicy: IfNotPresent
+  args:
+    - "-c"
+    - "shared_preload_libraries=pg_search,pg_cron"
   auth:
     database: ai_v2
     username: tempo
