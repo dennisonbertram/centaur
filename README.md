@@ -3,195 +3,224 @@
 </h1>
 
 <h4 align="center">
-    Self-hosted AI agent platform: give your team a shared agent that can use your tools, run durable workflows, and never see your secrets.
+    Shared AI agents for teams.
 </h4>
 
 <p align="center">
-  <a href="#whats-centaur">What's Centaur?</a> •
-  <a href="#architecture">Architecture</a> •
-  <a href="#durable-workflows">Durable Workflows</a> •
-  <a href="#security-model">Security Model</a> •
-  <a href="./AGENTS.md">Developer Guide</a>
+  Talk to an agent in Slack, give it your tools, and let it run real work in a sandbox.
 </p>
 
-## What's Centaur?
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#overview">Overview</a> •
+  <a href="#getting-started">Getting Started</a> •
+  <a href="#documentation">Documentation</a>
+</p>
 
-Most teams using AI agents hit the same wall: one engineer gets a great setup, but nobody else can replicate it. Everyone configures their own tools, manages their own keys, and builds their own workflows from scratch. There's no shared infrastructure, no compounding, and no way to trust the agent with real credentials.
+## Features
 
-Centaur fixes this. Deploy an AI agent that your whole team can talk to — in Slack or via API — with shared tools, durable multi-step workflows, and security that doesn't require trusting the agent with your keys. One person builds a workflow, and the entire team has access immediately.
+- **Slack-native agent conversations**: mention the bot in Slack and get progress plus final answers back in the thread.
+- **Real execution environment**: each conversation runs in an isolated Kubernetes sandbox with a shell, workspace, git, Python, Node.js, and common development tools.
+- **Bring your own harness**: run CLI-based agents such as Amp, Claude Code, Codex, or deployment-specific harnesses.
+- **Shared tools**: add Python tool plugins once and make them available to every agent conversation.
+- **Durable workflows**: run jobs that can sleep, resume, wait for events, start child agents, and survive service restarts.
+- **Credential boundaries**: agents can use approved services without receiving raw API keys in their environment.
+- **Replayable state**: messages, executions, events, and delivery state are stored so clients can reconnect without losing the result.
+- **Organization overlays**: layer in your own tools, workflows, personas, skills, and prompts without forking the base platform.
 
-### Add once, everyone benefits
+...and a lot more.
 
-Someone writes a 20-line Python file that checks CI every 5 minutes and posts results to Slack. They drop it in [`workflows/`](workflows/). Now every team has that capability — no setup, no configuration, no asking an engineer. The same applies to [tool plugins](tools/): add a new API integration, and every agent conversation can use it instantly. Over 60 tools ship out of the box, all hot-reloadable with zero downtime.
+## Overview
 
-### Durable agents that run for hours or days
+Centaur is a self-hosted agent platform for teams that want one shared agent instead of many one-off local setups.
 
-Most agent runtimes handle a single request-response turn. Centaur's [durable workflow engine](AGENTS.md#durable-workflows) lets agents run for hours or days — sleeping between polling iterations, waiting for external webhooks, chaining parent→child agent turns — all with exactly-once step execution backed by Postgres. Cron schedules are built in. A daily digest, a recurring monitor, a multi-step approval pipeline — these are just Python functions that checkpoint and resume.
+```text
+# 1. Ask from Slack.
+@centaur can you figure out why the billing tests are failing?
 
-### The agent never sees your secrets
+# 2. Centaur assigns a sandbox for the thread.
+# The agent can inspect code, run commands, and call approved tools.
 
-Each conversation runs in an isolated Kubernetes Pod governed by NetworkPolicies. A [MITM proxy](services/firewall/) injects real credentials at the network boundary -- the agent never holds them directly. It can make authenticated API calls through the proxy, but it can't extract keys, reach internal services, or operate undetected. Every outbound request is audit-logged. Response bodies are scanned for leaked secrets and redacted in real-time.
-
-### Bring any agent runtime
-
-Not locked to a single AI harness. Run [Amp](https://ampcode.com), Claude Code, Codex, or any CLI-based agent inside the sandbox. The container ships with Node.js, Rust, Python, and git — agents can `git clone`, `cargo build`, and run tests in a real Linux environment.
-
-### Small, auditable core
-
-Centaur's entire security-critical core is **~5,400 lines of Python**: the [API](services/api/) (3,900), [firewall](services/firewall/) (1,000), and [secrets manager](services/secrets/) (470). That's what runs your agents, guards your keys, and enforces isolation. Everything else — 60+ [tool plugins](tools/), [durable workflows](AGENTS.md#durable-workflows), a [Slack interface](services/slackbot/), observability — is a leaf-node integration that doesn't touch auth, secrets, or sandbox boundaries.
-
-## Architecture
-
-```
-                           Slack
-                             |
-                      events / webhooks
-                             v
-        ┌───────────────────────────────────────────────┐
-        │ nginx (:80, host :8000 by default)            │
-        │ public edge; routes enabled via env           │
-        └───────────────────────┬───────────────────────┘
-                                │ default: slackbot only
-                                v
-        ┌───────────────────────────────────────────────┐
-        │ slackbot (Next.js, :3001)                     │
-        │ health endpoint + Slack webhook surface       │
-        └───────────────────────┬───────────────────────┘
-                                │ spawn / message / execute
-                                v
-        ┌───────────────────────────────────────────────┐
-        │ api (FastAPI :8000)                           │
-        │ durable control plane + tools + admin         │
-        │ workflow engine (checkpoint/replay)            │
-        └───────────────┬───────────────┬───────────────┘
-                        │               │
-                        │ DB pool       │ Kubernetes API
-                        v               v
-              ┌────────────────┐   ┌──────────────────────┐
-              │ pgbouncer      │   │ sandbox Pods         │
-              └──────┬─────────┘   │ centaur-agent        │
-                     │             └──────────┬───────────┘
-                     v                        │ tool calls + HTTPS proxy
-              ┌────────────────┐              v
-              │ Postgres       │
-              │ durable state  │
-              └────────────────┘
-              ┌────────────────┐     ┌────────────────────┐
-              │ secrets        │────>│ firewall           │────> external LLMs
-              │ 1Password/env  │     │ mitmproxy          │      + external APIs
-              └────────────────┘     └────────────────────┘
-
-        Observability: api / slackbot / firewall / fluentbit ->
-                       VictoriaLogs + VictoriaMetrics -> Grafana
+# 3. Progress and the final answer are delivered back to Slack.
 ```
 
-## Durable Workflows
+You can also drive Centaur directly through the API:
 
-The workflow engine uses checkpoint/replay — the handler function IS the workflow, and steps are checkpointed to Postgres. On resume after crash or suspension, the handler re-executes top-to-bottom but skips steps that already have results. Loops, branches, and conditionals work naturally because it's just Python.
-
-```python
-# workflows/my_workflow.py — drop this file in and it's live
-WORKFLOW_NAME = "my_workflow"
-
-async def handler(inp, ctx):
-    data = await ctx.step("fetch", lambda: fetch_data(inp.query))
-    await ctx.sleep("wait", timedelta(minutes=5))
-    result = await ctx.run_agent("analyze", text=f"Summarize: {data}")
-    return {"data": data, "analysis": result}
+```text
+POST /agent/spawn      # assign or reuse a sandbox
+POST /agent/message    # store the user turn
+POST /agent/execute    # start the agent
+GET  /agent/threads/{thread_key}/events
 ```
 
-**Primitives**: `ctx.step()` (exactly-once execution), `ctx.sleep()` / `ctx.sleep_until()` (durable suspend), `ctx.wait_for_event()` (external webhook), `ctx.run_agent()` (spawn a child agent turn), `ctx.run_workflow()` (child workflow). Cron and interval schedules are built in.
+The platform handles sandbox lifecycle, durable transcript storage, tool access, credential injection, workflow execution, and final delivery.
 
-**REST API**: `POST /workflows/runs` (create), `GET /workflows/runs/{id}` (inspect), `POST /workflows/runs/{id}/cancel`, `POST /workflows/events` (deliver external events to waiting runs).
+## What Centaur Is Good For
 
-See the [Developer Guide](AGENTS.md#durable-workflows) for full API reference, built-in workflows, and the WorkflowContext API.
+- investigating CI failures
+- answering questions with internal tools
+- summarizing Slack threads or customer context
+- running recurring checks and digests
+- coordinating multi-step operational workflows
+- giving agents access to a real repo and test environment
+- standardizing agent behavior across a team
 
-## How It Compares
+## How It Works
 
-| | Centaur | OpenClaw | IronClaw |
-|---|---|---|---|
-| **Process model** | 1 conversation = 1 isolated Kubernetes Pod | Single Node.js process, full system access | WASM sandbox per tool |
-| **Secrets** | MITM proxy injection — agent can't extract keys, but can make calls through the proxy | `~/.openclaw/credentials/` with file perms | Host boundary injection (WASM only) |
-| **Blast radius** | Pod isolated by NetworkPolicy, method-filtered, rate-limited | Agent has shell, filesystem, browser, credentials | WASM sandbox, limited to declared capabilities |
-| **Audit logging** | Every outbound request audit-logged via firewall; all container logs auto-collected into VictoriaLogs | None built-in | None built-in |
-| **Agent runtime** | Harness-agnostic (Amp, Claude Code, Codex, any CLI) | Locked to OpenClaw's runtime | Locked to IronClaw's runtime |
-| **Real engineering** | Full Linux sandbox — `git clone`, `cargo build`, run tests | Yes (but with full host access) | WASM — can't run arbitrary code |
-| **Tools & skills** | API-mediated plugins + [`SKILL.md`](.agents/skills/) workflow instructions, hot-reloadable | 100+ AgentSkills with local access | WASM tools, hot-loadable |
+```text
+Slack or API
+    |
+    v
+Centaur API
+    |
+    +-- Postgres durable state
+    +-- tool and workflow registry
+    +-- sandbox assignment
+    |
+    v
+Kubernetes sandbox
+    |
+    +-- agent harness
+    +-- workspace and shell
+    +-- API-mediated tool calls
+    |
+    v
+Controlled outbound access
+```
 
-## Security Model
+The main directories are:
 
-Centaur's security is defense in depth — no single layer is a silver bullet, but the combination makes compromise expensive and detectable.
-
-### What an attacker cannot do
-
-- **Extract credentials**: The agent never holds real API keys. Credentials exist only in the secrets manager and are only delivered in-flight by the firewall. Sandbox Pods see only key _names_ as placeholder values (e.g. `OPENAI_API_KEY=OPENAI_API_KEY` in the environment) -- the real secret values never appear in the Pod's environment, filesystem, or memory.
-
-- **Move laterally**: Sandbox Pods are isolated by Kubernetes NetworkPolicies. SSRF protection blocks requests to private IPs by resolving hostnames before forwarding. The database, secrets manager, and observability stack are not reachable from sandboxes except through explicitly allowed service paths. Redirect responses to internal IPs are also blocked.
-
-- **Use credentials on the wrong host**: Tools declare which API hosts and secret keys they need in their `pyproject.toml`. The API builds a host→keys injection map and pushes it to the firewall. A Slack tool's token can't be injected into an Etherscan request — the firewall strips unmatched key placeholders and logs the violation.
-
-- **Escalate privileges**: Each sandbox gets an HMAC-SHA256 signed token (`sbx1.*`) bound to its thread and sandbox ID, time-limited to 2 hours, with scopes restricted to `agent` and `tools:*` only. No admin access, no secrets endpoints, no key management. Database-backed API keys enforce fine-grained scopes (`admin`, `agent:execute`, `tools:<name>`, `threads:read`).
-
-- **Smuggle key names past the firewall**: The firewall applies NFKC unicode normalization, strips zero-width characters, and maps Cyrillic/Greek homoglyphs before scanning for key name placeholders. Header values that don't match the outbound allowlist are stripped entirely. User-Agent is forced to a fixed value.
-
-- **Operate undetected**: Every outbound request is audit-logged with method, host, path, status, request/response bytes, duration, and source container IP. Response bodies from LLM APIs are scanned for leaked secret values and redacted in real-time.
-
-### What an attacker can do
-
-- **Make authenticated requests through the proxy**: A compromised container can make API calls that the firewall will authenticate — this is by design, since the agent needs to call LLM APIs to function. The firewall limits this with HTTP method restrictions (non-allowlisted hosts are GET-only), per-source-IP rate limits (500 req/min default), and the injection map (credentials only go to declared hosts). But within those limits, a hijacked agent can make arbitrary calls to any API host it's authorized for.
-
-- **Call any registered tool**: The agent can invoke any tool via the API. Centaur scopes tool access per API key, but sandboxes currently get `tools:*` scope which grants access to all registered tools.
-
-- **Read data returned by API calls and tools**: The agent sees full responses from LLM APIs and tools it invokes. Response scanning redacts known secret values, but the agent sees all other data.
-
-- **Potentially root the sandbox**: The sandbox is a Kubernetes Pod, not a VM. Container escapes are a known risk class. Centaur mitigates with resource limits, read-only host mounts where used, least-privilege service accounts, and NetworkPolicies that keep sandboxes away from internal control-plane services.
-
-### Architecture decisions that enforce this
-
-- **Scoped sandbox tokens**: HMAC-SHA256 signed, thread+container bound, 2-hour TTL, minted on spawn and refreshed when claiming from the warm pool.
-
-- **Per-host injection maps**: Built from tool manifests, pushed to the firewall on startup and on every hot-reload. Wildcard host patterns (`*.domain.com`) are supported. Catch-all domains and raw IPs are rejected.
-
-- **Kubernetes NetworkPolicies**: The chart denies traffic by default and then explicitly allows API, pgbouncer, Postgres, secrets, firewall, Slackbot, DNS, and sandbox egress paths needed for the local deployment.
-
-- **Warm pool**: Pre-spawned sandbox Pods eliminate cold-start latency. The pool auto-replenishes, recovers on API restart, and mints fresh scoped tokens on claim.
-
-- **Tool REST API**: Tools auto-generate endpoints at `/tools/{name}/{method}` with scope-checked access and method introspection. The API serves as a hosted tool server — sandboxes call it via `curl`, no MCP protocol needed.
+- [`services/api`](services/api/) — control plane for agents, tools, workflows, auth, and durable state
+- [`services/slackbot`](services/slackbot/) — Slack event handling and Slack delivery
+- [`services/sandbox`](services/sandbox/) — agent container image and harness adapter
+- [`services/secrets`](services/secrets/) — secret loading service
+- [`services/iron-proxy`](services/iron-proxy/) and [`services/firewall-manager`](services/firewall-manager/) — controlled outbound access
+- [`tools`](tools/) — tool plugins
+- [`workflows`](workflows/) — workflow plugins
 
 ## Getting Started
 
-See the [Developer Guide](./AGENTS.md) for full setup instructions, architecture details, and API reference. The short version:
+Centaur runs locally on Kubernetes. The expected local checkout path is:
 
-```sh
+```bash
+/Users/magelinskaas/paradigmxyz/centaur
+```
+
+Clone the repo and enter it:
+
+```bash
 git clone <repo-url>
 cd centaur
-brew install just              # if needed
-export OP_SERVICE_ACCOUNT_TOKEN=... OP_VAULT=...
-export SLACK_BOT_TOKEN=... SLACK_SIGNING_SECRET=... SLACKBOT_API_KEY=...
+```
+
+Install the local command runner:
+
+```bash
+brew install just
+```
+
+For a first-time local boot, Centaur needs these infrastructure secrets in your shell:
+
+```bash
+export OP_SERVICE_ACCOUNT_TOKEN=...
+export OP_VAULT=...
+export SLACK_BOT_TOKEN=...
+export SLACK_SIGNING_SECRET=...
+export SLACKBOT_API_KEY=...
+```
+
+What they are for:
+
+- `OP_SERVICE_ACCOUNT_TOKEN`: lets the secrets service read application secrets from 1Password
+- `OP_VAULT`: the 1Password vault name or id to read from
+- `SLACK_BOT_TOKEN`: Slack bot token for the local Slackbot service
+- `SLACK_SIGNING_SECRET`: verifies incoming Slack requests
+- `SLACKBOT_API_KEY`: API key the Slackbot uses to call Centaur
+
+Then create local Kubernetes Secrets from those environment variables and boot the stack:
+
+```bash
+just bootstrap-secrets
 just up
 ```
 
-## Database Migrations
+After `just up` finishes, use Slack, the API, or the local smoke test in the [Developer Guide](AGENTS.md#e2e-testing-without-slack).
 
-Use `./scripts/dbmate new add_agent_leases` to create the next numbered migration in `services/api/db/migrations`.
+## Tools
 
-Use `./scripts/dbmate up`, `./scripts/dbmate status`, or any other `dbmate` subcommand to run migrations against the same `DATABASE_URL` the API service uses. If `DATABASE_URL` is not set in your shell, the wrapper reads it from the running `api` container.
+Tools are small Python plugins. A tool can wrap an internal service, public API, database, search endpoint, deployment system, or anything else an agent should be allowed to use.
+
+```text
+tools/my_tool/
+├── __init__.py
+├── client.py
+├── cli.py
+├── .env.example
+└── pyproject.toml
+```
+
+Public methods on the client become tool endpoints. For example, `search()` becomes:
+
+```text
+POST /tools/my_tool/search
+```
+
+## Workflows
+
+Workflows are Python functions with durable steps.
+
+```python
+WORKFLOW_NAME = "daily_digest"
+
+async def handler(inp, ctx):
+    data = await ctx.step("collect", lambda: collect_digest_data(inp))
+    summary = await ctx.run_agent("summarize", text=f"Summarize this: {data}")
+    return {"summary": summary}
+```
+
+Use workflows when a task should run longer than one request, wait for something external, run on a schedule, or coordinate multiple agent turns.
+
+## Security Model
+
+Centaur is designed around practical isolation and auditability:
+
+- each conversation runs in a Kubernetes sandbox
+- sandboxes call tools through the Centaur API
+- sandbox network access is restricted
+- real credentials are injected only at the controlled network boundary
+- messages, executions, events, and delivery state are persisted
+- outbound activity can be audited
+
+This gives agents useful power without treating them like trusted production services.
+
+## Documentation
+
+- [Developer Guide](AGENTS.md) — full local setup, architecture, API contracts, migrations, testing, and conventions
+- [Tools](tools/) — built-in tool plugins
+- [Workflows](workflows/) — external workflow plugins
+- [API service](services/api/) — FastAPI control plane
+- [Slackbot](services/slackbot/) — Slack integration
+- [Sandbox](services/sandbox/) — agent runtime image
 
 ## Contributing
 
-Centaur is built by open source contributors like you, thank you for improving the project!
+Before pushing changes, build and test the affected service locally:
 
-The [Developer Guide](./AGENTS.md) covers architecture, code conventions, and how to add tools. Each service has its own `pyproject.toml` and `ruff.toml`. Pull requests will not be merged unless CI passes.
+```bash
+just build-one <service>
+just deploy
+```
+
+For Python checks:
+
+```bash
+uv run ruff check .
+uv run ruff format .
+uv run pytest
+```
+
+See the [Developer Guide](AGENTS.md) for code conventions and end-to-end testing instructions.
 
 ## Acknowledgements
 
-Centaur builds on excellent open-source infrastructure:
-
-- [Amp](https://ampcode.com): The primary AI coding agent harness used inside the sandbox.
-- [mitmproxy](https://mitmproxy.org/): Powers the firewall's credential injection via HTTPS interception.
-- [FastAPI](https://fastapi.tiangolo.com/): The API server framework.
-- [Kubernetes](https://kubernetes.io/): Pod orchestration and NetworkPolicy isolation for agent sandboxes.
-
-## Links
-
-- [Amp](https://ampcode.com)
+Centaur builds on excellent open-source infrastructure, including [FastAPI](https://fastapi.tiangolo.com/), [Kubernetes](https://kubernetes.io/), [mitmproxy](https://mitmproxy.org/), and the agent harnesses teams choose to run inside the sandbox.
