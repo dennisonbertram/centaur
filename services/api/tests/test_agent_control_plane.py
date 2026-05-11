@@ -1840,6 +1840,39 @@ async def test_steer_execution_persists_and_injects_explicit_message(db_pool):
 
 
 @pytest.mark.asyncio
+async def test_steer_stdin_interrupts_amp_before_injecting(monkeypatch):
+    from api.agent import steer_stdin
+
+    calls: list[str] = []
+
+    async def _interrupt_by_id(_sandbox_id: str) -> None:
+        calls.append("interrupt")
+
+    async def _write_stdin(_session: SandboxSession, _payload: dict) -> None:
+        calls.append("write")
+
+    backend = SimpleNamespace(
+        interrupt_by_id=AsyncMock(side_effect=_interrupt_by_id),
+        write_stdin=AsyncMock(side_effect=_write_stdin),
+    )
+    monkeypatch.setattr("api.agent.get_backend", lambda: backend)
+    monkeypatch.setattr("api.agent.asyncio.sleep", AsyncMock())
+
+    session = SandboxSession(
+        sandbox_id=f"rt-{uuid.uuid4().hex[:8]}",
+        thread_key=f"slack:C-test:{uuid.uuid4().hex}",
+        harness="amp",
+        engine="amp",
+    )
+
+    result = await steer_stdin(session, [{"type": "text", "text": "stop"}])
+
+    assert result == {"ok": True, "steered": True}
+    assert calls == ["interrupt", "write"]
+    backend.interrupt_by_id.assert_awaited_once_with(session.sandbox_id)
+
+
+@pytest.mark.asyncio
 async def test_recover_stale_running_requeues_expired_execution(db_pool):
     from api.runtime_control import _recover_stale_running
 
