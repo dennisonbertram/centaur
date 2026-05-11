@@ -386,6 +386,7 @@ spec:
       labels:
 {{ include "centaur.componentSelectorLabels" (dict "root" . "component" "api") | nindent 8 }}
     spec:
+      terminationGracePeriodSeconds: {{ .Values.api.terminationGracePeriodSeconds }}
       automountServiceAccountToken: true
       serviceAccountName: {{ include "centaur.apiServiceAccountName" . }}
       {{- with .Values.global.imagePullSecrets }}

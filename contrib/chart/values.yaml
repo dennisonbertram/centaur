@@ -77,6 +77,7 @@ api:
     namespace: centaur-egress
     clusterDomain: cluster.local
     tailnetFqdnAnnotation: tailscale.com/tailnet-fqdn
+  terminationGracePeriodSeconds: 35
   extraEnv: {}
   resources: {}
 

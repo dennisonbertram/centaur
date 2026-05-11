@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import signal
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -62,6 +63,47 @@ initialize_laminar(service="api")
 
 log = structlog.get_logger().bind(service="api")
 
+# ---------------------------------------------------------------------------
+# Graceful shutdown state
+# ---------------------------------------------------------------------------
+_shutting_down = False
+
+SHUTDOWN_DRAIN_TIMEOUT_S = float(os.getenv("SHUTDOWN_DRAIN_TIMEOUT_S", "25"))
+
+
+def is_shutting_down() -> bool:
+    return _shutting_down
+
+
+def _get_in_flight_count() -> float:
+    """Read the current value of the in-flight request gauge."""
+    key: tuple[tuple[str, str], ...] = ()
+    with HTTP_REQUESTS_IN_PROGRESS._lock:
+        return HTTP_REQUESTS_IN_PROGRESS._values.get(key, 0)
+
+
+async def _drain_in_flight_requests() -> None:
+    """Wait for in-flight HTTP requests to complete, up to the drain timeout."""
+    deadline = time.monotonic() + SHUTDOWN_DRAIN_TIMEOUT_S
+    while time.monotonic() < deadline:
+        in_flight = _get_in_flight_count()
+        if in_flight <= 0:
+            log.info("graceful_drain_complete")
+            return
+        remaining = max(deadline - time.monotonic(), 0)
+        log.info(
+            "graceful_drain_waiting",
+            in_flight=in_flight,
+            remaining_s=round(remaining, 1),
+        )
+        await asyncio.sleep(min(0.5, remaining))
+    log.warning(
+        "graceful_drain_timeout",
+        in_flight=_get_in_flight_count(),
+        timeout_s=SHUTDOWN_DRAIN_TIMEOUT_S,
+    )
+
+
 # Suppress noisy uvicorn access logs; container-level logs already capture requests.
 for _uvi_name in ("uvicorn.access",):
     logging.getLogger(_uvi_name).propagate = False
@@ -118,6 +160,8 @@ async def _reconcile_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    global _shutting_down
+
     app.state.db_pool = await create_pool(settings.database_url)
     await bootstrap_service_api_keys(app.state.db_pool)
     execution_worker_enabled = os.getenv(
@@ -154,9 +198,36 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     if warm_pool_enabled:
         await start_replenish_loop()
+
+    # Register signal handlers so we can mark ourselves as draining before
+    # uvicorn triggers the lifespan teardown.  We re-raise to let uvicorn
+    # proceed with its own shutdown sequence.
+    _original_sigterm = signal.getsignal(signal.SIGTERM)
+    _original_sigint = signal.getsignal(signal.SIGINT)
+
+    def _on_shutdown_signal(signum: int, frame) -> None:
+        global _shutting_down
+        if not _shutting_down:
+            _shutting_down = True
+            log.info("graceful_shutdown_initiated", signal=signal.Signals(signum).name)
+        # Re-install the original handler and re-raise so uvicorn proceeds
+        # with its shutdown.
+        signal.signal(signum, _original_sigterm if signum == signal.SIGTERM else _original_sigint)
+        os.kill(os.getpid(), signum)
+
+    signal.signal(signal.SIGTERM, _on_shutdown_signal)
+    signal.signal(signal.SIGINT, _on_shutdown_signal)
+
     try:
         yield
     finally:
+        _shutting_down = True
+        log.info("graceful_shutdown_started")
+
+        # Wait for in-flight HTTP requests to finish before tearing down
+        # background workers and the DB pool.
+        await _drain_in_flight_requests()
+
         await stop_push_loop()
         if warm_pool_enabled:
             await stop_replenish_loop()
@@ -176,6 +247,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             with suppress(asyncio.CancelledError):
                 await reconcile_task
         await close_pool(app.state.db_pool)
+        log.info("graceful_shutdown_complete")
 
 
 app = FastAPI(

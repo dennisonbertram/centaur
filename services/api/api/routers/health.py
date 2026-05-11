@@ -21,7 +21,13 @@ async def health() -> dict:
 @router.get("/health/ready")
 @router.get("/readyz")
 async def readyz() -> Response:
-    from api.app import app
+    from api.app import app, is_shutting_down
+
+    if is_shutting_down():
+        return JSONResponse(
+            status_code=503,
+            content={"status": "draining"},
+        )
 
     report = await check_schema_compatibility(app.state.db_pool)
     payload = {
