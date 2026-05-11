@@ -20,6 +20,7 @@ from api.agent import (
     _stream_stdout,
     get_or_spawn,
     inject_stdin,
+    steer_stdin,
     stop_session,
 )
 from api.observability import (
@@ -1220,6 +1221,104 @@ async def cancel_execution(pool, execution_id: str) -> dict[str, Any] | None:
         "execution_id": execution_id,
         "thread_key": thread_key,
         "status": "cancel_requested" if status != "queued" else "cancelled",
+    }
+
+
+async def steer_execution(
+    pool,
+    execution_id: str,
+    *,
+    content_blocks: list[dict] | None = None,
+) -> dict[str, Any] | None:
+    """Steer a running execution by injecting a steer message.
+
+    If content_blocks is provided, they are sent as the steer message.
+    Otherwise, pending buffered messages for the thread are flushed and sent.
+
+    Falls back to cancel_execution() if steering fails.
+    """
+    from api.agent import _db_get_session, _flush_pending, _flushed_to_messages, _get_last_delivered_id
+    from api.sandbox.harness_protocol import messages_to_content_blocks
+
+    row = await pool.fetchrow(
+        "SELECT execution_id, thread_key, assignment_generation, status "
+        "FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    if not row:
+        return None
+
+    status = row["status"]
+    thread_key = row["thread_key"]
+    assignment_generation = int(row["assignment_generation"])
+
+    if status != "running":
+        log.info(
+            "steer_skipped_not_running",
+            execution_id=execution_id,
+            thread_key=thread_key,
+            status=status,
+        )
+        return await cancel_execution(pool, execution_id)
+
+    # Build content blocks from pending messages if not provided
+    if content_blocks is None:
+        last_delivered_id = await _get_last_delivered_id(thread_key)
+        flushed = await _flush_pending(thread_key, last_delivered_id)
+        if flushed:
+            msgs = _flushed_to_messages(flushed)
+            content_blocks = messages_to_content_blocks(msgs)
+
+    if not content_blocks:
+        log.info(
+            "steer_no_content",
+            execution_id=execution_id,
+            thread_key=thread_key,
+        )
+        return await cancel_execution(pool, execution_id)
+
+    # Get the sandbox session
+    session = await _db_get_session(thread_key)
+    if not session or session.db_state not in ("running", "idle"):
+        log.warning(
+            "steer_no_session",
+            execution_id=execution_id,
+            thread_key=thread_key,
+        )
+        return await cancel_execution(pool, execution_id)
+
+    # Attach to the sandbox and inject the steer message
+    backend = get_backend()
+    try:
+        await backend.attach(session)
+    except Exception:
+        log.warning(
+            "steer_attach_failed",
+            execution_id=execution_id,
+            thread_key=thread_key,
+            exc_info=True,
+        )
+        return await cancel_execution(pool, execution_id)
+
+    result = await steer_stdin(session, content_blocks)
+    if not result.get("ok"):
+        log.warning(
+            "steer_fallback_to_cancel",
+            execution_id=execution_id,
+            thread_key=thread_key,
+        )
+        return await cancel_execution(pool, execution_id)
+
+    log.info(
+        "execution_steered",
+        execution_id=execution_id,
+        thread_key=thread_key,
+    )
+    return {
+        "ok": True,
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "status": "steered",
     }
 
 

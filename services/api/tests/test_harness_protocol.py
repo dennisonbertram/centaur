@@ -222,6 +222,23 @@ class TestBuildUserInput:
         assert result["type"] == "user"
         assert result["message"]["role"] == "user"
 
+    def test_steer_flag(self):
+        blocks = [{"type": "text", "text": "stop and do this"}]
+        result = build_user_input(blocks, steer=True)
+        assert result["steer"] is True
+        assert result["type"] == "user"
+        assert result["message"]["content"] == blocks
+
+    def test_steer_false_omits_key(self):
+        blocks = [{"type": "text", "text": "hi"}]
+        result = build_user_input(blocks, steer=False)
+        assert "steer" not in result
+
+    def test_steer_default_omits_key(self):
+        blocks = [{"type": "text", "text": "hi"}]
+        result = build_user_input(blocks)
+        assert "steer" not in result
+
 
 class TestMessagesToContentBlocks:
     def test_simple_text_message(self):

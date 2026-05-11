@@ -653,7 +653,7 @@ export class SlackBot {
     historyMessages?: SlackHistoryWorkflowMessage[],
   ) {
     const threadKey = normalizeThreadKey(thread.id);
-    await this.cancelInflightExecution(threadKey);
+    await this.steerOrCancelInflightExecution(threadKey);
     const promptSelector = promptSelectorOverride ?? parsePromptSelectorFlag(text);
     if (promptSelector) {
       await this.releaseForPromptSwitch(threadKey, delivery.messageId);
@@ -1267,6 +1267,44 @@ export class SlackBot {
       log.warn("final_delivery_fail_mark_failed", {
         thread_key: threadKey,
         execution_id: executionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async steerOrCancelInflightExecution(threadKey: string): Promise<void> {
+    const current = this.inFlightExecutions.get(threadKey);
+    if (!current) return;
+
+    // Abort the local SSE stream reader so we stop processing old events
+    this.inFlightExecutions.delete(threadKey);
+    current.abortController.abort();
+
+    // Try to steer the execution first — this preserves conversation context
+    try {
+      const result = await this.client.steerExecution(current.executionId);
+      if (result.status === "steered") {
+        log.info("steered_previous_execution", {
+          thread_key: threadKey,
+          execution_id: current.executionId,
+        });
+        return;
+      }
+    } catch (err) {
+      log.warn("steer_previous_execution_failed", {
+        thread_key: threadKey,
+        execution_id: current.executionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    // Fall back to hard cancel
+    try {
+      await this.client.cancelExecution(current.executionId);
+    } catch (err) {
+      log.warn("cancel_previous_execution_failed", {
+        thread_key: threadKey,
+        execution_id: current.executionId,
         error: err instanceof Error ? err.message : String(err),
       });
     }

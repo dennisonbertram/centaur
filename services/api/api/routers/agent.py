@@ -45,6 +45,7 @@ from api.runtime_control import (
     list_thread_executions,
     release_assignment,
     spawn_assignment,
+    steer_execution,
 )
 from api.warm_pool import pool_status
 from api.warm_pool import replenish as replenish_pool
@@ -918,6 +919,21 @@ async def execution_cancel(request: Request, execution_id: str):
         status=result.get("status"),
     )
     return result
+
+
+@router.post("/executions/{execution_id}/steer", dependencies=[Depends(require_scope("agent:execute"))])
+async def steer_execution_endpoint(execution_id: str, request: Request):
+    """Steer a running execution with a new user message.
+
+    Injects a steer message into the sandbox's stdin, causing Amp to
+    cancel the current tool call and process the new message instead.
+    Falls back to cancellation if steering fails.
+    """
+    pool = request.app.state.db_pool
+    result = await steer_execution(pool, execution_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    return JSONResponse(status_code=200, content=result)
 
 
 class ClaimFinalDeliveryRequest(BaseModel):
