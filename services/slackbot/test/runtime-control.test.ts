@@ -229,8 +229,34 @@ describe("SlackBot runtime control", () => {
     }));
 
     expect(oldAbortController.signal.aborted).toBe(true);
-    expect(client.cancelExecution).toHaveBeenCalledWith("exe-old");
+    expect(client.cancelExecution).not.toHaveBeenCalled();
     expect(client.startWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it("starts a new workflow when a follow-up steer races with cancellation", async () => {
+    const client = createImmediateStreamClient();
+    client.steerExecution = vi.fn(async () => ({ ok: true, status: "cancel_requested" }));
+    const bot = new SlackBot(client as any);
+    const { thread } = createThread();
+    const oldAbortController = new AbortController();
+
+    (bot as any).inFlightExecutions.set(normalizedThreadKey, {
+      executionId: "exe-old",
+      abortController: oldAbortController,
+    });
+
+    await bot.onSubscribedMessage(thread, userMessage("actually, not bootnodes, static peers", {
+      id: "1700000000.000007",
+      isMention: true,
+    }));
+
+    expect(oldAbortController.signal.aborted).toBe(true);
+    expect(client.cancelExecution).not.toHaveBeenCalled();
+    expect(client.startWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(client.startWorkflowRun.mock.calls[0][0].input.message_id).toBe("slack:1700000000.000007");
+    expect(client.startWorkflowRun.mock.calls[0][0].input.parts).toEqual([
+      { type: "text", text: "actually, not bootnodes, static peers" },
+    ]);
   });
 
   it("excludes Slack messages newer than the current mention from workflow history", async () => {

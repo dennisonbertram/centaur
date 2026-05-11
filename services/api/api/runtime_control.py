@@ -1327,6 +1327,27 @@ async def steer_execution(
         )
         return await cancel_execution(pool, execution_id)
 
+    await asyncio.sleep(0.05)
+    current = await pool.fetchrow(
+        "SELECT status, terminal_reason FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    current_status = current["status"] if current else None
+    if current_status != "running":
+        log.info(
+            "steer_completed_during_inject",
+            execution_id=execution_id,
+            thread_key=thread_key,
+            status=current_status,
+            terminal_reason=current["terminal_reason"] if current else None,
+        )
+        return {
+            "ok": True,
+            "execution_id": execution_id,
+            "thread_key": thread_key,
+            "status": "cancel_requested" if current_status == "cancelled" else current_status,
+        }
+
     log.info(
         "execution_steered",
         execution_id=execution_id,

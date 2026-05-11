@@ -1840,6 +1840,69 @@ async def test_steer_execution_persists_and_injects_explicit_message(db_pool):
 
 
 @pytest.mark.asyncio
+async def test_steer_execution_reports_cancel_when_execution_finishes_during_inject(db_pool):
+    from api.runtime_control import steer_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+    message_id = f"slack:{uuid.uuid4().hex[:12]}"
+    content_blocks = [{"type": "text", "text": "actually do the other thing"}]
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions ("
+        "thread_key, sandbox_id, harness, engine, state, started_at, last_delivered_id"
+        ") VALUES ($1, $2, 'amp', 'amp', 'running', NOW(), NULL)",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, started_at"
+        ") VALUES ($1, $2, 1, 'exec-steer', 'hash-steer', 'running', '{}'::jsonb, '{}'::jsonb, NOW() - INTERVAL '500 milliseconds')",
+        execution_id,
+        thread_key,
+    )
+
+    async def _steer_then_cancel(*_args, **_kwargs):
+        await db_pool.execute(
+            "UPDATE agent_execution_requests SET status = 'cancelled', terminal_reason = 'cancel_requested' "
+            "WHERE execution_id = $1",
+            execution_id,
+        )
+        return {"ok": True, "steered": True}
+
+    backend = SimpleNamespace(attach=AsyncMock())
+    with (
+        patch("api.runtime_control.get_backend", return_value=backend),
+        patch("api.runtime_control.steer_stdin", AsyncMock(side_effect=_steer_then_cancel)),
+    ):
+        result = await steer_execution(
+            db_pool,
+            execution_id,
+            content_blocks=content_blocks,
+            message_id=message_id,
+            metadata={"platform": "slack", "user_id": "U-test"},
+        )
+
+    assert result == {
+        "ok": True,
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "status": "cancel_requested",
+    }
+
+
+@pytest.mark.asyncio
 async def test_steer_stdin_interrupts_amp_before_injecting(monkeypatch):
     from api.agent import steer_stdin
 

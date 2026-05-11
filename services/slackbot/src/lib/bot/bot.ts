@@ -84,6 +84,17 @@ function resolveRepoRef(repoContext?: SlackRepoContext): string {
   return repoContext?.gitCommit?.trim() || repoContext?.gitRef?.trim() || "";
 }
 
+function isStopOnlyRequest(parts: InputContentBlock[]): boolean {
+  const text = parts
+    .map((part) => part.type === "text" && typeof part.text === "string" ? part.text : "")
+    .join(" ")
+    .replace(/<@[^>]+>/g, " ")
+    .replace(/@\S+/g, " ")
+    .trim()
+    .toLowerCase();
+  return /^(stop|cancel|abort|nevermind|never mind|nvm|no need|ignore)$/.test(text);
+}
+
 function buildGitHubBlobUrl(
   owner: string,
   repo: string,
@@ -1320,6 +1331,17 @@ export class SlackBot {
           message_id: delivery.messageId,
         });
         return "steered";
+      }
+      if (result.status === "cancel_requested" || result.status === "cancelled") {
+        this.inFlightExecutions.delete(threadKey);
+        current.abortController.abort();
+        log.info("steer_cancelled_previous_execution", {
+          thread_key: threadKey,
+          execution_id: current.executionId,
+          message_id: delivery.messageId,
+          status: result.status,
+        });
+        return isStopOnlyRequest(parts) ? "cancelled" : "none";
       }
     } catch (err) {
       log.warn("steer_previous_execution_failed", {
