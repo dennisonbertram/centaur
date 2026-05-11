@@ -1080,6 +1080,38 @@ async def inject_stdin(
     }
 
 
+async def steer_stdin(
+    session: SandboxSession,
+    content_blocks: list[dict],
+) -> dict:
+    """Inject a steer message into a running sandbox's stdin.
+
+    Unlike inject_stdin(), this does NOT start a new turn or reset turn counters.
+    The steer message tells Amp to cancel the current tool call and process
+    the new message instead, preserving conversation context.
+    """
+    turn_input = build_user_input(content_blocks, steer=True)
+    backend = get_backend()
+
+    try:
+        await backend.write_stdin(session, turn_input)
+    except (BrokenPipeError, OSError, RuntimeError, AssertionError) as exc:
+        log.warning(
+            "steer_stdin_failed",
+            thread_key=session.thread_key,
+            sandbox=session.sandbox_id[:12],
+            error=str(exc),
+        )
+        return {"ok": False, "error": str(exc)}
+
+    log.info(
+        "steer_injected",
+        thread_key=session.thread_key,
+        sandbox=session.sandbox_id[:12],
+    )
+    return {"ok": True, "steered": True}
+
+
 async def replay_inflight_turn(session: SandboxSession) -> dict:
     """Replay the persisted in-flight turn into a (new) sandbox.
 

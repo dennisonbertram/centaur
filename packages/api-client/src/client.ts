@@ -320,6 +320,11 @@ export class CentaurClient {
     return data as Record<string, unknown>;
   }
 
+  async steerExecution(executionId: string) {
+    const { data } = await this.http.post(`/agent/executions/${encodeURIComponent(executionId)}/steer`);
+    return data as Record<string, unknown>;
+  }
+
   async releaseThread(threadKey: string, opts?: { releaseId?: string; cancelInflight?: boolean }) {
     const { data } = await this.http.post(
       `/agent/threads/${encodeURIComponent(threadKey)}/release`,

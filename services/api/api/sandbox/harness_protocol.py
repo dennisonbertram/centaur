@@ -105,15 +105,18 @@ def extract_thread_id(engine: str, event: dict) -> str | None:
     return None
 
 
-def build_user_input(content_blocks: list[dict]) -> dict:
+def build_user_input(content_blocks: list[dict], *, steer: bool = False) -> dict:
     """Build a harness-native user input envelope from content blocks."""
-    return {
+    envelope = {
         "type": "user",
         "message": {
             "role": "user",
             "content": content_blocks,
         },
     }
+    if steer:
+        envelope["steer"] = True
+    return envelope
 
 
 def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
