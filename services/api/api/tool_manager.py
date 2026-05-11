@@ -82,6 +82,9 @@ _TOOL_BINARY_PREVIEW_BYTES = max(
 # replaced with a download URL so it doesn't bloat the agent context window.
 _ATTACHMENT_EXTRACT_MIN_BYTES = 64 * 1024  # 64 KB
 
+# Maximum wall-clock seconds a single tool call may run before being cancelled.
+_TOOL_CALL_TIMEOUT_S = int(os.getenv("TOOL_CALL_TIMEOUT_S", "120"))
+
 
 async def _extract_tool_attachment(
     result: dict[str, Any],
@@ -895,9 +898,10 @@ class ToolManager:
                     }
                 )
                 if inspect.iscoroutinefunction(method.fn):
-                    result = await method.fn(**args)
+                    coro = method.fn(**args)
                 else:
-                    result = await asyncio.to_thread(method.fn, **args)
+                    coro = asyncio.to_thread(method.fn, **args)
+                result = await asyncio.wait_for(coro, timeout=_TOOL_CALL_TIMEOUT_S)
             duration_ms = round((time.monotonic() - t0) * 1000)
             log.info(
                 "tool_call_completed",
@@ -909,7 +913,12 @@ class ToolManager:
             return result
         except (SystemExit, Exception) as e:
             duration_ms = round((time.monotonic() - t0) * 1000)
-            error_msg = f"sys.exit({e.code})" if isinstance(e, SystemExit) else str(e)
+            if isinstance(e, asyncio.TimeoutError):
+                error_msg = f"Tool call timed out after {_TOOL_CALL_TIMEOUT_S}s"
+            elif isinstance(e, SystemExit):
+                error_msg = f"sys.exit({e.code})"
+            else:
+                error_msg = str(e)
             log.warning(
                 "tool_call_completed",
                 duration_ms=duration_ms,
@@ -1046,9 +1055,10 @@ class ToolManager:
                     }
                 )
                 if inspect.iscoroutinefunction(method.fn):
-                    result = await method.fn(**args)
+                    coro = method.fn(**args)
                 else:
-                    result = await asyncio.to_thread(method.fn, **args)
+                    coro = asyncio.to_thread(method.fn, **args)
+                result = await asyncio.wait_for(coro, timeout=_TOOL_CALL_TIMEOUT_S)
             duration_ms = round((time.monotonic() - t0) * 1000)
             log.info(
                 "tool_call_completed",
@@ -1073,7 +1083,12 @@ class ToolManager:
             return _normalize_for_serialization(result)
         except (SystemExit, Exception) as e:
             duration_ms = round((time.monotonic() - t0) * 1000)
-            error_msg = f"sys.exit({e.code})" if isinstance(e, SystemExit) else str(e)
+            if isinstance(e, asyncio.TimeoutError):
+                error_msg = f"Tool call timed out after {_TOOL_CALL_TIMEOUT_S}s"
+            elif isinstance(e, SystemExit):
+                error_msg = f"sys.exit({e.code})"
+            else:
+                error_msg = str(e)
             log.warning(
                 "tool_call_completed",
                 duration_ms=duration_ms,
