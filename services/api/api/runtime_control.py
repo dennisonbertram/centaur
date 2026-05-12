@@ -86,7 +86,7 @@ EXECUTION_WORKER_LEASE_S = max(
     max(EXECUTION_WATCHDOG_POLL_S * 2, 1.0),
 )
 FINAL_DELIVERY_READY_GRACE_S = max(
-    float(os.getenv("FINAL_DELIVERY_READY_GRACE_S", "2.0")),
+    float(os.getenv("FINAL_DELIVERY_READY_GRACE_S", "10.0")),
     0.0,
 )
 WORKER_INSTANCE_ID = f"{os.getenv('HOSTNAME') or 'api'}:{uuid.uuid4().hex[:8]}"

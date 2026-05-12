@@ -965,6 +965,13 @@ export class SlackBot {
       const finalText = (tracker.resultText || tracker.lastAssistantText).trim();
       log.info("execute_complete", { thread_key: threadKey, duration_s: Math.round((Date.now() - t0) / 100) / 10, result_length: finalText.length, overflow_chunks: tracker.overflowChunks.length });
 
+      // Ack the final delivery outbox BEFORE the cosmetic reply edit and title
+      // update. This closes the race window where the final-delivery loop could
+      // claim the outbox row and post a duplicate while we are still editing.
+      if (deliveredToSlack) {
+        await this.ackFinalDelivery(executionId, threadKey, { requireLease: false });
+      }
+
       if (streamedReply) {
         const streamedMarkdown = await this.renderStreamedExecutionMarkdown(finalText, tracker.agentThreadId, tracker.repoContext);
         const streamedBlocks = renderMarkdownForSlack(streamedMarkdown).blocks;
@@ -987,10 +994,6 @@ export class SlackBot {
             });
           }
         }
-      }
-
-      if (deliveredToSlack) {
-        await this.ackFinalDelivery(executionId, threadKey, { requireLease: false });
       }
 
       await this.setAssistantTitle(threadKey, {}, finalText);
@@ -1277,17 +1280,36 @@ export class SlackBot {
     threadKey: string,
     opts?: { requireLease?: boolean },
   ): Promise<void> {
-    try {
-      await this.client.markFinalDelivered(
-        executionId,
-        opts?.requireLease === false ? undefined : this.deliveryConsumerId,
-      );
-    } catch (err) {
-      log.warn("final_delivery_ack_failed", {
-        thread_key: threadKey,
-        execution_id: executionId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    const consumerId = opts?.requireLease === false ? undefined : this.deliveryConsumerId;
+    const retryDelaysMs = [0, 500, 1500];
+
+    for (let attempt = 0; attempt < retryDelaysMs.length; attempt += 1) {
+      if (retryDelaysMs[attempt] > 0) {
+        await sleep(retryDelaysMs[attempt]);
+      }
+      try {
+        await this.client.markFinalDelivered(executionId, consumerId);
+        return;
+      } catch (err) {
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        const retryable = !status || status >= 500;
+        if (!retryable || attempt === retryDelaysMs.length - 1) {
+          log.warn("final_delivery_ack_failed", {
+            thread_key: threadKey,
+            execution_id: executionId,
+            error: err instanceof Error ? err.message : String(err),
+            status,
+            attempts: attempt + 1,
+          });
+          return;
+        }
+        log.info("final_delivery_ack_retrying", {
+          thread_key: threadKey,
+          execution_id: executionId,
+          attempt: attempt + 1,
+          status,
+        });
+      }
     }
   }
 

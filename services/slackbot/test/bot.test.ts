@@ -782,6 +782,109 @@ describe("execute streams structured progress immediately", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// 5b. ackFinalDelivery retries on transient failures
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe("ackFinalDelivery retries on transient 500 errors", () => {
+  it("retries and succeeds on second attempt after a 500", async () => {
+    let attempts = 0;
+    const mockClient = {
+      markFinalDelivered: vi.fn(async () => {
+        attempts++;
+        if (attempts === 1) {
+          const err = new Error("Request failed with status code 500") as Error & { response?: { status: number } };
+          err.response = { status: 500 };
+          throw err;
+        }
+      }),
+    };
+
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const bot = new SlackBot(mockClient as any);
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+
+    await (bot as any).ackFinalDelivery("exe-retry-test", "C123:1700000000.000100", { requireLease: false });
+
+    expect(mockClient.markFinalDelivered).toHaveBeenCalledTimes(2);
+    expect(infoSpy).toHaveBeenCalledWith("final_delivery_ack_retrying", expect.objectContaining({
+      execution_id: "exe-retry-test",
+      attempt: 1,
+      status: 500,
+    }));
+
+    infoSpy.mockRestore();
+  });
+
+  it("does not retry on 409 (non-retryable)", async () => {
+    const mockClient = {
+      markFinalDelivered: vi.fn(async () => {
+        const err = new Error("delivery not claimable") as Error & { response?: { status: number } };
+        err.response = { status: 409 };
+        throw err;
+      }),
+    };
+
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const bot = new SlackBot(mockClient as any);
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    await (bot as any).ackFinalDelivery("exe-no-retry", "C123:1700000000.000100", { requireLease: false });
+
+    expect(mockClient.markFinalDelivered).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith("final_delivery_ack_failed", expect.objectContaining({
+      execution_id: "exe-no-retry",
+      status: 409,
+      attempts: 1,
+    }));
+
+    warnSpy.mockRestore();
+  });
+
+  it("acks before the streamed reply edit to prevent final-delivery race", async () => {
+    const callOrder: string[] = [];
+    const mockClient = {
+      execute: vi.fn().mockResolvedValue({ execution_id: "exe-ack-order" }),
+      markFinalDelivered: vi.fn(async () => { callOrder.push("ack"); }),
+    };
+
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const bot = new SlackBot(mockClient as any);
+
+    vi.spyOn(bot as any, "streamExecution").mockImplementation((async function* (
+      _threadKey: string,
+      _executionId: string,
+      tracker: { resultText: string },
+    ) {
+      tracker.resultText = "Final answer";
+      yield { type: "markdown_text", text: "Final answer" };
+    }) as any);
+    vi.spyOn(bot as any, "setAssistantTitle").mockImplementation(async () => { callOrder.push("title"); });
+
+    const thread = {
+      id: "C123456:1770000000.000700",
+      post: vi.fn(async (content: AsyncIterable<unknown> | { markdown: string }) => {
+        if (typeof (content as AsyncIterable<unknown>)[Symbol.asyncIterator] === "function") {
+          for await (const _chunk of content as AsyncIterable<unknown>) { /* drain */ }
+        }
+        return {
+          id: "m-1",
+          edit: vi.fn(async () => { callOrder.push("edit"); }),
+        };
+      }),
+    };
+
+    await (bot as any).execute(thread, thread.id, {
+      assignmentGeneration: 7,
+      userId: "U123456",
+      teamId: "T123456",
+    });
+
+    expect(callOrder.indexOf("ack")).toBeLessThan(callOrder.indexOf("edit"));
+    expect(callOrder.indexOf("ack")).toBeLessThan(callOrder.indexOf("title"));
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // 6. consumeWire reconnect on graceful EOF (API restart mid-turn)
 // ═══════════════════════════════════════════════════════════════════════════════
 
