@@ -533,9 +533,13 @@ spec:
             - name: SLACK_SYNC_INTERVAL_SECONDS
               value: {{ .Values.api.slackSyncIntervalSeconds | quote }}
 {{- end }}
-{{- if not (hasKey $apiExtraEnv "SLACK_SYNC_LOOKBACK_DAYS") }}
-            - name: SLACK_SYNC_LOOKBACK_DAYS
-              value: {{ .Values.api.slackSyncLookbackDays | quote }}
+{{- if not (hasKey $apiExtraEnv "SLACK_BACKFILL_INTERVAL_SECONDS") }}
+            - name: SLACK_BACKFILL_INTERVAL_SECONDS
+              value: {{ .Values.api.slackBackfillIntervalSeconds | quote }}
+{{- end }}
+{{- if not (hasKey $apiExtraEnv "SLACK_SYNC_BACKFILL_LOOKBACK_DAYS") }}
+            - name: SLACK_SYNC_BACKFILL_LOOKBACK_DAYS
+              value: {{ .Values.api.slackSyncBackfillLookbackDays | quote }}
 {{- end }}
 {{- if not (hasKey $apiExtraEnv "SLACK_SYNC_THREAD_LOOKBACK_DAYS") }}
             - name: SLACK_SYNC_THREAD_LOOKBACK_DAYS
