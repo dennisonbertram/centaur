@@ -205,7 +205,7 @@ describe("SlackBot runtime control", () => {
       contentBlocks: [{ type: "text", text: "follow-up" }],
       messageId: "slack:1700000000.000003",
       userId: "U123",
-      metadata: { platform: "slack", team_id: "T123" },
+      metadata: { platform: "slack", steer_replacement: true, team_id: "T123" },
     });
     expect(client.cancelExecution).not.toHaveBeenCalled();
     expect(client.startWorkflowRun).not.toHaveBeenCalled();
@@ -231,12 +231,31 @@ describe("SlackBot runtime control", () => {
     expect(oldAbortController.signal.aborted).toBe(true);
     expect(client.cancelExecution).not.toHaveBeenCalled();
     expect(client.startWorkflowRun).not.toHaveBeenCalled();
+    expect(client.steerExecution.mock.calls[0][1].metadata.steer_replacement).toBe(false);
   });
 
   it("starts a new workflow when a follow-up steer races with cancellation", async () => {
     const client = createImmediateStreamClient();
     client.steerExecution = vi.fn(async () => ({ ok: true, status: "cancel_requested" }));
-    const bot = new SlackBot(client as any);
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-old",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: {
+            status: "cancelled",
+            terminal_reason: "cancel_requested",
+            error_text: "cancel_requested",
+            suppress_final_delivery: true,
+          },
+        },
+      ],
+    }));
+    const slack = createSlackAdapter({
+      postMessage: vi.fn(async () => ({ id: "msg-final" })),
+    });
+    const bot = new SlackBot(client as any, "", slack);
     const { thread } = createThread();
     const oldAbortController = new AbortController();
 
@@ -257,6 +276,11 @@ describe("SlackBot runtime control", () => {
     expect(client.startWorkflowRun.mock.calls[0][0].input.parts).toEqual([
       { type: "text", text: "actually, not bootnodes, static peers" },
     ]);
+    expect(client.steerExecution.mock.calls[0][1].metadata.steer_replacement).toBe(true);
+
+    await (bot as any).drainFinalDeliveriesOnce();
+    expect(slack.postMessage).not.toHaveBeenCalled();
+    expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-old", expect.any(String));
   });
 
   it("excludes Slack messages newer than the current mention from workflow history", async () => {
@@ -851,6 +875,34 @@ describe("SlackBot runtime control", () => {
       `slack:${normalizedThreadKey}`,
       { markdown: "Request cancelled. Send another message when you want to retry." },
     );
+    expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-cancelled", expect.any(String));
+  });
+
+  it("suppresses final cancellation delivery for a replaced steering turn", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-cancelled",
+          thread_key: normalizedThreadKey,
+          delivery: { platform: "slack" },
+          final_payload: {
+            status: "cancelled",
+            terminal_reason: "cancel_requested",
+            error_text: "cancel_requested",
+            suppress_final_delivery: true,
+          },
+        },
+      ],
+    }));
+    const slack = createSlackAdapter({
+      postMessage: vi.fn(async () => ({ id: "msg-final" })),
+    });
+    const bot = new SlackBot(client as any, "", slack);
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    expect(slack.postMessage).not.toHaveBeenCalled();
     expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-cancelled", expect.any(String));
   });
 

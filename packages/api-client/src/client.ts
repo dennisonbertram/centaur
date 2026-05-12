@@ -327,13 +327,19 @@ export class CentaurClient {
       messageId?: string;
       userId?: string;
       metadata?: Record<string, unknown>;
+      suppressCancellationDelivery?: boolean;
     },
   ) {
     const { data } = await this.http.post(`/agent/executions/${encodeURIComponent(executionId)}/steer`, {
       content_blocks: opts?.contentBlocks,
       message_id: opts?.messageId,
       user_id: opts?.userId,
-      metadata: opts?.metadata,
+      metadata: {
+        ...(opts?.metadata || {}),
+        ...(opts?.suppressCancellationDelivery === undefined
+          ? {}
+          : { steer_replacement: opts.suppressCancellationDelivery }),
+      },
     });
     return data as Record<string, unknown>;
   }

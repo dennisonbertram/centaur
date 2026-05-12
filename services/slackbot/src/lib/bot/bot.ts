@@ -1322,6 +1322,7 @@ export class SlackBot {
   ): Promise<"none" | "steered" | "cancelled"> {
     const current = this.inFlightExecutions.get(threadKey);
     if (!current) return "none";
+    const stopOnlyRequest = isStopOnlyRequest(parts);
 
     // Try to steer the execution first — this preserves conversation context
     try {
@@ -1331,6 +1332,7 @@ export class SlackBot {
         userId: delivery.userId,
         metadata: {
           platform: "slack",
+          steer_replacement: !stopOnlyRequest,
           ...(delivery.teamId ? { team_id: delivery.teamId } : {}),
         },
       });
@@ -1351,7 +1353,7 @@ export class SlackBot {
           message_id: delivery.messageId,
           status: result.status,
         });
-        return isStopOnlyRequest(parts) ? "cancelled" : "none";
+        return stopOnlyRequest ? "cancelled" : "none";
       }
     } catch (err) {
       log.warn("steer_previous_execution_failed", {
@@ -1610,6 +1612,9 @@ export class SlackBot {
       : "";
     const resultText = normalizedTerminalString(finalPayload.result_text);
     const errorText = normalizedTerminalString(finalPayload.error_text);
+    if (finalPayload.suppress_final_delivery === true) {
+      return true;
+    }
     if (!isCancellationTerminalState(status, terminalReason, resultText, errorText)) {
       return false;
     }

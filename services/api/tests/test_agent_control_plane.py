@@ -1838,6 +1838,17 @@ async def test_steer_execution_persists_and_injects_explicit_message(db_pool):
     assert event_json["message"]["content"] == content_blocks
     assert metadata["user_id"] == "U-test"
 
+    execution = await db_pool.fetchrow(
+        "SELECT metadata FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    execution_metadata = (
+        json.loads(execution["metadata"])
+        if isinstance(execution["metadata"], str)
+        else execution["metadata"]
+    )
+    assert execution_metadata == {}
+
 
 @pytest.mark.asyncio
 async def test_steer_execution_reports_cancel_when_execution_finishes_during_inject(db_pool):
@@ -1891,7 +1902,7 @@ async def test_steer_execution_reports_cancel_when_execution_finishes_during_inj
             execution_id,
             content_blocks=content_blocks,
             message_id=message_id,
-            metadata={"platform": "slack", "user_id": "U-test"},
+            metadata={"platform": "slack", "user_id": "U-test", "steer_replacement": True},
         )
 
     assert result == {
@@ -1899,6 +1910,19 @@ async def test_steer_execution_reports_cancel_when_execution_finishes_during_inj
         "execution_id": execution_id,
         "thread_key": thread_key,
         "status": "cancel_requested",
+    }
+    execution = await db_pool.fetchrow(
+        "SELECT metadata FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    execution_metadata = (
+        json.loads(execution["metadata"])
+        if isinstance(execution["metadata"], str)
+        else execution["metadata"]
+    )
+    assert execution_metadata["steer_replacement"] == {
+        "message_id": message_id,
+        "suppress_cancellation_delivery": True,
     }
 
 
@@ -2651,9 +2675,17 @@ async def test_worker_maps_amp_user_cancelled_error_to_cancelled(db_pool):
         "INSERT INTO agent_execution_requests ("
         "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
         "delivery, metadata, hard_deadline_at"
-        ") VALUES ($1, $2, 1, 'exec-user-cancelled', 'hash-user-cancelled', 'running', '{}'::jsonb, '{}'::jsonb, NOW() + INTERVAL '10 minutes')",
+        ") VALUES ($1, $2, 1, 'exec-user-cancelled', 'hash-user-cancelled', 'running', '{}'::jsonb, $3::jsonb, NOW() + INTERVAL '10 minutes')",
         execution_id,
         thread_key,
+        json.dumps(
+            {
+                "steer_replacement": {
+                    "message_id": "slack:1700000000.000007",
+                    "suppress_cancellation_delivery": True,
+                },
+            }
+        ),
     )
     await db_pool.execute(
         "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
@@ -2716,6 +2748,16 @@ async def test_worker_maps_amp_user_cancelled_error_to_cancelled(db_pool):
     assert execution["terminal_reason"] == "cancel_requested"
     assert execution["result_text"] == ""
     assert execution["error_text"] == "cancel_requested"
+    outbox = await db_pool.fetchrow(
+        "SELECT final_payload FROM agent_final_delivery_outbox WHERE execution_id = $1",
+        execution_id,
+    )
+    final_payload = (
+        json.loads(outbox["final_payload"])
+        if isinstance(outbox["final_payload"], str)
+        else outbox["final_payload"]
+    )
+    assert final_payload["suppress_final_delivery"] is True
 
 
 @pytest.mark.asyncio

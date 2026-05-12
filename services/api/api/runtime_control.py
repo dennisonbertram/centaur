@@ -256,6 +256,21 @@ async def _merge_execution_repo_context(
     )
 
 
+async def _merge_execution_metadata(
+    pool,
+    execution_id: str,
+    metadata: dict[str, Any],
+) -> None:
+    if not metadata:
+        return
+    await pool.execute(
+        "UPDATE agent_execution_requests SET metadata = metadata || $1::jsonb, updated_at = NOW() "
+        "WHERE execution_id = $2",
+        canonical_json(metadata),
+        execution_id,
+    )
+
+
 def _attachment_name_from_source_path(
     source_path: str | None, attachment_id: str
 ) -> str:
@@ -1257,6 +1272,17 @@ async def steer_execution(
     if content_blocks is not None:
         content_blocks = [part for part in content_blocks if isinstance(part, dict)]
         if message_id and content_blocks:
+            if metadata and metadata.get("steer_replacement") is True:
+                await _merge_execution_metadata(
+                    pool,
+                    execution_id,
+                    {
+                        "steer_replacement": {
+                            "message_id": message_id,
+                            "suppress_cancellation_delivery": True,
+                        },
+                    },
+                )
             event = {
                 "type": "user",
                 "message": {"role": "user", "content": content_blocks},
@@ -1502,6 +1528,7 @@ async def _mark_execution_terminal(
     prompt_ref = None
     prompt_sha = None
     repo_context: dict[str, str] = {}
+    suppress_final_delivery = False
     raw_agent_thread_id = await pool.fetchval(
         "SELECT agent_thread_id FROM sandbox_sessions WHERE thread_key = $1",
         thread_key,
@@ -1515,6 +1542,11 @@ async def _mark_execution_terminal(
         if isinstance(metadata, dict):
             repo_context = _extract_repo_context(
                 decode_jsonb(metadata.get("repo_context"), {})
+            )
+            steer_replacement = decode_jsonb(metadata.get("steer_replacement"), {})
+            suppress_final_delivery = bool(
+                isinstance(steer_replacement, dict)
+                and steer_replacement.get("suppress_cancellation_delivery") is True
             )
         assignment_row = await pool.fetchrow(
             "SELECT harness, engine, persona_id, prompt_ref, effective_agents_md_sha256 "
@@ -1548,6 +1580,11 @@ async def _mark_execution_terminal(
     )
     record_agent_execution(harness, status, duration_s)
     record_execution_terminal(harness or "unknown", status, terminal_reason)
+    suppress_final_delivery_payload = (
+        suppress_final_delivery
+        and status == "cancelled"
+        and terminal_reason == "cancel_requested"
+    )
     await append_execution_state(
         pool,
         execution_id=execution_id,
@@ -1559,6 +1596,7 @@ async def _mark_execution_terminal(
             **({"error_text": error_text} if error_text else {}),
             **({"agent_thread_id": agent_thread_id} if agent_thread_id else {}),
             **({"repo_context": repo_context} if repo_context else {}),
+            **({"suppress_final_delivery": True} if suppress_final_delivery_payload else {}),
         },
     )
     delivery_platform = _delivery_platform(
@@ -1599,6 +1637,7 @@ async def _mark_execution_terminal(
                 **({"error_text": error_text} if error_text else {}),
                 **({"agent_thread_id": agent_thread_id} if agent_thread_id else {}),
                 **({"repo_context": repo_context} if repo_context else {}),
+                **({"suppress_final_delivery": True} if suppress_final_delivery_payload else {}),
             }
         ),
         next_attempt_at,
@@ -1618,6 +1657,7 @@ async def _mark_execution_terminal(
             "result_text": result_text,
             **({"error_text": error_text} if error_text else {}),
             **({"repo_context": repo_context} if repo_context else {}),
+            **({"suppress_final_delivery": True} if suppress_final_delivery_payload else {}),
         },
     )
     log.info(
