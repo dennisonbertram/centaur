@@ -15,6 +15,7 @@ import { classifySlackError } from "@/lib/slack/errors";
 import {
   buildRuntimeErrorDetail,
   flattenMarkdownTables,
+  formatSlackThreadReference,
   isCancellationTerminalState,
   isSlackInvalidBlocksError,
   normalizedTerminalString,
@@ -1689,7 +1690,8 @@ export class SlackBot {
   }): Promise<void> {
     if (!this.runtimeErrorChannelId || !this.slack) return;
     try {
-      const summary = `⚠️ Agent hit a runtime issue before finishing\n*Thread:* \`${opts.threadKey}\`  |  *Execution:* \`${opts.executionId}\``;
+      const threadReference = formatSlackThreadReference(opts.threadKey);
+      const summary = `⚠️ Agent hit a runtime issue before finishing\n*Thread:* ${threadReference}  |  *Execution:* \`${opts.executionId}\``;
       const { id: alertTs } = await this.slack.postMessage(
         `slack:${this.runtimeErrorChannelId}`,
         { markdown: summary },

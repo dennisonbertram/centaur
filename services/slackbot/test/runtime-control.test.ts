@@ -1277,6 +1277,7 @@ describe("SlackBot runtime control", () => {
 
     await (bot as any).drainFinalDeliveriesOnce();
 
+    const threadLink = "[thread](https://app.slack.com/archives/C123/p1700000000000100)";
     // Should have posted to the original thread + alert channel summary + alert channel detail
     expect(postMessage).toHaveBeenCalledWith(
       "slack:C_ERROR_CHANNEL",
@@ -1285,9 +1286,21 @@ describe("SlackBot runtime control", () => {
       }),
     );
     expect(postMessage).toHaveBeenCalledWith(
+      "slack:C_ERROR_CHANNEL",
+      expect.objectContaining({
+        markdown: expect.stringContaining(threadLink),
+      }),
+    );
+    expect(postMessage).toHaveBeenCalledWith(
       "slack:C_ERROR_CHANNEL:alert-msg-ts",
       expect.objectContaining({
         markdown: expect.stringContaining("harness_error"),
+      }),
+    );
+    expect(postMessage).toHaveBeenCalledWith(
+      "slack:C_ERROR_CHANNEL:alert-msg-ts",
+      expect.objectContaining({
+        markdown: expect.stringContaining(threadLink),
       }),
     );
   });

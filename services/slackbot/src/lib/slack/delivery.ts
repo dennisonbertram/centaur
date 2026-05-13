@@ -40,6 +40,24 @@ function codeFence(value: string, language = "text"): string {
   return `${fence}${language}\n${value}\n${fence}`;
 }
 
+export function slackThreadPermalink(threadKey: string | undefined): string | null {
+  const parts = (threadKey || "").trim().split(":");
+  const channel = parts[0] === "slack" ? parts[1] : parts[0];
+  const threadTs = parts[0] === "slack" ? parts[2] : parts[1];
+  if (!channel || !threadTs || !/^[CGD][A-Z0-9]+$/.test(channel)) return null;
+
+  const permalinkTs = threadTs.replace(".", "");
+  if (!/^\d+$/.test(permalinkTs)) return null;
+
+  return `https://app.slack.com/archives/${encodeURIComponent(channel)}/p${permalinkTs}`;
+}
+
+export function formatSlackThreadReference(threadKey: string | undefined): string {
+  if (!threadKey) return "";
+  const permalink = slackThreadPermalink(threadKey);
+  return permalink ? `[thread](${permalink})` : `\`${threadKey}\``;
+}
+
 function harnessErrorDetail(terminalReason: string, errorText: string): string {
   if (!terminalReason && !errorText) return "";
   const lowerErr = errorText.toLowerCase();
@@ -261,7 +279,8 @@ export function buildRuntimeErrorDetail(opts: {
 }): string {
   const lines: string[] = [];
   if (opts.executionId) lines.push(`*Execution:* \`${opts.executionId}\``);
-  if (opts.threadKey) lines.push(`*Thread:* \`${opts.threadKey}\``);
+  const threadReference = formatSlackThreadReference(opts.threadKey);
+  if (threadReference) lines.push(`*Thread:* ${threadReference}`);
   if (opts.status) lines.push(`*Status:* \`${opts.status}\``);
   if (opts.terminalReason) lines.push(`*Terminal reason:* \`${opts.terminalReason}\``);
   if (opts.errorText) {
