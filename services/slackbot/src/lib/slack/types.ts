@@ -18,3 +18,13 @@ export type StreamChunk =
     }
   | { type: "plan_update"; title: string }
   | { type: "blocks"; blocks: SlackBlock[] };
+
+export type StreamOverflowReason = "proactive_limit" | "slack_rejected";
+
+export type StreamOverflowMetadata = {
+  overflowFollowupsPosted?: boolean;
+  overflowReason?: StreamOverflowReason;
+  overflowFollowupCount?: number;
+  overflowChars?: number;
+  streamMessageTs?: string;
+};

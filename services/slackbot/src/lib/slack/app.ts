@@ -16,7 +16,7 @@ import {
   type Root,
 } from "./markdown";
 import { classifySlackError, SlackApiCallError } from "./errors";
-import type { StreamChunk } from "./types";
+import type { StreamChunk, StreamOverflowMetadata, StreamOverflowReason } from "./types";
 
 /**
  * Slack streaming limits. We apply a safety margin so we never hit the server-
@@ -360,8 +360,14 @@ class WebClientSlackAdapter implements SlackAdapter {
   async stream(
     threadId: string,
     stream: AsyncIterable<string | StreamChunk>,
-    options?: { recipientUserId?: string; recipientTeamId?: string; taskDisplayMode?: "timeline" | "plan" },
-  ): Promise<{ id: string }> {
+    options?: {
+      recipientUserId?: string;
+      recipientTeamId?: string;
+      taskDisplayMode?: "timeline" | "plan";
+      threadKey?: string;
+      executionId?: string;
+    },
+  ): Promise<{ id: string } & StreamOverflowMetadata> {
     const iterator = stream[Symbol.asyncIterator]();
     const first = await iterator.next();
     if (first.done) {
@@ -397,15 +403,24 @@ class WebClientSlackAdapter implements SlackAdapter {
       if (accumulatedChars + chunkChars > STREAM_TEXT_LIMIT
         || accumulatedBlocks + chunkBlocks > STREAM_BLOCKS_LIMIT) {
         // Approaching Slack's limit — stop stream and post overflow as follow-ups.
+        const overflowReason: StreamOverflowReason = "proactive_limit";
         log.warn("slack_stream_overflow", {
           thread_id: threadId,
-          reason: "proactive_limit",
+          reason: overflowReason,
           accumulated_chars: accumulatedChars,
           accumulated_blocks: accumulatedBlocks,
         });
         await this.stopStreamForOverflow(channel, ts, threadId);
-        await this.postStreamOverflow(threadId, iterator, next.value);
-        return { id: ts };
+        const overflow = await this.postStreamOverflow(threadId, iterator, next.value);
+        this.logStreamOverflowFollowups(threadId, ts, overflowReason, overflow, options);
+        return {
+          id: ts,
+          streamMessageTs: ts,
+          overflowFollowupsPosted: overflow.count > 0,
+          overflowReason,
+          overflowFollowupCount: overflow.count,
+          overflowChars: overflow.chars,
+        };
       }
 
       try {
@@ -419,23 +434,32 @@ class WebClientSlackAdapter implements SlackAdapter {
           throw error;
         }
         const classified = classifySlackError(error);
+        const overflowReason: StreamOverflowReason = "slack_rejected";
         log.warn("slack_stream_overflow", {
           thread_id: threadId,
-          reason: "slack_rejected",
+          reason: overflowReason,
           error: classified.message,
           error_code: classified.code,
           error_class: classified.errorClass,
         });
         await this.stopStreamForOverflow(channel, ts, threadId);
-        await this.postStreamOverflow(threadId, iterator, next.value);
-        return { id: ts };
+        const overflow = await this.postStreamOverflow(threadId, iterator, next.value);
+        this.logStreamOverflowFollowups(threadId, ts, overflowReason, overflow, options);
+        return {
+          id: ts,
+          streamMessageTs: ts,
+          overflowFollowupsPosted: overflow.count > 0,
+          overflowReason,
+          overflowFollowupCount: overflow.count,
+          overflowChars: overflow.chars,
+        };
       }
       accumulatedChars += chunkChars;
       accumulatedBlocks += chunkBlocks;
     }
 
     await this.call("chat.stopStream", { channel, ts });
-    return { id: ts };
+    return { id: ts, streamMessageTs: ts };
   }
 
   private async stopStreamForOverflow(channel: string, ts: string, threadId: string): Promise<void> {
@@ -459,7 +483,7 @@ class WebClientSlackAdapter implements SlackAdapter {
     threadId: string,
     iterator: AsyncIterator<string | StreamChunk>,
     firstOverflow: string | StreamChunk,
-  ): Promise<void> {
+  ): Promise<{ count: number; chars: number }> {
     const parts: string[] = [extractOverflowMarkdown(firstOverflow)];
     while (true) {
       const remaining = await iterator.next();
@@ -467,10 +491,32 @@ class WebClientSlackAdapter implements SlackAdapter {
       parts.push(extractOverflowMarkdown(remaining.value));
     }
     const combined = parts.filter((p) => p.trim()).join("\n\n");
-    if (!combined.trim()) return;
+    if (!combined.trim()) return { count: 0, chars: 0 };
+    let count = 0;
     for (const md of splitMarkdownForSlackMessages(combined)) {
       await this.postMessage(threadId, { markdown: md });
+      count += 1;
     }
+    return { count, chars: combined.length };
+  }
+
+  private logStreamOverflowFollowups(
+    threadId: string,
+    streamMessageTs: string,
+    reason: StreamOverflowReason,
+    overflow: { count: number; chars: number },
+    options?: { threadKey?: string; executionId?: string },
+  ): void {
+    if (overflow.count <= 0) return;
+    log.warn("slack_stream_overflow_followups_posted", {
+      thread_id: threadId,
+      thread_key: options?.threadKey || normalizeThreadKey(threadId),
+      execution_id: options?.executionId,
+      stream_message_ts: streamMessageTs,
+      overflow_reason: reason,
+      overflow_followup_count: overflow.count,
+      overflow_chars: overflow.chars,
+    });
   }
 
   async setAssistantTitle(channel: string, threadTs: string, title: string): Promise<void> {
@@ -886,7 +932,7 @@ export class BoltSlackApp {
       },
       post: async (
         content: AsyncGenerator<StreamChunk> | PostPayload,
-        options?: { taskDisplayMode?: "timeline" | "plan" },
+        options?: { taskDisplayMode?: "timeline" | "plan"; threadKey?: string; executionId?: string },
       ) => {
         if ("markdown" in content) {
           const posted = await this.adapter.postMessage(threadId, content);
@@ -902,9 +948,16 @@ export class BoltSlackApp {
           recipientUserId: context.recipientUserId,
           recipientTeamId: context.recipientTeamId,
           taskDisplayMode: options?.taskDisplayMode,
+          threadKey: options?.threadKey,
+          executionId: options?.executionId,
         });
         return {
           id: streamed.id,
+          overflowFollowupsPosted: streamed.overflowFollowupsPosted,
+          overflowReason: streamed.overflowReason,
+          overflowFollowupCount: streamed.overflowFollowupCount,
+          overflowChars: streamed.overflowChars,
+          streamMessageTs: streamed.streamMessageTs,
           edit: async (update: { markdown: string }) => {
             await this.adapter.updateMessage(threadId, streamed.id, update);
           },

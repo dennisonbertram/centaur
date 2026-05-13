@@ -22,7 +22,7 @@ import {
   shouldNotifyRuntimeErrorChannel,
   splitSlackMessage,
 } from "@/lib/slack/delivery";
-import type { SlackBlock, StreamChunk } from "@/lib/slack/types";
+import type { SlackBlock, StreamChunk, StreamOverflowMetadata } from "@/lib/slack/types";
 import { ProgressTracker } from "./progress-tracker";
 import { convertDashboardBlocks, type ChartRenderer, type DashboardFileUpload } from "./dashboard-to-slack";
 import { createChartRenderer } from "./chart-renderer";
@@ -424,7 +424,10 @@ export interface BotThread {
   subscribe(): Promise<void>;
   startTyping(status?: string): Promise<void>;
   stopTyping?(): Promise<void>;
-  post(content: AsyncGenerator<StreamChunk> | PostPayload, options?: { taskDisplayMode?: "timeline" | "plan" }): Promise<{ id: string; edit(content: { markdown: string }): Promise<void> }>;
+  post(
+    content: AsyncGenerator<StreamChunk> | PostPayload,
+    options?: { taskDisplayMode?: "timeline" | "plan"; threadKey?: string; executionId?: string },
+  ): Promise<{ id: string; edit(content: { markdown: string }): Promise<void> } & StreamOverflowMetadata>;
 }
 
 export interface PostPayload {
@@ -850,7 +853,7 @@ export class SlackBot {
                 yield next.value;
               }
             })(),
-            { taskDisplayMode: "plan" },
+            { taskDisplayMode: "plan", threadKey, executionId },
           );
           deliveredToSlack = true;
         }
@@ -985,6 +988,30 @@ export class SlackBot {
         if (streamedBlocks && tracker.overflowChunks.length === 0) {
           try {
             await streamedReply.edit({ markdown: streamedMarkdown });
+            if (streamedReply.overflowFollowupsPosted) {
+              const alertPosted = await this.notifySlackOverflowDuplicateRendered({
+                threadKey,
+                executionId,
+                agentThreadId: tracker.agentThreadId,
+                streamMessageTs: streamedReply.streamMessageTs || streamedReply.id,
+                overflowReason: streamedReply.overflowReason,
+                overflowFollowupCount: streamedReply.overflowFollowupCount,
+                overflowChars: streamedReply.overflowChars,
+                resultLength: finalText.length,
+              });
+              log.warn("slack_stream_overflow_duplicate_rendered", {
+                thread_key: threadKey,
+                execution_id: executionId,
+                agent_thread_id: tracker.agentThreadId || null,
+                stream_message_ts: streamedReply.streamMessageTs || streamedReply.id,
+                overflow_reason: streamedReply.overflowReason || null,
+                overflow_followup_count: streamedReply.overflowFollowupCount ?? 0,
+                overflow_chars: streamedReply.overflowChars ?? 0,
+                result_length: finalText.length,
+                alert_channel_id: this.runtimeErrorChannelId || null,
+                alert_posted: alertPosted,
+              });
+            }
           } catch (err) {
             const classified = classifySlackError(err);
             const expected = classified.errorClass === "invalid_payload"
@@ -998,6 +1025,11 @@ export class SlackBot {
               error_class: classified.errorClass,
               error_code: classified.code,
               retryable: classified.retryable,
+              stream_message_ts: streamedReply.streamMessageTs || streamedReply.id,
+              overflow_followups_posted: streamedReply.overflowFollowupsPosted || undefined,
+              overflow_reason: streamedReply.overflowReason,
+              overflow_followup_count: streamedReply.overflowFollowupCount,
+              overflow_chars: streamedReply.overflowChars,
             });
           }
         }
@@ -1602,6 +1634,48 @@ export class SlackBot {
         nonRetryable: !classified.retryable,
         errorClass: classified.errorClass,
       });
+    }
+  }
+
+  private async notifySlackOverflowDuplicateRendered(opts: {
+    threadKey: string;
+    executionId: string;
+    agentThreadId?: string;
+    streamMessageTs?: string;
+    overflowReason?: string;
+    overflowFollowupCount?: number;
+    overflowChars?: number;
+    resultLength: number;
+  }): Promise<boolean> {
+    if (!this.runtimeErrorChannelId || !this.slack) return false;
+    try {
+      const lines = [
+        "*Slack duplicate render confirmed*",
+        `*Thread:* \`${opts.threadKey}\``,
+        `*Execution:* \`${opts.executionId}\``,
+        opts.agentThreadId ? `*Amp thread:* \`${opts.agentThreadId}\`` : "",
+        opts.streamMessageTs ? `*Stream message:* \`${opts.streamMessageTs}\`` : "",
+        `*Overflow reason:* \`${opts.overflowReason || "unknown"}\``,
+        `*Overflow follow-ups:* ${opts.overflowFollowupCount ?? 0}`,
+        `*Overflow chars:* ${opts.overflowChars ?? 0}`,
+        `*Result length:* ${opts.resultLength}`,
+      ].filter(Boolean);
+      await this.slack.postMessage(
+        `slack:${this.runtimeErrorChannelId}`,
+        { markdown: lines.join("\n") },
+      );
+      return true;
+    } catch (err) {
+      const classified = classifySlackError(err);
+      log.warn("slack_stream_overflow_duplicate_alert_failed", {
+        thread_key: opts.threadKey,
+        execution_id: opts.executionId,
+        alert_channel_id: this.runtimeErrorChannelId,
+        error: classified.message,
+        error_class: classified.errorClass,
+        error_code: classified.code,
+      });
+      return false;
     }
   }
 

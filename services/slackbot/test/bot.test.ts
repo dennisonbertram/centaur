@@ -520,7 +520,11 @@ describe("execute streams structured progress immediately", () => {
 
     expect(mockClient.execute).toHaveBeenCalledOnce();
     expect(thread.post).toHaveBeenCalledOnce();
-    expect(thread.post).toHaveBeenCalledWith(expect.anything(), { taskDisplayMode: "plan" });
+    expect(thread.post).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      taskDisplayMode: "plan",
+      threadKey: thread.id,
+      executionId: "exe-structured-first",
+    }));
     expect(postedChunks).toEqual(streamedChunks);
   });
 
@@ -591,6 +595,152 @@ describe("execute streams structured progress immediately", () => {
         "| 8:00 | Breakfast |",
       ].join("\n"),
     });
+  });
+
+  it("logs and alerts when overflow follow-ups are followed by a successful final stream edit", async () => {
+    const mockClient = {
+      execute: vi.fn().mockResolvedValue({ execution_id: "exe-overflow-duplicate" }),
+    };
+
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const alertPost = vi.fn(async (_threadId: string, _message: { markdown: string }) => ({ id: "alert-1" }));
+    const bot = new SlackBot(
+      mockClient as any,
+      "",
+      { postMessage: alertPost } as any,
+      "C_ENG_CENTAUR_ALERTS",
+    );
+
+    vi.spyOn(bot as any, "streamExecution").mockImplementation((async function* (
+      _threadKey: string,
+      _executionId: string,
+      tracker: { resultText: string; agentThreadId: string },
+    ) {
+      tracker.resultText = "Final answer from duplicate path";
+      tracker.agentThreadId = "T-amp-thread";
+      yield { type: "markdown_text", text: "Working..." };
+    }) as any);
+    const ackSpy = vi.spyOn(bot as any, "ackFinalDelivery").mockResolvedValue(undefined);
+    vi.spyOn(bot as any, "setAssistantTitle").mockResolvedValue(undefined);
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    const edit = vi.fn(async () => {});
+    const thread = {
+      id: "C123456:1770000000.000800",
+      post: vi.fn(async (content: AsyncIterable<unknown>) => {
+        for await (const _chunk of content) { /* drain */ }
+        return {
+          id: "1770000000.000801",
+          streamMessageTs: "1770000000.000801",
+          overflowFollowupsPosted: true,
+          overflowReason: "slack_rejected",
+          overflowFollowupCount: 1,
+          overflowChars: 42,
+          edit,
+        };
+      }),
+    };
+
+    await (bot as any).execute(thread, thread.id, {
+      assignmentGeneration: 7,
+      userId: "U123456",
+      teamId: "T123456",
+    });
+
+    expect(edit).toHaveBeenCalledOnce();
+    expect(ackSpy).toHaveBeenCalledWith("exe-overflow-duplicate", thread.id, { requireLease: false });
+    expect(alertPost).toHaveBeenCalledWith(
+      "slack:C_ENG_CENTAUR_ALERTS",
+      expect.objectContaining({
+        markdown: expect.stringContaining("Slack duplicate render confirmed"),
+      }),
+    );
+    const alertMarkdown = (alertPost.mock.calls[0]?.[1] as { markdown: string } | undefined)?.markdown || "";
+    expect(alertMarkdown).toContain("exe-overflow-duplicate");
+    expect(warnSpy).toHaveBeenCalledWith("slack_stream_overflow_duplicate_rendered", expect.objectContaining({
+      thread_key: thread.id,
+      execution_id: "exe-overflow-duplicate",
+      agent_thread_id: "T-amp-thread",
+      stream_message_ts: "1770000000.000801",
+      overflow_reason: "slack_rejected",
+      overflow_followup_count: 1,
+      overflow_chars: 42,
+      result_length: "Final answer from duplicate path".length,
+      alert_channel_id: "C_ENG_CENTAUR_ALERTS",
+      alert_posted: true,
+    }));
+
+    warnSpy.mockRestore();
+  });
+
+  it("does not alert when overflow follow-ups are followed by a failed final stream edit", async () => {
+    const mockClient = {
+      execute: vi.fn().mockResolvedValue({ execution_id: "exe-overflow-upgrade-failed" }),
+    };
+
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const alertPost = vi.fn(async (_threadId: string, _message: { markdown: string }) => ({ id: "alert-1" }));
+    const bot = new SlackBot(
+      mockClient as any,
+      "",
+      { postMessage: alertPost } as any,
+      "C_ENG_CENTAUR_ALERTS",
+    );
+
+    vi.spyOn(bot as any, "streamExecution").mockImplementation((async function* (
+      _threadKey: string,
+      _executionId: string,
+      tracker: { resultText: string; agentThreadId: string },
+    ) {
+      tracker.resultText = "Final answer that cannot be upgraded";
+      tracker.agentThreadId = "T-amp-thread";
+      yield { type: "markdown_text", text: "Working..." };
+    }) as any);
+    vi.spyOn(bot as any, "ackFinalDelivery").mockResolvedValue(undefined);
+    vi.spyOn(bot as any, "setAssistantTitle").mockResolvedValue(undefined);
+    const infoSpy = vi.spyOn(log, "info").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    const edit = vi.fn(async () => {
+      throw new SlackApiCallError("chat.update", "msg_too_long", { ok: false, error: "msg_too_long" });
+    });
+    const thread = {
+      id: "C123456:1770000000.000900",
+      post: vi.fn(async (content: AsyncIterable<unknown>) => {
+        for await (const _chunk of content) { /* drain */ }
+        return {
+          id: "1770000000.000901",
+          streamMessageTs: "1770000000.000901",
+          overflowFollowupsPosted: true,
+          overflowReason: "slack_rejected",
+          overflowFollowupCount: 2,
+          overflowChars: 84,
+          edit,
+        };
+      }),
+    };
+
+    await (bot as any).execute(thread, thread.id, {
+      assignmentGeneration: 7,
+      userId: "U123456",
+      teamId: "T123456",
+    });
+
+    expect(edit).toHaveBeenCalledOnce();
+    expect(alertPost).not.toHaveBeenCalled();
+    expect(infoSpy).toHaveBeenCalledWith("streamed_reply_block_upgrade_failed", expect.objectContaining({
+      execution_id: "exe-overflow-upgrade-failed",
+      error_code: "msg_too_long",
+      stream_message_ts: "1770000000.000901",
+      overflow_followups_posted: true,
+      overflow_reason: "slack_rejected",
+      overflow_followup_count: 2,
+      overflow_chars: 84,
+    }));
+    expect(warnSpy).not.toHaveBeenCalledWith("slack_stream_overflow_duplicate_rendered", expect.anything());
+
+    infoSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 
   it.each([

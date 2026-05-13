@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BoltSlackApp } from "../src/lib/slack/app";
 import { classifySlackError, SlackApiCallError } from "../src/lib/slack/errors";
-import type { StreamChunk } from "../src/lib/slack/types";
+import type { StreamChunk, StreamOverflowMetadata } from "../src/lib/slack/types";
 
 const slackApiCall = vi.hoisted(() => vi.fn());
 const slackUsersInfo = vi.hoisted(() => vi.fn());
@@ -35,8 +35,8 @@ function createAdapter() {
     stream(
       threadId: string,
       stream: AsyncIterable<string | StreamChunk>,
-      options?: { taskDisplayMode?: "timeline" | "plan" },
-    ): Promise<{ id: string }>;
+      options?: { taskDisplayMode?: "timeline" | "plan"; threadKey?: string; executionId?: string },
+    ): Promise<{ id: string } & StreamOverflowMetadata>;
   };
 }
 
@@ -156,12 +156,15 @@ describe("Slack stream payloads", () => {
     // next markdown_text chunk pushes it over.
     const bigText = "x".repeat(36_000);
 
-    await adapter.stream("slack:C123:1700000000.000001", (async function* () {
+    const result = await adapter.stream("slack:C123:1700000000.000001", (async function* () {
       yield { type: "markdown_text", text: bigText } satisfies StreamChunk;
       yield { type: "markdown_text", text: "overflow A" } satisfies StreamChunk;
       yield { type: "plan_update", title: "Done" } satisfies StreamChunk;
       yield { type: "markdown_text", text: "overflow B" } satisfies StreamChunk;
-    })());
+    })(), {
+      threadKey: "C123:1700000000.000001",
+      executionId: "exe-proactive-overflow",
+    });
 
     // Stream was stopped before limit was hit
     const stops = streamCallParams("chat.stopStream");
@@ -178,6 +181,14 @@ describe("Slack stream payloads", () => {
     expect(postedText).toContain("overflow B");
     // plan_update is streaming-only UI — skipped
     expect(postedText).not.toContain("Done");
+    expect(result).toEqual(expect.objectContaining({
+      id: "1700000000.000100",
+      streamMessageTs: "1700000000.000100",
+      overflowFollowupsPosted: true,
+      overflowReason: "proactive_limit",
+      overflowFollowupCount: posts.length,
+    }));
+    expect(result.overflowChars).toBeGreaterThan(0);
   });
 
   it("preserves table and rich text block content when overflow is posted as follow-ups", async () => {
@@ -223,11 +234,14 @@ describe("Slack stream payloads", () => {
     });
     const adapter = createAdapter();
 
-    await adapter.stream("slack:C123:1700000000.000001", (async function* () {
+    const result = await adapter.stream("slack:C123:1700000000.000001", (async function* () {
       yield { type: "markdown_text", text: "first" } satisfies StreamChunk;
       yield { type: "markdown_text", text: "rejected overflow" } satisfies StreamChunk;
       yield { type: "markdown_text", text: "remaining overflow" } satisfies StreamChunk;
-    })());
+    })(), {
+      threadKey: "C123:1700000000.000001",
+      executionId: "exe-rejected-overflow",
+    });
 
     const stops = streamCallParams("chat.stopStream");
     expect(stops).toHaveLength(1);
@@ -236,6 +250,14 @@ describe("Slack stream payloads", () => {
     const postedText = posts.map((p) => p.text).join(" ");
     expect(postedText).toContain("rejected overflow");
     expect(postedText).toContain("remaining overflow");
+    expect(result).toEqual(expect.objectContaining({
+      id: "1700000000.000100",
+      streamMessageTs: "1700000000.000100",
+      overflowFollowupsPosted: true,
+      overflowReason: "slack_rejected",
+      overflowFollowupCount: posts.length,
+    }));
+    expect(result.overflowChars).toBeGreaterThan(0);
   });
 
   it("can start directly with a structured chunk", async () => {
