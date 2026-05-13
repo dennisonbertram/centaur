@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { log } from "../src/lib/logger";
+import { SlackBot, type BotThread, type PostPayload } from "../src/lib/bot/bot";
 import { BoltSlackApp } from "../src/lib/slack/app";
 import { classifySlackError, SlackApiCallError } from "../src/lib/slack/errors";
 import type { StreamChunk, StreamOverflowMetadata } from "../src/lib/slack/types";
@@ -37,6 +39,8 @@ function createAdapter() {
       stream: AsyncIterable<string | StreamChunk>,
       options?: { taskDisplayMode?: "timeline" | "plan"; threadKey?: string; executionId?: string },
     ): Promise<{ id: string } & StreamOverflowMetadata>;
+    postMessage(threadId: string, message: PostPayload): Promise<{ id: string }>;
+    updateMessage(threadId: string, messageId: string, message: { markdown: string }): Promise<void>;
   };
 }
 
@@ -44,6 +48,43 @@ function streamCallParams(method: string): Record<string, unknown>[] {
   return slackApiCall.mock.calls
     .filter(([calledMethod]) => calledMethod === method)
     .map(([, params]) => params as Record<string, unknown>);
+}
+
+function createRealAdapterThread(
+  adapter: {
+    stream(
+      threadId: string,
+      stream: AsyncIterable<string | StreamChunk>,
+      options?: { taskDisplayMode?: "timeline" | "plan"; threadKey?: string; executionId?: string },
+    ): Promise<{ id: string } & StreamOverflowMetadata>;
+    postMessage(threadId: string, message: PostPayload): Promise<{ id: string }>;
+    updateMessage(threadId: string, messageId: string, message: { markdown: string }): Promise<void>;
+  },
+  threadId: string,
+): BotThread {
+  return {
+    id: threadId,
+    subscribe: async () => {},
+    startTyping: async () => {},
+    post: async (content, options) => {
+      if ("markdown" in content) {
+        const posted = await adapter.postMessage(threadId, content);
+        return {
+          id: posted.id,
+          edit: async (update: { markdown: string }) => {
+            await adapter.updateMessage(threadId, posted.id, update);
+          },
+        };
+      }
+      const streamed = await adapter.stream(threadId, content, options);
+      return {
+        ...streamed,
+        edit: async (update: { markdown: string }) => {
+          await adapter.updateMessage(threadId, streamed.id, update);
+        },
+      };
+    },
+  };
 }
 
 describe("Slack event dispatch logging", () => {
@@ -292,6 +333,105 @@ describe("Slack stream payloads", () => {
     );
 
     expect(message.text).toContain("U404");
+  });
+});
+
+describe("SlackBot stream overflow E2E", () => {
+  beforeEach(() => {
+    slackApiCall.mockReset();
+    slackUsersInfo.mockReset();
+    slackUsersInfo.mockResolvedValue({ ok: true, user: { name: "alice" } });
+  });
+
+  it("does not upgrade the original stream after overflow follow-ups carry the small final answer", async () => {
+    const finalAnswer = "PR opened: tempoxyz/centaur-tempo#92";
+    slackApiCall.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.startStream") return { ok: true, ts: "1778704967.119909" };
+      if (method === "chat.appendStream" && JSON.stringify(params).includes(finalAnswer)) {
+        return { ok: false, error: "msg_too_long" };
+      }
+      if (method === "chat.postMessage") return { ok: true, ts: "1778704968.000100" };
+      if (method === "chat.update") return { ok: true, ts: "1778704967.119909" };
+      return { ok: true };
+    });
+
+    const client = {
+      execute: vi.fn().mockResolvedValue({ execution_id: "exe-stream-overflow-e2e" }),
+      markFinalDelivered: vi.fn().mockResolvedValue({ ok: true }),
+      streamEvents: vi.fn(() => (async function* () {
+        yield {
+          eventId: 1,
+          eventKind: "amp_raw_event",
+          data: { type: "system", subtype: "init", session_id: "T-overflow-e2e" },
+        };
+        for (let i = 0; i < 8; i += 1) {
+          yield {
+            eventId: 2 + i * 2,
+            eventKind: "amp_raw_event",
+            data: {
+              type: "assistant",
+              message: {
+                content: [{
+                  type: "tool_use",
+                  id: `tool-${i}`,
+                  name: "Bash",
+                  input: { cmd: `echo ${i}` },
+                }],
+              },
+            },
+          };
+          yield {
+            eventId: 3 + i * 2,
+            eventKind: "amp_raw_event",
+            data: {
+              type: "tool",
+              content: [{
+                type: "tool_result",
+                tool_use_id: `tool-${i}`,
+                content: "ok",
+              }],
+            },
+          };
+        }
+        yield {
+          eventId: 99,
+          eventKind: "amp_raw_event",
+          data: {
+            type: "turn.done",
+            turn_id: 1,
+            result: finalAnswer,
+            agent_thread_id: "T-overflow-e2e",
+          },
+        };
+      })()),
+    };
+
+    const adapter = createAdapter();
+    const alertAdapter = { postMessage: vi.fn(async () => ({ id: "alert-1" })) };
+    const bot = new SlackBot(client as any, "", alertAdapter as any, "C_ALERTS");
+    const thread = createRealAdapterThread(adapter, "slack:C123:1778702748.599919");
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    try {
+      await (bot as any).execute(thread, thread.id, {
+        assignmentGeneration: 1,
+        userId: "U123",
+        teamId: "T123",
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    const followupPosts = streamCallParams("chat.postMessage")
+      .filter((params) => params.channel === "C123");
+    expect(followupPosts.map((params) => String(params.text || "")).join("\n")).toContain(finalAnswer);
+    expect(streamCallParams("chat.update")).toHaveLength(0);
+    expect(alertAdapter.postMessage).not.toHaveBeenCalled();
+    expect(warnSpy).not.toHaveBeenCalledWith(
+      "slack_stream_overflow_duplicate_rendered",
+      expect.anything(),
+    );
+    expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-stream-overflow-e2e", undefined);
   });
 });
 

@@ -5,11 +5,6 @@ NAMESPACE="${CENTAUR_NAMESPACE:-centaur}"
 SLACKBOT_API_KEY="${SLACKBOT_API_KEY:-aiv2_e2e_slackbot_key_do_not_use_outside_tests}"
 LOCAL_DEV_API_KEY="${LOCAL_DEV_API_KEY:-aiv2_e2e_local_dev_key_do_not_use_outside_tests}"
 
-if [[ -z "${AMP_API_KEY:-}" ]]; then
-  echo "FATAL: AMP_API_KEY is required" >&2
-  exit 1
-fi
-
 rand_hex() {
   openssl rand -hex 32
 }
@@ -34,7 +29,7 @@ kubectl -n "$NAMESPACE" create secret generic centaur-infra-env \
   --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
   --from-literal=DATABASE_URL="$DATABASE_URL" \
   --from-literal=PGBOUNCER_DATABASE_URL="$DATABASE_URL" \
-  --from-literal=AMP_API_KEY="$AMP_API_KEY" >/dev/null
+  --from-literal=AMP_API_KEY="${AMP_API_KEY:-}" >/dev/null
 
 kubectl -n "$NAMESPACE" delete secret centaur-firewall-ca centaur-firewall-ca-key --ignore-not-found >/dev/null
 TMPDIR="$(mktemp -d)"

@@ -987,51 +987,41 @@ export class SlackBot {
         const streamedMarkdown = await this.renderStreamedExecutionMarkdown(finalText, tracker.agentThreadId, tracker.repoContext);
         const streamedBlocks = renderMarkdownForSlack(streamedMarkdown).blocks;
         if (streamedBlocks && tracker.overflowChunks.length === 0) {
-          try {
-            await streamedReply.edit({ markdown: streamedMarkdown });
-            if (streamedReply.overflowFollowupsPosted) {
-              const alertPosted = await this.notifySlackOverflowDuplicateRendered({
-                threadKey,
-                executionId,
-                agentThreadId: tracker.agentThreadId,
-                streamMessageTs: streamedReply.streamMessageTs || streamedReply.id,
-                overflowReason: streamedReply.overflowReason,
-                overflowFollowupCount: streamedReply.overflowFollowupCount,
-                overflowChars: streamedReply.overflowChars,
-                resultLength: finalText.length,
-              });
-              log.warn("slack_stream_overflow_duplicate_rendered", {
-                thread_key: threadKey,
-                execution_id: executionId,
-                agent_thread_id: tracker.agentThreadId || null,
-                stream_message_ts: streamedReply.streamMessageTs || streamedReply.id,
-                overflow_reason: streamedReply.overflowReason || null,
-                overflow_followup_count: streamedReply.overflowFollowupCount ?? 0,
-                overflow_chars: streamedReply.overflowChars ?? 0,
-                result_length: finalText.length,
-                alert_channel_id: this.runtimeErrorChannelId || null,
-                alert_posted: alertPosted,
-              });
-            }
-          } catch (err) {
-            const classified = classifySlackError(err);
-            const expected = classified.errorClass === "invalid_payload"
-              || classified.message.includes("msg_too_long")
-              || classified.message.includes("msg_blocks_too_long");
-            const logFn = expected ? log.info.bind(log) : log.warn.bind(log);
-            logFn("streamed_reply_block_upgrade_failed", {
+          if (streamedReply.overflowFollowupsPosted) {
+            log.info("streamed_reply_block_upgrade_skipped", {
               thread_key: threadKey,
               execution_id: executionId,
-              error: classified.message,
-              error_class: classified.errorClass,
-              error_code: classified.code,
-              retryable: classified.retryable,
+              agent_thread_id: tracker.agentThreadId || undefined,
               stream_message_ts: streamedReply.streamMessageTs || streamedReply.id,
-              overflow_followups_posted: streamedReply.overflowFollowupsPosted || undefined,
+              reason: "overflow_followups_posted",
               overflow_reason: streamedReply.overflowReason,
               overflow_followup_count: streamedReply.overflowFollowupCount,
               overflow_chars: streamedReply.overflowChars,
+              result_length: finalText.length,
             });
+          } else {
+            try {
+              await streamedReply.edit({ markdown: streamedMarkdown });
+            } catch (err) {
+              const classified = classifySlackError(err);
+              const expected = classified.errorClass === "invalid_payload"
+                || classified.message.includes("msg_too_long")
+                || classified.message.includes("msg_blocks_too_long");
+              const logFn = expected ? log.info.bind(log) : log.warn.bind(log);
+              logFn("streamed_reply_block_upgrade_failed", {
+                thread_key: threadKey,
+                execution_id: executionId,
+                error: classified.message,
+                error_class: classified.errorClass,
+                error_code: classified.code,
+                retryable: classified.retryable,
+                stream_message_ts: streamedReply.streamMessageTs || streamedReply.id,
+                overflow_followups_posted: streamedReply.overflowFollowupsPosted || undefined,
+                overflow_reason: streamedReply.overflowReason,
+                overflow_followup_count: streamedReply.overflowFollowupCount,
+                overflow_chars: streamedReply.overflowChars,
+              });
+            }
           }
         }
       }

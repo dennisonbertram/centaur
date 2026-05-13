@@ -85,11 +85,6 @@ if [[ "$BUILD_IMAGES" =~ ^(1|true|yes)$ ]] || [[ "$LOAD_IMAGES" =~ ^(1|true|yes|
   require_cmd docker
 fi
 
-if [[ -z "${AMP_API_KEY:-}" ]]; then
-  echo "FATAL: AMP_API_KEY is required" >&2
-  exit 1
-fi
-
 wait_for_api_rollout() {
   if kubectl rollout status -n "$NAMESPACE" "$API_DEPLOYMENT" --timeout=5m; then
     return 0

@@ -35,9 +35,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Skip when AMP_API_KEY is unavailable
+      - name: Skip live stack when AMP_API_KEY is unavailable
         if: ${{ env.AMP_API_KEY == '' }}
-        run: echo "AMP_API_KEY is not configured; skipping live E2E."
+        run: echo "AMP_API_KEY is not configured; skipping live stack E2E. Slackbot Delivery Regression covers Slack delivery logic without deploying the full stack."
 
       - uses: actions/setup-node@v4
         if: ${{ env.AMP_API_KEY != '' }}
@@ -109,7 +109,7 @@ jobs:
         if: ${{ env.AMP_API_KEY != '' }}
         env:
           CENTAUR_API_URL: http://localhost:8000
-        run: pnpm run e2e:test
+        run: pnpm run e2e:live
 
       - name: Dump diagnostics on failure
         if: failure()
