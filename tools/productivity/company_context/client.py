@@ -18,6 +18,8 @@ from centaur_sdk.tool_sdk import secret
 DEFAULT_SEARCH_LIMIT = 10
 MAX_SEARCH_LIMIT = 50
 TITLE_MATCH_BOOST = 4
+EXACT_QUERY_TITLE_BOOST = 8
+EXACT_QUERY_BODY_BOOST = 2
 THREAD_SCORE_MULTIPLIER = 1.25
 CHANNEL_DAY_SCORE_MULTIPLIER = 0.75
 DEFAULT_PREVIEW_CHARS = 280
@@ -26,6 +28,49 @@ SLACK_LIVE_SOURCE_TYPE = "slack_live_message"
 _SLACK_AFTER_RE = re.compile(r"\bafter:\d{4}-\d{2}-\d{2}\b", re.IGNORECASE)
 
 _SEARCH_TERM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*")
+_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "but",
+    "by",
+    "for",
+    "from",
+    "how",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "our",
+    "that",
+    "the",
+    "their",
+    "there",
+    "these",
+    "they",
+    "this",
+    "to",
+    "was",
+    "we",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "will",
+    "with",
+}
 
 
 def _clamp(value: int, *, minimum: int, maximum: int) -> int:
@@ -60,28 +105,37 @@ def _normalize_text(value: str) -> str:
 
 
 def _search_terms(query: str) -> list[str]:
-    """Extract unique terms for SQL-level AND matching."""
+    """Extract unique content terms, falling back when filtering removes everything."""
     seen: set[str] = set()
-    terms: list[str] = []
+    all_terms: list[str] = []
+    filtered_terms: list[str] = []
     for match in _SEARCH_TERM_RE.finditer(query):
         term = match.group(0).strip()
         if len(term) < 2:
             continue
         key = term.lower()
-        if key not in seen:
-            seen.add(key)
-            terms.append(term)
-    return terms or [query]
+        if key in seen:
+            continue
+        seen.add(key)
+        all_terms.append(term)
+        if key not in _STOP_WORDS:
+            filtered_terms.append(term)
+    return filtered_terms or all_terms or [query]
 
 
-def _search_where_clause(terms: list[str]) -> str:
-    """Build a ParadeDB query that requires every term while boosting title hits."""
-    clauses = []
-    for index in range(1, len(terms) + 1):
+def _search_where_clause(term_count: int) -> str:
+    """Build a ParadeDB query that boosts exact matches and falls back to OR term matching."""
+    clauses = [
+        "("
+        f"title ||| $1::text::pdb.boost({EXACT_QUERY_TITLE_BOOST}) "
+        f"OR body ||| $1::text::pdb.boost({EXACT_QUERY_BODY_BOOST})"
+        ")"
+    ]
+    for index in range(2, term_count + 2):
         clauses.append(
             f"(title ||| ${index}::text::pdb.boost({TITLE_MATCH_BOOST}) OR body ||| ${index})"
         )
-    return " AND ".join(clauses)
+    return " OR ".join(clauses)
 
 
 def _body_preview(body: str, *, query: str, max_chars: int = DEFAULT_PREVIEW_CHARS) -> str:
@@ -242,9 +296,10 @@ class CompanyContextClient:
         conn = await self._connect()
         try:
             terms = _search_terms(query)
-            source_param = len(terms) + 1
-            source_type_param = len(terms) + 2
-            limit_param = len(terms) + 3
+            search_terms = [query, *terms]
+            source_param = len(search_terms) + 1
+            source_type_param = len(search_terms) + 2
+            limit_param = len(search_terms) + 3
             rows = await conn.fetch(
                 f"""
                 SELECT
@@ -264,7 +319,7 @@ class CompanyContextClient:
                     metadata,
                     paradedb.score(document_id) AS score
                 FROM company_context_documents
-                WHERE {_search_where_clause(terms)}
+                WHERE {_search_where_clause(len(terms))}
                   AND (${source_param}::text IS NULL OR source = ${source_param})
                   AND (${source_type_param}::text IS NULL OR source_type = ${source_type_param})
                 ORDER BY
@@ -277,7 +332,7 @@ class CompanyContextClient:
                     source_updated_at DESC NULLS LAST
                 LIMIT ${limit_param}
                 """,
-                *terms,
+                *search_terms,
                 source,
                 source_type,
                 limit,
@@ -316,13 +371,12 @@ class CompanyContextClient:
                 except Exception as exc:
                     live_error = str(exc)
 
-            combined_results = [*results, *live_results]
             return {
                 "status": "ok",
                 "query": query,
                 "source": source,
                 "source_type": source_type,
-                "count": len(combined_results),
+                "count": len(results) + len(live_results),
                 "indexed_count": len(results),
                 "live_count": len(live_results),
                 "indexed_cutoff": latest.get("latest_date") if latest else None,
@@ -331,7 +385,7 @@ class CompanyContextClient:
                 ),
                 "latest_occurred_at": latest.get("latest_occurred_at") if latest else None,
                 "live_error": live_error,
-                "results": combined_results,
+                "results": [*results, *live_results],
             }
         finally:
             await conn.close()

@@ -115,13 +115,15 @@ def test_search_queries_bm25_and_returns_compact_results(monkeypatch):
         "metadata": {"channel_name": "eng-ai", "thread_ts": "1770000000.000000"},
     }
     query, args = fake.fetch_calls[0]
-    assert "title ||| $1::text::pdb.boost(4) OR body ||| $1" in query
+    assert "title ||| $1::text::pdb.boost(8) OR body ||| $1::text::pdb.boost(2)" in query
     assert "title ||| $2::text::pdb.boost(4) OR body ||| $2" in query
+    assert "title ||| $3::text::pdb.boost(4) OR body ||| $3" in query
+    assert ") OR (" in query
     assert "WHEN 'slack_thread' THEN 1.25" in query
     assert "WHEN 'slack_channel_day' THEN 0.75" in query
     assert "END DESC" in query
     assert "paradedb.score(document_id)" in query
-    assert args == ("ParadeDB", "BM25", "slack", "slack_thread", 5)
+    assert args == ("ParadeDB BM25", "ParadeDB", "BM25", "slack", "slack_thread", 5)
     assert fake.closed is True
 
 
@@ -228,7 +230,7 @@ def test_search_preserves_existing_slack_after_modifier(monkeypatch):
     assert fake_slack.calls == [("state root after:2026-05-11", 10)]
 
 
-def test_search_terms_are_required_once(monkeypatch):
+def test_search_uses_or_terms_and_drops_stop_words(monkeypatch):
     fake = _FakeConnection(rows=[])
 
     async def fake_connect(*args, **kwargs):
@@ -237,17 +239,29 @@ def test_search_terms_are_required_once(monkeypatch):
     monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
 
     result = CompanyContextClient("postgresql://example").search(
-        "state root state mismatch",
+        "what is the state root state mismatch in prod",
         limit=3,
     )
 
     assert result["status"] == "ok"
     query, args = fake.fetch_calls[0]
-    assert "WHERE (title ||| $1::text::pdb.boost(4) OR body ||| $1)" in query
-    assert "AND (title ||| $2::text::pdb.boost(4) OR body ||| $2)" in query
-    assert "AND (title ||| $3::text::pdb.boost(4) OR body ||| $3)" in query
-    assert "title ||| $4::text::pdb.boost(4)" not in query
-    assert args == ("state", "root", "mismatch", None, None, 3)
+    assert "WHERE (title ||| $1::text::pdb.boost(8) OR body ||| $1::text::pdb.boost(2))" in query
+    assert "OR (title ||| $2::text::pdb.boost(4) OR body ||| $2)" in query
+    assert "OR (title ||| $3::text::pdb.boost(4) OR body ||| $3)" in query
+    assert "OR (title ||| $4::text::pdb.boost(4) OR body ||| $4)" in query
+    assert "OR (title ||| $5::text::pdb.boost(4) OR body ||| $5)" in query
+    assert "title ||| $6::text::pdb.boost(4)" not in query
+    assert args == (
+        "what is the state root state mismatch in prod",
+        "state",
+        "root",
+        "mismatch",
+        "prod",
+        None,
+        None,
+        3,
+    )
+
 
 
 def test_latest_date_returns_latest_indexed_slack_timestamp(monkeypatch):
