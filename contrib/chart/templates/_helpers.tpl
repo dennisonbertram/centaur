@@ -113,10 +113,6 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "http://%s:%v" (include "centaur.firewallControlHost" .) (include "centaur.firewallControlPort" .) -}}
 {{- end -}}
 
-{{- define "centaur.secretManagerUrl" -}}
-{{- printf "http://%s:8100" (include "centaur.componentName" (dict "root" . "component" "secrets")) -}}
-{{- end -}}
-
 {{- define "centaur.firewallProxyHost" -}}
 {{- include "centaur.componentName" (dict "root" . "component" "iron-proxy") -}}
 {{- end -}}

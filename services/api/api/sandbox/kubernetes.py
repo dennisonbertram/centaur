@@ -12,9 +12,7 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
-import httpx
 from aiohttp import WSMsgType
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.config.config_exception import ConfigException
@@ -27,10 +25,8 @@ from kubernetes_asyncio.stream.ws_client import (
 )
 import structlog
 
-from api.firewall import secrets_headers, secrets_url
 from api.sandbox.base import SandboxBackend, SandboxSession
 from api.sandbox.config import (
-    agent_local_dev_enabled,
     build_harness_cmd,
     container_env,
     image,
@@ -194,15 +190,6 @@ def _api_pod_match_labels() -> dict[str, str]:
     )
 
 
-def _secrets_pod_match_labels() -> dict[str, str]:
-    return _parse_match_labels(
-        os.getenv(
-            "KUBERNETES_SECRETS_POD_LABEL_SELECTOR",
-            "app.kubernetes.io/component=secrets",
-        )
-    )
-
-
 def _parse_match_labels(raw: str) -> dict[str, str]:
     result: dict[str, str] = {}
     for item in raw.split(","):
@@ -261,54 +248,6 @@ def _firewall_ca_key_secret_name() -> str:
             "KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME is required for per-sandbox proxy"
         )
     return value
-
-
-def _required_runtime_secret_keys() -> list[str]:
-    raw = os.getenv("REQUIRED_RUNTIME_SECRET_KEYS", "AMP_API_KEY")
-    keys: list[str] = []
-    for token in raw.split(","):
-        key = token.strip()
-        if key and key not in keys:
-            keys.append(key)
-    return keys
-
-
-async def _fetch_runtime_secret_values(keys: list[str]) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not keys:
-        return values
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        for key in keys:
-            url = f"{secrets_url()}/secrets/{quote(key, safe='')}"
-            response = await client.get(url, headers=secrets_headers())
-            if response.status_code != 200:
-                continue
-            try:
-                payload = response.json()
-            except Exception:
-                continue
-            value = payload.get("value")
-            if isinstance(value, str) and value:
-                values[key] = value
-    return values
-
-
-async def _runtime_secret_values_for_sandbox() -> dict[str, str]:
-    if agent_local_dev_enabled():
-        return {}
-
-    required_keys = _required_runtime_secret_keys()
-    if not required_keys:
-        return {}
-
-    values = await _fetch_runtime_secret_values(required_keys)
-    missing = [key for key in required_keys if not values.get(key)]
-    if missing:
-        raise RuntimeError(
-            "runtime credentials unavailable for sandbox: "
-            f"missing_keys={','.join(missing)}"
-        )
-    return values
 
 
 def _resource_name(prefix: str, raw: str, *, max_length: int = 63) -> str:
@@ -703,16 +642,6 @@ class KubernetesExecutorBackend(SandboxBackend):
                             "ports": [{"protocol": "TCP", "port": 8000}],
                         },
                         {
-                            "to": [
-                                {
-                                    "podSelector": {
-                                        "matchLabels": _secrets_pod_match_labels()
-                                    }
-                                }
-                            ],
-                            "ports": [{"protocol": "TCP", "port": 8100}],
-                        },
-                        {
                             "ports": [{"protocol": "TCP", "port": 443}],
                         },
                     ],
@@ -994,13 +923,11 @@ class KubernetesExecutorBackend(SandboxBackend):
         pod_name = _resource_name("centaur-centaur-sandbox", thread_key)
         secret_name = _prompt_secret_name(pod_name)
         firewall_host = _proxy_service_name(pod_name)
-        runtime_secret_values = await _runtime_secret_values_for_sandbox()
         env = container_env(
             thread_key,
             pod_name,
             resume_thread_id=resume_thread_id,
             firewall_host=firewall_host,
-            runtime_secret_values=runtime_secret_values,
         )
         overlay_image = _overlay_image()
         if overlay_image:

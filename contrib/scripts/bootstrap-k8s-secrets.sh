@@ -109,7 +109,6 @@ else
   DATABASE_URL="postgresql://tempo:${POSTGRES_PASSWORD}@centaur-centaur-pgbouncer:5432/ai_v2"
   secret_args=(
     -n "$NAMESPACE" create secret generic centaur-infra-env
-    --from-literal=SECRETS_AUTH_TOKEN="$(rand_hex)"
     --from-literal=FIREWALL_CONTROL_TOKEN="$(rand_hex)"
     --from-literal=IRON_MANAGEMENT_API_KEY="$(rand_hex)"
     --from-literal=SANDBOX_SIGNING_KEY="$(rand_hex)"

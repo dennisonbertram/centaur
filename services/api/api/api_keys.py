@@ -10,10 +10,7 @@ from dataclasses import dataclass, field
 from threading import Lock
 
 import asyncpg
-import httpx
 import structlog
-
-from api.firewall import secrets_headers
 
 log = structlog.get_logger()
 
@@ -227,50 +224,11 @@ async def ensure_static_key(
     return info
 
 
-async def _fetch_secret_value(secret_manager_url: str, key: str) -> str | None:
-    """Fetch a secret value from the local secret manager."""
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        response = await client.get(
-            f"{secret_manager_url.rstrip('/')}/secrets/{key}",
-            headers=secrets_headers(),
-        )
-        if response.status_code == 404:
-            return None
-        response.raise_for_status()
-        payload = response.json()
-
-    value = payload.get("value")
-    if not isinstance(value, str):
-        return None
-    value = value.strip()
-    return value or None
-
-
-async def bootstrap_service_api_keys(
-    pool: asyncpg.Pool,
-    *,
-    secret_manager_url: str | None = None,
-) -> list[APIKeyInfo]:
-    """Seed long-lived service keys from env or the secret manager into Postgres."""
-    resolved_secret_manager_url = (
-        secret_manager_url.strip()
-        if secret_manager_url is not None
-        else os.environ.get("SECRET_MANAGER_URL", "").strip()
-    )
-
+async def bootstrap_service_api_keys(pool: asyncpg.Pool) -> list[APIKeyInfo]:
+    """Seed long-lived service keys from env vars into Postgres."""
     bootstrapped: list[APIKeyInfo] = []
     for spec in _SERVICE_API_KEYS:
         token = os.environ.get(spec.env_var, "").strip()
-        if not token and resolved_secret_manager_url:
-            try:
-                token = (await _fetch_secret_value(resolved_secret_manager_url, spec.env_var)) or ""
-            except Exception as exc:
-                log.warning(
-                    "service_api_key_secret_fetch_failed",
-                    env_var=spec.env_var,
-                    error=str(exc),
-                )
-                continue
         if not token:
             continue
         info = await ensure_static_key(

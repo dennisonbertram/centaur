@@ -3197,9 +3197,7 @@ async def test_bootstrap_service_api_keys_inserts_missing_rows(db_pool, monkeypa
     monkeypatch.setenv("SLACKBOT_API_KEY", slack_key)
     monkeypatch.delenv("LOCAL_DEV_API_KEY", raising=False)
 
-    bootstrapped = await api_keys.bootstrap_service_api_keys(
-        db_pool, secret_manager_url=""
-    )
+    bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool)
 
     assert [info.name for info in bootstrapped] == ["service:slackbot"]
     row = await db_pool.fetchrow(
@@ -3220,7 +3218,7 @@ async def test_bootstrap_service_api_keys_inserts_missing_rows(db_pool, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_service_api_keys_fetches_and_reactivates_revoked_rows(
+async def test_bootstrap_service_api_keys_reactivates_revoked_rows(
     db_pool,
     monkeypatch,
 ):
@@ -3236,19 +3234,10 @@ async def test_bootstrap_service_api_keys_fetches_and_reactivates_revoked_rows(
         ["agent"],
         "manual",
     )
-    monkeypatch.delenv("SLACKBOT_API_KEY", raising=False)
+    monkeypatch.setenv("SLACKBOT_API_KEY", slack_key)
     monkeypatch.delenv("LOCAL_DEV_API_KEY", raising=False)
 
-    async def fake_fetch_secret_value(secret_manager_url: str, key: str) -> str | None:
-        assert secret_manager_url == "http://secret-manager"
-        return slack_key if key == "SLACKBOT_API_KEY" else None
-
-    monkeypatch.setattr(api_keys, "_fetch_secret_value", fake_fetch_secret_value)
-
-    bootstrapped = await api_keys.bootstrap_service_api_keys(
-        db_pool,
-        secret_manager_url="http://secret-manager",
-    )
+    bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool)
 
     assert [info.name for info in bootstrapped] == ["service:slackbot"]
     row = await db_pool.fetchrow(
@@ -3270,9 +3259,7 @@ async def test_bootstrap_service_api_keys_includes_local_dev_key(db_pool, monkey
     monkeypatch.delenv("SLACKBOT_API_KEY", raising=False)
     monkeypatch.setenv("LOCAL_DEV_API_KEY", local_dev_key)
 
-    bootstrapped = await api_keys.bootstrap_service_api_keys(
-        db_pool, secret_manager_url=""
-    )
+    bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool)
 
     assert [info.name for info in bootstrapped] == ["service:local-dev"]
     row = await db_pool.fetchrow(

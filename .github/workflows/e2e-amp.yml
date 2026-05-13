@@ -78,7 +78,6 @@ jobs:
         run: |
           for image in \
             centaur-api \
-            centaur-secrets \
             centaur-pgbouncer \
             centaur-iron-proxy \
             centaur-firewall-manager \
@@ -118,5 +117,4 @@ jobs:
           kubectl get pods -n "$CENTAUR_NAMESPACE" -o wide || true
           kubectl get events -n "$CENTAUR_NAMESPACE" --sort-by=.lastTimestamp || true
           kubectl logs -n "$CENTAUR_NAMESPACE" deploy/${CENTAUR_RELEASE}-centaur-api --tail=200 || true
-          kubectl logs -n "$CENTAUR_NAMESPACE" deploy/${CENTAUR_RELEASE}-centaur-secrets --tail=200 || true
           kubectl logs -n "$CENTAUR_NAMESPACE" -l centaur-agent=true --tail=200 || true

@@ -139,55 +139,6 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "centaur.componentName" (dict "root" . "component" "secrets") }}
-  labels:
-{{ include "centaur.componentLabels" (dict "root" . "component" "secrets") | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "secrets") | nindent 6 }}
-  policyTypes:
-    - Ingress
-{{- if or (eq .Values.secretManager.backend "onepassword") .Values.laminar.enabled }}
-    - Egress
-{{- end }}
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "api") | nindent 14 }}
-{{- if .Values.slackbot.enabled }}
-        - podSelector:
-            matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "slackbot") | nindent 14 }}
-{{- end }}
-      ports:
-        - protocol: TCP
-          port: 8100
-{{- if or (eq .Values.secretManager.backend "onepassword") .Values.laminar.enabled }}
-  egress:
-{{- if eq .Values.secretManager.backend "onepassword" }}
-    # Direct 1Password mode needs outbound HTTPS to the 1Password API.
-    - ports:
-        - protocol: TCP
-          port: 443
-{{- end }}
-{{- if .Values.laminar.enabled }}
-    - to:
-        - podSelector:
-            matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "laminar-app-server") | nindent 14 }}
-      ports:
-        - protocol: TCP
-          port: {{ .Values.laminar.appServer.service.httpPort }}
-        - protocol: TCP
-          port: {{ .Values.laminar.appServer.service.grpcPort }}
-{{- end }}
-{{- end }}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
   name: {{ include "centaur.componentName" (dict "root" . "component" "pgbouncer") }}
   labels:
 {{ include "centaur.componentLabels" (dict "root" . "component" "pgbouncer") | nindent 4 }}
@@ -276,13 +227,6 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "secrets") | nindent 14 }}
-      ports:
-        - protocol: TCP
-          port: 8100
-    - to:
-        - podSelector:
-            matchLabels:
 {{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 14 }}
       ports:
         - protocol: TCP
@@ -343,13 +287,6 @@ spec:
       ports:
         - protocol: TCP
           port: 5432
-    - to:
-        - podSelector:
-            matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "secrets") | nindent 14 }}
-      ports:
-        - protocol: TCP
-          port: 8100
     - to:
         - podSelector:
             matchLabels:

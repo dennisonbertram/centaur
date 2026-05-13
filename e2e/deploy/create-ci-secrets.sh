@@ -24,7 +24,6 @@ DATABASE_URL="${CENTAUR_E2E_DATABASE_URL:-postgresql://tempo:${POSTGRES_PASSWORD
 
 kubectl -n "$NAMESPACE" delete secret centaur-infra-env --ignore-not-found >/dev/null
 kubectl -n "$NAMESPACE" create secret generic centaur-infra-env \
-  --from-literal=SECRETS_AUTH_TOKEN="${SECRETS_AUTH_TOKEN:-$(rand_hex)}" \
   --from-literal=FIREWALL_CONTROL_TOKEN="${FIREWALL_CONTROL_TOKEN:-$(rand_hex)}" \
   --from-literal=IRON_MANAGEMENT_API_KEY="${IRON_MANAGEMENT_API_KEY:-$(rand_hex)}" \
   --from-literal=SANDBOX_SIGNING_KEY="${SANDBOX_SIGNING_KEY:-$(rand_hex)}" \

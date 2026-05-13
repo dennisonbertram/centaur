@@ -12,14 +12,3 @@ def control_headers() -> dict[str, str]:
     if not token:
         return {}
     return {"Authorization": f"Bearer {token}"}
-
-
-def secrets_url() -> str:
-    return os.environ.get("SECRET_MANAGER_URL", "http://secrets:8100").rstrip("/")
-
-
-def secrets_headers() -> dict[str, str]:
-    token = (os.environ.get("SECRETS_AUTH_TOKEN") or "").strip()
-    if not token:
-        raise RuntimeError("SECRETS_AUTH_TOKEN must be set")
-    return {"Authorization": f"Bearer {token}"}

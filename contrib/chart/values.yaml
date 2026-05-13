@@ -5,7 +5,6 @@ global:
   imagePullSecrets: []
 
 secretManager:
-  backend: onepassword
   envPrefix: ""
   existingSecretName: centaur-infra-env
 
@@ -49,12 +48,7 @@ onepasswordConnect:
     credentialsKey: 1password-credentials.json
 
 secrets:
-  image:
-    repository: centaur-secrets
-    tag: latest
-    pullPolicy: IfNotPresent
   bootstrapSecretName: ""
-  extraEnv: {}
 
 api:
   replicaCount: 1

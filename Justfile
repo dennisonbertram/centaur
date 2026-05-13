@@ -15,7 +15,7 @@ build:
       just _build-all-sequential
     else
       pids=()
-      for recipe in _build-api _build-secrets _build-pgbouncer _build-iron-proxy _build-firewall-manager _build-slackbot _build-agent; do
+      for recipe in _build-api _build-pgbouncer _build-iron-proxy _build-firewall-manager _build-slackbot _build-agent; do
         just "$recipe" &
         pids+=("$!")
       done
@@ -28,7 +28,6 @@ build:
 
 _build-all-sequential:
     just _build-api
-    just _build-secrets
     just _build-pgbouncer
     just _build-iron-proxy
     just _build-firewall-manager
@@ -40,7 +39,6 @@ build-one service:
     set -euo pipefail
     case "{{service}}" in
       api) just _build-api ;;
-      secrets) just _build-secrets ;;
       pgbouncer) just _build-pgbouncer ;;
       iron-proxy) just _build-iron-proxy ;;
       firewall-manager) just _build-firewall-manager ;;
@@ -51,9 +49,6 @@ build-one service:
 
 _build-api:
     docker build -t centaur-api:latest -f services/api/Dockerfile .
-
-_build-secrets:
-    docker build -t centaur-secrets:latest -f services/secrets/Dockerfile .
 
 _build-pgbouncer:
     docker build -t centaur-pgbouncer:latest -f services/pgbouncer/Dockerfile .

@@ -511,9 +511,9 @@ All API authentication uses **DB-backed keys** stored in the `api_keys` Postgres
 - **Sandbox containers**: Auto-issued `sbx1.*` token injected as `CENTAUR_API_KEY` at container creation
 - **Local testing**: Use localhost bypass (no key needed from inside the API deployment), or create a key via admin API
 
-## Secret Manager
+## Secrets
 
-The secrets service (`services/secrets/app.py`) loads all secrets from a 1Password vault on startup and refreshes periodically. Item titles are normalized to ENV_VAR style (e.g., "Claude API" → `ANTHROPIC_API_KEY`).
+Tool credentials (e.g., `ANTHROPIC_API_KEY`, `AMP_API_KEY`) are never materialized inside sandboxes or the API service. Tools declare which keys they need in their `pyproject.toml` and call `secret("KEY")` to receive a placeholder. Outbound HTTPS traffic is MITM'd by iron-proxy, which substitutes the real credential based on the host/key injection map managed by firewall-manager. iron-proxy resolves `op://...` references directly against 1Password.
 
 For local development, infra secrets are stored in Kubernetes Secrets created by `just bootstrap-secrets`; application secrets continue to come from 1Password.
 

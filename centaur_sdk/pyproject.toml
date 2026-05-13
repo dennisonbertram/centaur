@@ -11,7 +11,6 @@ dependencies = [
 
 [project.optional-dependencies]
 http = ["httpx>=0.28.0"]
-onepassword = ["onepassword-sdk>=0.4.0"]
 
 [build-system]
 requires = ["hatchling"]

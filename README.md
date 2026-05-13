@@ -93,8 +93,7 @@ The main directories are:
 - [`services/api`](services/api/) — control plane for agents, tools, workflows, auth, and durable state
 - [`services/slackbot`](services/slackbot/) — Slack event handling and Slack delivery
 - [`services/sandbox`](services/sandbox/) — agent container image and harness adapter
-- [`services/secrets`](services/secrets/) — secret loading service
-- [`services/iron-proxy`](services/iron-proxy/) and [`services/firewall-manager`](services/firewall-manager/) — controlled outbound access
+- [`services/iron-proxy`](services/iron-proxy/) and [`services/firewall-manager`](services/firewall-manager/) — controlled outbound access and credential injection
 - [`tools`](tools/) — tool plugins
 - [`workflows`](workflows/) — workflow plugins
 

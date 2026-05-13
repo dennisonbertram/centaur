@@ -22,7 +22,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar
 
-import httpx
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -30,44 +29,21 @@ from toon_format import encode as toon_encode
 
 from api.api_keys import check_scope
 from api.laminar_tracing import set_span_attributes, start_span
-from api.firewall import secrets_headers, secrets_url
 from api.vm_metrics import record_tool_call
 from api.deps import get_key_info, get_sandbox_claims, verify_api_key
 from centaur_sdk import ToolContext, reset_tool_context, set_tool_context
 
 log = structlog.get_logger()
 
-_secret_cache: dict[str, tuple[str, float]] = {}
-_SECRET_CACHE_TTL = 60
-
-
 async def _resolve_secrets(keys: list[str]) -> dict[str, str]:
-    """Fetch secrets from the secret manager, with a short TTL cache."""
-    now = time.monotonic()
-    result: dict[str, str] = {}
-    missing: list[str] = []
-    for k in keys:
-        cached = _secret_cache.get(k)
-        if cached and (now - cached[1]) < _SECRET_CACHE_TTL:
-            result[k] = cached[0]
-        else:
-            missing.append(k)
-    if not missing:
-        return result
-    base_url = secrets_url()
-    headers = secrets_headers()
-    async with httpx.AsyncClient(timeout=5) as client:
-        for k in missing:
-            try:
-                resp = await client.get(f"{base_url}/secrets/{k}", headers=headers)
-                if resp.status_code == 200:
-                    val = resp.json().get("value", "")
-                    if val:
-                        result[k] = val
-                        _secret_cache[k] = (val, now)
-            except Exception:
-                pass
-    return result
+    """Return placeholder values for declared secret keys.
+
+    Real values are substituted at the network boundary by iron-proxy via the
+    injection map. Tools see the key name as a stub; outbound requests carry it
+    in auth headers and iron-proxy MITMs the connection to swap in the real
+    credential.
+    """
+    return {k: k for k in keys}
 
 
 _MAX_INLINE_TOOL_BINARY_BYTES = max(
