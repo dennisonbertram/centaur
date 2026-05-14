@@ -177,17 +177,61 @@ describe("Slack stream payloads", () => {
     const appends = streamCallParams("chat.appendStream");
 
     expect(start).toEqual(expect.objectContaining({
-      chunks: [{ type: "markdown_text", text: "\u200b" }],
+      chunks: [{ type: "plan_update", title: "Completed" }],
     }));
     expect(start).not.toHaveProperty("markdown_text");
     expect(appends[0]).toEqual(expect.objectContaining({
-      chunks: [{ type: "plan_update", title: "Completed" }],
-    }));
-    expect(appends[0]).not.toHaveProperty("markdown_text");
-    expect(appends[1]).toEqual(expect.objectContaining({
       chunks: [{ type: "markdown_text", text: "pong" }],
     }));
-    expect(appends[1]).not.toHaveProperty("markdown_text");
+    expect(appends[0]).not.toHaveProperty("markdown_text");
+  });
+
+  it("suppresses empty plain posts instead of sending a zero-width message", async () => {
+    const adapter = createAdapter();
+    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => {});
+
+    try {
+      const result = await adapter.postMessage("slack:C123:1700000000.000001", {
+        markdown: " \u200b ",
+      });
+
+      expect(result).toEqual({ id: "1700000000.000001" });
+      expect(streamCallParams("chat.postMessage")).toHaveLength(0);
+      expect(errorSpy).toHaveBeenCalledWith("slack_empty_message_suppressed", expect.objectContaining({
+        thread_id: "slack:C123:1700000000.000001",
+        channel: "C123",
+        thread_ts: "1700000000.000001",
+      }));
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("suppresses streams that contain only empty markdown chunks", async () => {
+    const adapter = createAdapter();
+    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => {});
+
+    try {
+      const result = await adapter.stream(
+        "slack:C123:1700000000.000001",
+        (async function* () {
+          yield { type: "markdown_text", text: "\u200b" } satisfies StreamChunk;
+          yield { type: "markdown_text", text: " " } satisfies StreamChunk;
+        })(),
+        { taskDisplayMode: "plan", threadKey: "C123:1700000000.000001", executionId: "exe-empty" },
+      );
+
+      expect(result).toEqual({ id: "1700000000.000001" });
+      expect(streamCallParams("chat.startStream")).toHaveLength(0);
+      expect(streamCallParams("chat.postMessage")).toHaveLength(0);
+      expect(errorSpy).toHaveBeenCalledWith("slack_empty_stream_suppressed", expect.objectContaining({
+        thread_id: "slack:C123:1700000000.000001",
+        thread_key: "C123:1700000000.000001",
+        execution_id: "exe-empty",
+      }));
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it("splits into follow-up messages when approaching Slack's text limit", async () => {

@@ -173,6 +173,20 @@ type FinalDeliveryRecord = {
   final_payload?: Record<string, unknown> | null;
 };
 
+type EmptyBotMessageReport = {
+  deliveryPath: "live_stream" | "final_delivery";
+  threadKey: string;
+  executionId: string;
+  agentThreadId?: string;
+  streamMessageTs?: string;
+  status?: string;
+  terminalReason?: string;
+  resultLength?: number;
+  errorTextLength?: number;
+  renderedMarkdownLength?: number;
+  deliveredToSlack?: boolean;
+};
+
 type SlackHistoryWorkflowMessage = {
   message_id: string;
   parts: InputContentBlock[];
@@ -231,6 +245,19 @@ export function parsePromptSelectorFlag(text: string): string | undefined {
  */
 function stripMentions(text: string): string {
   return text.replace(/<@[A-Z0-9]+>/g, "").replace(/\s+/g, " ").trim();
+}
+
+function isEmptyCompletedTerminalResult(opts: {
+  status?: unknown;
+  terminalReason?: unknown;
+  resultText?: unknown;
+  errorText?: unknown;
+}): boolean {
+  const status = normalizedTerminalString(opts.status);
+  const terminalReason = normalizedTerminalString(opts.terminalReason);
+  const resultText = normalizedTerminalString(opts.resultText);
+  const errorText = normalizedTerminalString(opts.errorText);
+  return status === "completed" && !terminalReason && !resultText && !errorText;
 }
 
 /**
@@ -967,6 +994,18 @@ export class SlackBot {
       }
 
       const finalText = (tracker.resultText || tracker.lastAssistantText).trim();
+      if (!finalText && deliveredToSlack) {
+        await this.reportEmptyBotMessage({
+          deliveryPath: "live_stream",
+          threadKey,
+          executionId,
+          agentThreadId: tracker.agentThreadId || undefined,
+          streamMessageTs: streamedReply?.streamMessageTs || streamedReply?.id,
+          resultLength: 0,
+          renderedMarkdownLength: 0,
+          deliveredToSlack,
+        });
+      }
       log.info("execute_complete", {
         thread_key: threadKey,
         execution_id: executionId,
@@ -1554,6 +1593,25 @@ export class SlackBot {
     const fpErrorText = typeof finalPayload.error_text === "string" ? finalPayload.error_text : "";
     const fpResultText = typeof finalPayload.result_text === "string" ? finalPayload.result_text : "";
     const fpAgentThreadId = agentThreadIdFromRecord(finalPayload);
+    if (isEmptyCompletedTerminalResult({
+      status: fpStatus,
+      terminalReason: fpTerminalReason,
+      resultText: fpResultText,
+      errorText: fpErrorText,
+    })) {
+      await this.reportEmptyBotMessage({
+        deliveryPath: "final_delivery",
+        threadKey,
+        executionId,
+        agentThreadId: fpAgentThreadId,
+        status: fpStatus,
+        terminalReason: fpTerminalReason,
+        resultLength: fpResultText.length,
+        errorTextLength: fpErrorText.length,
+        renderedMarkdownLength: markdown.trim().length,
+        deliveredToSlack: false,
+      });
+    }
     if (shouldNotifyRuntimeErrorChannel({
       status: fpStatus,
       terminalReason: fpTerminalReason,
@@ -1628,6 +1686,59 @@ export class SlackBot {
     }
   }
 
+  private async reportEmptyBotMessage(opts: EmptyBotMessageReport): Promise<void> {
+    log.error("slack_empty_bot_message_detected", {
+      thread_key: opts.threadKey,
+      execution_id: opts.executionId,
+      agent_thread_id: opts.agentThreadId,
+      delivery_path: opts.deliveryPath,
+      stream_message_ts: opts.streamMessageTs,
+      status: opts.status,
+      terminal_reason: opts.terminalReason,
+      result_length: opts.resultLength,
+      error_text_length: opts.errorTextLength,
+      rendered_markdown_length: opts.renderedMarkdownLength,
+      delivered_to_slack: opts.deliveredToSlack,
+    });
+    await this.notifySlackEmptyBotMessage(opts);
+  }
+
+  private async notifySlackEmptyBotMessage(opts: EmptyBotMessageReport): Promise<boolean> {
+    if (!this.runtimeErrorChannelId || !this.slack) return false;
+    try {
+      const lines = [
+        "**Slack empty message detected**",
+        `*Thread:* \`${opts.threadKey}\``,
+        `*Execution:* \`${opts.executionId}\``,
+        `*Delivery path:* \`${opts.deliveryPath}\``,
+        opts.agentThreadId ? `*Amp thread:* \`${opts.agentThreadId}\`` : "",
+        opts.streamMessageTs ? `*Stream message:* \`${opts.streamMessageTs}\`` : "",
+        opts.status ? `*Status:* \`${opts.status}\`` : "",
+        opts.terminalReason ? `*Terminal reason:* \`${opts.terminalReason}\`` : "",
+        `*Result length:* ${opts.resultLength ?? 0}`,
+        opts.errorTextLength !== undefined ? `*Error text length:* ${opts.errorTextLength}` : "",
+        opts.renderedMarkdownLength !== undefined ? `*Rendered markdown length:* ${opts.renderedMarkdownLength}` : "",
+        opts.deliveredToSlack !== undefined ? `*Delivered to Slack:* ${opts.deliveredToSlack}` : "",
+      ].filter(Boolean);
+      await this.slack.postMessage(
+        `slack:${this.runtimeErrorChannelId}`,
+        { markdown: lines.join("\n") },
+      );
+      return true;
+    } catch (err) {
+      const classified = classifySlackError(err);
+      log.warn("slack_empty_message_alert_failed", {
+        thread_key: opts.threadKey,
+        execution_id: opts.executionId,
+        alert_channel_id: this.runtimeErrorChannelId,
+        error: classified.message,
+        error_class: classified.errorClass,
+        error_code: classified.code,
+      });
+      return false;
+    }
+  }
+
   private async notifySlackOverflowDuplicateRendered(opts: {
     threadKey: string;
     executionId: string;
@@ -1641,7 +1752,7 @@ export class SlackBot {
     if (!this.runtimeErrorChannelId || !this.slack) return false;
     try {
       const lines = [
-        "*Slack duplicate render confirmed*",
+        "**Slack duplicate render confirmed**",
         `*Thread:* \`${opts.threadKey}\``,
         `*Execution:* \`${opts.executionId}\``,
         opts.agentThreadId ? `*Amp thread:* \`${opts.agentThreadId}\`` : "",

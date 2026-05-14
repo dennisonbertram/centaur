@@ -24,6 +24,22 @@ import type { StreamChunk, StreamOverflowMetadata, StreamOverflowReason } from "
  */
 const STREAM_TEXT_LIMIT = Math.floor(SLACK_PLAIN_TEXT_MESSAGE_CHARS * 0.9);
 const STREAM_BLOCKS_LIMIT = SLACK_BLOCKS_PER_MESSAGE - 2; // leave room for metadata block
+const ZERO_WIDTH_CHARS = /[\u200B-\u200D\uFEFF]/g;
+
+function hasVisibleSlackText(text: string): boolean {
+  return text.replace(ZERO_WIDTH_CHARS, "").trim().length > 0;
+}
+
+function isBlankStreamChunk(chunk: string | StreamChunk): boolean {
+  if (typeof chunk === "string") return !hasVisibleSlackText(chunk);
+  if (chunk.type === "markdown_text") return !hasVisibleSlackText(chunk.text);
+  if (chunk.type === "blocks") return chunk.blocks.length === 0;
+  if (chunk.type === "plan_update") return !hasVisibleSlackText(chunk.title);
+  if (chunk.type === "task_update") {
+    return !hasVisibleSlackText([chunk.title, chunk.details, chunk.output].filter(Boolean).join(" "));
+  }
+  return false;
+}
 
 function streamChunkTextLength(chunk: string | StreamChunk): number {
   if (typeof chunk === "string") return chunk.length;
@@ -317,9 +333,19 @@ class WebClientSlackAdapter implements SlackAdapter {
 
   async postMessage(threadId: string, message: PostPayload): Promise<{ id: string }> {
     const { channel, threadTs } = splitSlackThreadId(threadId);
+    const hasFiles = Boolean(message.files?.length);
+    if (!hasVisibleSlackText(message.markdown) && !hasFiles) {
+      log.error("slack_empty_message_suppressed", {
+        thread_id: threadId,
+        channel,
+        thread_ts: threadTs || undefined,
+      });
+      return { id: threadTs };
+    }
+
     const rendered = renderMarkdownForSlack(message.markdown);
     let ts = "";
-    if (message.markdown.trim() || !message.files?.length) {
+    if (hasVisibleSlackText(message.markdown)) {
       const response = await this.call<{ ts?: string }>("chat.postMessage", {
         channel,
         ...(threadTs ? { thread_ts: threadTs } : {}),
@@ -346,6 +372,15 @@ class WebClientSlackAdapter implements SlackAdapter {
 
   async updateMessage(threadId: string, messageId: string, message: { markdown: string }): Promise<void> {
     const { channel } = splitSlackThreadId(threadId);
+    if (!hasVisibleSlackText(message.markdown)) {
+      log.error("slack_empty_message_update_suppressed", {
+        thread_id: threadId,
+        channel,
+        message_id: messageId,
+      });
+      return;
+    }
+
     const rendered = renderMarkdownForSlack(message.markdown);
     await this.call("chat.update", {
       channel,
@@ -369,12 +404,22 @@ class WebClientSlackAdapter implements SlackAdapter {
     },
   ): Promise<{ id: string } & StreamOverflowMetadata> {
     const iterator = stream[Symbol.asyncIterator]();
-    const first = await iterator.next();
+    const { channel, threadTs } = splitSlackThreadId(threadId);
+    let first = await iterator.next();
+    while (!first.done && isBlankStreamChunk(first.value)) {
+      first = await iterator.next();
+    }
     if (first.done) {
-      return this.postMessage(threadId, { markdown: "" });
+      log.error("slack_empty_stream_suppressed", {
+        thread_id: threadId,
+        thread_key: options?.threadKey,
+        execution_id: options?.executionId,
+        channel,
+        thread_ts: threadTs || undefined,
+      });
+      return { id: threadTs };
     }
 
-    const { channel, threadTs } = splitSlackThreadId(threadId);
     const firstPayload = this.streamPayloadForChunk(first.value);
     const start = await this.call<{ ts?: string }>("chat.startStream", {
       channel,
@@ -396,6 +441,7 @@ class WebClientSlackAdapter implements SlackAdapter {
     while (true) {
       const next = await iterator.next();
       if (next.done) break;
+      if (isBlankStreamChunk(next.value)) continue;
 
       const chunkChars = streamChunkTextLength(next.value);
       const chunkBlocks = streamChunkBlockCount(next.value);
