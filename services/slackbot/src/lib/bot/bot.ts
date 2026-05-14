@@ -44,27 +44,52 @@ const WORKFLOW_START_TIMEOUT_MS = Math.max(
   30_000,
 );
 const EXECUTION_HARNESSES = new Set(["amp", "claude-code", "codex", "pi-mono"]);
+const PERSONA_REGISTRY_TTL_MS = Math.max(
+  Number(process.env.PERSONA_REGISTRY_TTL_SECONDS || 300) * 1000,
+  5_000,
+);
+// On fetch failure we want to retry sooner than the success TTL so a transient
+// API blip doesn't lock out overlay personas for 5 minutes.
+const PERSONA_REGISTRY_FAILURE_BACKOFF_MS = Math.min(
+  PERSONA_REGISTRY_TTL_MS,
+  Math.max(Number(process.env.PERSONA_REGISTRY_FAILURE_BACKOFF_SECONDS || 30) * 1000, 1_000),
+);
 const PROMPT_FLAG_ALIASES = new Map<string, string>([
   ["claude", "claude-code"],
   ["pi", "pi-mono"],
 ]);
-/**
- * Exhaustive allowlist of valid prompt selectors (harnesses + personas + aliases).
- * Only `--flag` tokens matching this set trigger persona/harness routing.
- * Unrecognised flags (e.g. `--rpc-url`, `--installed`) are left in the message
- * text as regular user content instead of causing an `unknown persona_id` error.
- *
- * Update this set when a new persona or harness is added.
- */
-const KNOWN_PROMPT_SELECTORS = new Set([
-  // harnesses
-  ...EXECUTION_HARNESSES,
-  // aliases (pre-resolution)
-  ...PROMPT_FLAG_ALIASES.keys(),
-  // personas
-  "eng",
-  "invest",
-]);
+
+type PersonaRegistryEntry = {
+  description?: string;
+  engine?: string;
+  default_repo?: string | null;
+};
+
+const FLOOR_PERSONAS: Record<string, PersonaRegistryEntry> = { eng: {} };
+let personaRegistry = new Map<string, PersonaRegistryEntry>(Object.entries(FLOOR_PERSONAS));
+let personaRegistryLoadedAt = 0;
+
+function knownPromptSelectors(): Set<string> {
+  return new Set([
+    ...EXECUTION_HARNESSES,
+    ...PROMPT_FLAG_ALIASES.keys(),
+    ...personaRegistry.keys(),
+  ]);
+}
+
+function updatePersonaRegistry(personas: Record<string, PersonaRegistryEntry>): void {
+  personaRegistry = new Map(Object.entries(personas));
+  personaRegistryLoadedAt = Date.now();
+}
+
+export function setPersonaRegistryForTest(personas: Record<string, PersonaRegistryEntry>): void {
+  updatePersonaRegistry(personas);
+}
+
+export function resetPersonaRegistryForTest(): void {
+  personaRegistry = new Map(Object.entries(FLOOR_PERSONAS));
+  personaRegistryLoadedAt = 0;
+}
 
 type SlackRepoContext = {
   cwd?: string;
@@ -200,14 +225,16 @@ const PROMPT_FLAG_SKIP = new Set(["engine", "model", "opus", "sonnet", "haiku"])
 /**
  * Extract recognised `--flag` tokens for persona/harness routing.
  *
- * Only flags that match KNOWN_PROMPT_SELECTORS (after alias resolution and
- * skip-list filtering) are treated as routing directives; all other `--word`
- * tokens are left in the message text untouched. This prevents user content
- * like `--rpc-url` or `--installed` from being misinterpreted as persona
- * switches and causing `unknown persona_id` errors.
+ * Only flags whose selector exists in `knownPromptSelectors()` (the live
+ * `/tools/personas` registry plus the harness allowlist + aliases) are treated
+ * as routing directives; all other `--word` tokens are left in the message
+ * text untouched. This prevents user content like `--rpc-url` or `--installed`
+ * from being misinterpreted as persona switches and causing
+ * `unknown persona_id` errors.
  */
 export function extractFlagSelector(text: string): { selector?: string; cleaned: string } {
   const re = new RegExp(PROMPT_FLAG_RE.source, PROMPT_FLAG_RE.flags);
+  const selectors = knownPromptSelectors();
   let selector: string | undefined;
   const recognisedOffsets: Array<{ start: number; end: number }> = [];
   let match: RegExpExecArray | null;
@@ -218,7 +245,7 @@ export function extractFlagSelector(text: string): { selector?: string; cleaned:
       continue;
     }
     const resolved = PROMPT_FLAG_ALIASES.get(flag) || flag;
-    if (KNOWN_PROMPT_SELECTORS.has(resolved) || KNOWN_PROMPT_SELECTORS.has(flag)) {
+    if (selectors.has(resolved) || selectors.has(flag)) {
       selector = resolved;
       recognisedOffsets.push({ start: match.index, end: match.index + match[0].length });
     }
@@ -241,7 +268,7 @@ export function parsePromptSelectorFlag(text: string): string | undefined {
 
 /**
  * Strip residual mention tokens (`<@U...>`) so we can detect a truly empty
- * payload after flag removal. Used by the bare-trigger short-circuit.
+ * payload after flag removal. Used by the bare persona trigger.
  */
 function stripMentions(text: string): string {
   return text.replace(/<@[A-Z0-9]+>/g, "").replace(/\s+/g, " ").trim();
@@ -260,27 +287,21 @@ function isEmptyCompletedTerminalResult(opts: {
   return status === "completed" && !terminalReason && !resultText && !errorText;
 }
 
-/**
- * Persona-specific canned responses for bare-flag invocations (e.g. just
- * `@centaur_ai --invest`). The LLM's compliance with prompt-level "respond
- * with exactly this line" rules is unreliable for empty-payload turns, so
- * we short-circuit at the slackbot to guarantee the persona identifier
- * appears and to save a sandbox round-trip.
+/** Return a generic prompt for bare `--<persona>` mentions with no other content.
+ *
+ * Skipped for harness flags (`--codex`, `--amp`, ...) because those switch the
+ * underlying engine, not a persona that has anything to introduce.
  */
-const BARE_FLAG_GREETINGS: Record<string, string> = {
-  invest: "Spock — Paradigm's investment agent. What are we looking at?",
-};
-
-/** Return the canned greeting for a bare `--<persona>` mention with no other content. */
-export function bareFlagGreeting(
+export function bareFlagPrompt(
   selector: string | undefined,
   cleanedText: string,
   attachmentCount: number,
 ): string | undefined {
   if (!selector) return undefined;
+  if (EXECUTION_HARNESSES.has(selector)) return undefined;
   if (attachmentCount > 0) return undefined;
   if (stripMentions(cleanedText).length > 0) return undefined;
-  return BARE_FLAG_GREETINGS[selector];
+  return "Introduce yourself briefly according to your active persona and ask what we should work on.";
 }
 
 /** Extract text from a message, preferring the formatted AST (preserves links) over plain text. */
@@ -550,6 +571,38 @@ export class SlackBot {
     return this.hasInFlightExecution(threadId);
   }
 
+  private async refreshPersonaRegistry(): Promise<void> {
+    if (Date.now() - personaRegistryLoadedAt < PERSONA_REGISTRY_TTL_MS) return;
+    try {
+      const { data } = await this.client.http.get<Record<string, PersonaRegistryEntry>>("/tools/personas");
+      const personas = data && typeof data === "object" ? data : null;
+      // An empty `{}` response means no personas are registered. Replacing the
+      // current map with an empty one would silently drop overlay personas
+      // (`legal`, `events`, `editorial`, ...) until the next TTL tick, so keep
+      // whatever we already had if the API claims emptiness.
+      if (personas && Object.keys(personas).length > 0) {
+        updatePersonaRegistry(personas);
+      } else {
+        if (personaRegistry.size === 0) {
+          updatePersonaRegistry(FLOOR_PERSONAS);
+        } else {
+          personaRegistryLoadedAt = Date.now();
+        }
+      }
+    } catch (err) {
+      if (personaRegistry.size === 0) {
+        updatePersonaRegistry(FLOOR_PERSONAS);
+      }
+      // Use a short backoff so a transient API failure doesn't lock out
+      // overlay personas for the full success TTL.
+      personaRegistryLoadedAt =
+        Date.now() - (PERSONA_REGISTRY_TTL_MS - PERSONA_REGISTRY_FAILURE_BACKOFF_MS);
+      log.warn("persona_registry_fetch_failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   private async runFinalDeliveryLoop(): Promise<void> {
     while (true) {
       try {
@@ -593,22 +646,11 @@ export class SlackBot {
     thread.startTyping().catch(() => {});
 
     const richText = richTextFromMessage(msg);
+    await this.refreshPersonaRegistry();
     const { selector: promptSelector, cleaned } = extractFlagSelector(richText);
-    // If flag-stripping leaves only the bot mention or nothing, the agent gets
-    // an empty text — never `--invest`. The bare-flag short-circuit below
-    // catches the empty case before we reach the agent.
-    const agentText = cleaned;
-
-    // Bare-flag short-circuit: respond with the canned persona greeting
-    // without spinning up an LLM. Guarantees the persona identifier appears
-    // and saves a ~6s round-trip + token cost.
     const attachments = await this.resolveAttachments(thread.id, msg);
-    const greeting = bareFlagGreeting(promptSelector, cleaned, attachments.length);
-    if (greeting) {
-      log.info("bare_flag_greeting", { thread_key: threadKey, selector: promptSelector });
-      await thread.post({ markdown: greeting });
-      return;
-    }
+    const barePrompt = bareFlagPrompt(promptSelector, cleaned, attachments.length);
+    const agentText = barePrompt ?? cleaned;
 
     const messageId = stableSlackMessageId(msg);
     const historyMessages = await this.collectThreadHistory(thread.id, messageId);
@@ -629,14 +671,9 @@ export class SlackBot {
     if (!text && !attachments.length) return;
 
     if (msg.isMention) {
+      await this.refreshPersonaRegistry();
       const { selector: promptSelector, cleaned } = extractFlagSelector(text);
-      const greeting = bareFlagGreeting(promptSelector, cleaned, attachments.length);
-      if (greeting) {
-        log.info("bare_flag_greeting", { thread_key: normalizeThreadKey(thread.id), selector: promptSelector, is_new_thread: false });
-        await thread.post({ markdown: greeting });
-        return;
-      }
-      const agentText = cleaned;
+      const agentText = bareFlagPrompt(promptSelector, cleaned, attachments.length) ?? cleaned;
       const parts = await this.toParts(agentText || "Shared attachment in thread.", attachments);
       log.info("mention_received", { thread_key: normalizeThreadKey(thread.id), user_id: msg.author.userId, is_new_thread: false });
       thread.startTyping().catch(() => {});
@@ -721,9 +758,17 @@ export class SlackBot {
     historyMessages?: SlackHistoryWorkflowMessage[],
   ) {
     const threadKey = normalizeThreadKey(thread.id);
+    await this.refreshPersonaRegistry();
     const promptSelector = promptSelectorOverride ?? parsePromptSelectorFlag(text);
     if (promptSelector) {
-      await this.releaseForPromptSwitch(threadKey, delivery.messageId);
+      const released = await this.releaseForPromptSwitch(threadKey, delivery.messageId);
+      if (!released) {
+        await thread.stopTyping?.().catch(() => {});
+        await thread.post({
+          markdown: "Could not switch persona - there's an active task that wouldn't release. Try again, or wait for the current task to finish.",
+        });
+        return;
+      }
     } else {
       const steerResult = await this.steerOrCancelInflightExecution(threadKey, parts, delivery);
       if (steerResult === "steered" || steerResult === "cancelled") return;
@@ -789,25 +834,35 @@ export class SlackBot {
     }
   }
 
-  private async releaseForPromptSwitch(threadKey: string, messageId?: string): Promise<void> {
-    try {
-      const releaseId = messageId
-        ? `prompt-switch:${messageId}`
-        : `prompt-switch:${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-      await this.client.releaseThread(threadKey, {
-        releaseId,
-        cancelInflight: true,
-      });
-      log.info("prompt_switch_released_assignment", {
-        thread_key: threadKey,
-        release_id: releaseId,
-      });
-    } catch (err) {
-      log.warn("prompt_switch_release_failed", {
-        thread_key: threadKey,
-        error: err instanceof Error ? err.message : String(err),
-      });
+  private async releaseForPromptSwitch(threadKey: string, messageId?: string): Promise<boolean> {
+    const releaseId = messageId
+      ? `prompt-switch:${messageId}`
+      : `prompt-switch:${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        await this.client.releaseThread(threadKey, {
+          releaseId,
+          cancelInflight: true,
+        });
+        log.info("prompt_switch_released_assignment", {
+          thread_key: threadKey,
+          release_id: releaseId,
+          attempt,
+        });
+        return true;
+      } catch (err) {
+        if (attempt === 1) {
+          await sleep(250);
+          continue;
+        }
+        log.warn("prompt_switch_release_failed", {
+          thread_key: threadKey,
+          release_id: releaseId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
+    return false;
   }
 
   private async execute(thread: BotThread, threadKey: string, opts: { assignmentGeneration?: number; executionId?: string; userId?: string; teamId?: string }) {

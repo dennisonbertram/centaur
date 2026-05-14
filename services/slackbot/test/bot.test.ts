@@ -1,13 +1,16 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 
 import { ProgressTracker } from "../src/lib/bot/progress-tracker";
 import {
+  SlackBot,
   splitSlackMessage,
   parsePromptSelectorFlag,
+  setPersonaRegistryForTest,
+  resetPersonaRegistryForTest,
   extractFlagSelector,
-  bareFlagGreeting,
+  bareFlagPrompt,
   rewriteSlackFileLinks,
 } from "../src/lib/bot/bot";
 import { normalizeHarnessEvent, type CanonicalEvent } from "@centaur/harness-events";
@@ -18,6 +21,13 @@ import { SlackApiCallError } from "../src/lib/slack/errors";
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+beforeEach(() => {
+  setPersonaRegistryForTest({
+    eng: {},
+    invest: {},
+  });
+});
 
 function finalMessage(t: ProgressTracker): string {
   return (t.resultText || t.lastAssistantText).trim();
@@ -1461,6 +1471,11 @@ describe("parsePromptSelectorFlag", () => {
     expect(parsePromptSelectorFlag("--invest hyperliquid miqs")).toBe("invest");
   });
 
+  it("extracts personas loaded from the registry", () => {
+    setPersonaRegistryForTest({ eng: {}, legal: {} });
+    expect(parsePromptSelectorFlag("--legal review this nda")).toBe("legal");
+  });
+
   it("handles --INVEST (case insensitive)", () => {
     expect(parsePromptSelectorFlag("--INVEST")).toBe("invest");
   });
@@ -1485,6 +1500,86 @@ describe("parsePromptSelectorFlag", () => {
   it("does NOT infer persona from DocSend/Drive URLs or attachments", () => {
     expect(parsePromptSelectorFlag("look at this co https://docsend.com/view/s/abc")).toBeUndefined();
     expect(parsePromptSelectorFlag("https://drive.google.com/file/d/abc")).toBeUndefined();
+  });
+});
+
+describe("persona registry refresh", () => {
+  it("loads prompt selectors from the API", async () => {
+    resetPersonaRegistryForTest();
+    const client = {
+      http: {
+        get: vi.fn().mockResolvedValue({
+          data: {
+            eng: {},
+            legal: {},
+            invest: {},
+          },
+        }),
+      },
+    };
+    const bot = new SlackBot(client as unknown as CentaurClient);
+
+    await (bot as unknown as { refreshPersonaRegistry(): Promise<void> }).refreshPersonaRegistry();
+
+    expect(parsePromptSelectorFlag("--legal review this")).toBe("legal");
+  });
+
+  it("falls back to the floor persona when registry fetch fails", async () => {
+    resetPersonaRegistryForTest();
+    const client = {
+      http: {
+        get: vi.fn().mockRejectedValue(new Error("registry down")),
+      },
+    };
+    const bot = new SlackBot(client as unknown as CentaurClient);
+
+    await (bot as unknown as { refreshPersonaRegistry(): Promise<void> }).refreshPersonaRegistry();
+
+    expect(parsePromptSelectorFlag("--eng review")).toBe("eng");
+    expect(parsePromptSelectorFlag("--legal review")).toBeUndefined();
+  });
+
+  it("keeps existing personas when the API returns an empty payload", async () => {
+    setPersonaRegistryForTest({ eng: {}, legal: {} });
+    const client = {
+      http: {
+        get: vi.fn().mockResolvedValue({ data: {} }),
+      },
+    };
+    const bot = new SlackBot(client as unknown as CentaurClient);
+
+    await (bot as unknown as { refreshPersonaRegistry(): Promise<void> }).refreshPersonaRegistry();
+
+    // An empty `{}` is not enough evidence to wipe out overlay personas the
+    // slackbot was already routing — `--legal` must still resolve.
+    expect(parsePromptSelectorFlag("--legal review")).toBe("legal");
+  });
+
+  it("retries quickly after a fetch failure (does not lock out for the full TTL)", async () => {
+    resetPersonaRegistryForTest();
+    const get = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValueOnce({ data: { eng: {}, legal: {} } });
+    const bot = new SlackBot({ http: { get } } as unknown as CentaurClient);
+
+    await (bot as unknown as { refreshPersonaRegistry(): Promise<void> }).refreshPersonaRegistry();
+    expect(parsePromptSelectorFlag("--legal review")).toBeUndefined();
+
+    // Failure backoff defaults to 30s; the retry must happen well before the
+    // 5-minute success TTL would have elapsed. Bumping the clock past the
+    // backoff window simulates the next user message landing.
+    const realNow = Date.now;
+    try {
+      const advancedBy = 35_000;
+      Date.now = () => realNow() + advancedBy;
+      await (bot as unknown as { refreshPersonaRegistry(): Promise<void> }).refreshPersonaRegistry();
+    } finally {
+      Date.now = realNow;
+    }
+
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(parsePromptSelectorFlag("--legal review")).toBe("legal");
   });
 });
 
@@ -1544,42 +1639,107 @@ describe("extractFlagSelector — returns stripped text for the agent", () => {
   });
 });
 
-describe("bareFlagGreeting (slackbot short-circuit for bare --invest)", () => {
-  it("returns Spock greeting for bare --invest with no other content", () => {
+describe("bareFlagPrompt (dynamic persona invocation for bare flags)", () => {
+  it("returns a generic persona prompt for bare --invest with no other content", () => {
     const { selector, cleaned } = extractFlagSelector("--invest");
-    expect(bareFlagGreeting(selector, cleaned, 0)).toBe(
-      "Spock — Paradigm's investment agent. What are we looking at?",
+    expect(bareFlagPrompt(selector, cleaned, 0)).toBe(
+      "Introduce yourself briefly according to your active persona and ask what we should work on.",
     );
   });
 
-  it("returns greeting when only the bot mention remains after flag strip", () => {
-    // After flag strip, this leaves "<@U0AH5TRP0H0>" — should still trigger the greeting.
+  it("returns the generic prompt when only the bot mention remains after flag strip", () => {
+    // After flag strip, this leaves "<@U0AH5TRP0H0>" — should still trigger the persona.
     const { selector, cleaned } = extractFlagSelector("<@U0AH5TRP0H0> --invest");
-    expect(bareFlagGreeting(selector, cleaned, 0)).toBe(
-      "Spock — Paradigm's investment agent. What are we looking at?",
+    expect(bareFlagPrompt(selector, cleaned, 0)).toBe(
+      "Introduce yourself briefly according to your active persona and ask what we should work on.",
     );
   });
 
   it("returns undefined when --invest has a payload", () => {
     const { selector, cleaned } = extractFlagSelector("--invest hyperliquid miqs");
-    expect(bareFlagGreeting(selector, cleaned, 0)).toBeUndefined();
+    expect(bareFlagPrompt(selector, cleaned, 0)).toBeUndefined();
   });
 
   it("returns undefined when there are attachments (user dropped a file)", () => {
     const { selector, cleaned } = extractFlagSelector("--invest");
-    expect(bareFlagGreeting(selector, cleaned, 1)).toBeUndefined();
+    expect(bareFlagPrompt(selector, cleaned, 1)).toBeUndefined();
   });
 
-  it("returns undefined for unknown flags (not in KNOWN_PROMPT_SELECTORS)", () => {
+  it("returns undefined for unknown flags (not in the live persona registry)", () => {
+    resetPersonaRegistryForTest();
     const { selector, cleaned } = extractFlagSelector("--legal");
-    // --legal is not in the allowlist, so selector is undefined
+    // --legal isn't in the floor registry, so the selector is undefined
     expect(selector).toBeUndefined();
-    expect(bareFlagGreeting(selector, cleaned, 0)).toBeUndefined();
+    expect(bareFlagPrompt(selector, cleaned, 0)).toBeUndefined();
+  });
+
+  it("returns undefined for harness flags (engine switch, not a persona to introduce)", () => {
+    const { selector, cleaned } = extractFlagSelector("--codex");
+    expect(selector).toBe("codex");
+    expect(bareFlagPrompt(selector, cleaned, 0)).toBeUndefined();
   });
 
   it("returns undefined when no flag is present", () => {
     const { selector, cleaned } = extractFlagSelector("hey");
-    expect(bareFlagGreeting(selector, cleaned, 0)).toBeUndefined();
+    expect(bareFlagPrompt(selector, cleaned, 0)).toBeUndefined();
+  });
+});
+
+describe("prompt switch release", () => {
+  it("retries once before succeeding", async () => {
+    const releaseThread = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("temporary"))
+      .mockResolvedValueOnce({ ok: true });
+    const bot = new SlackBot({ releaseThread, http: { get: vi.fn() } } as unknown as CentaurClient);
+
+    await expect(
+      (bot as unknown as { releaseForPromptSwitch(threadKey: string): Promise<boolean> })
+        .releaseForPromptSwitch("slack:C:T"),
+    ).resolves.toBe(true);
+
+    expect(releaseThread).toHaveBeenCalledTimes(2);
+  });
+
+  it("posts a persona switch failure, stops typing, and aborts the workflow", async () => {
+    const startWorkflowRun = vi.fn();
+    const releaseThread = vi.fn().mockRejectedValue(new Error("still busy"));
+    const client = { releaseThread, startWorkflowRun, http: { get: vi.fn() } };
+    const bot = new SlackBot(client as unknown as CentaurClient);
+    const post = vi.fn().mockResolvedValue({ id: "reply", edit: vi.fn() });
+    const stopTyping = vi.fn().mockResolvedValue(undefined);
+    const thread = {
+      id: "slack:C:T",
+      post,
+      subscribe: vi.fn(),
+      startTyping: vi.fn(),
+      stopTyping,
+    };
+
+    await (bot as unknown as {
+      bufferAndExecute(
+        thread: unknown,
+        text: string,
+        parts: unknown[],
+        delivery: Record<string, unknown>,
+        promptSelectorOverride?: string,
+      ): Promise<void>;
+    }).bufferAndExecute(
+      thread,
+      "review this",
+      [{ type: "text", text: "review this" }],
+      {},
+      "invest",
+    );
+
+    expect(releaseThread).toHaveBeenCalledTimes(2);
+    expect(startWorkflowRun).not.toHaveBeenCalled();
+    // Without stopTyping the indicator stays on after we abort the spawn,
+    // confusing the user about whether the bot is still working.
+    expect(stopTyping).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith({
+      markdown: "Could not switch persona - there's an active task that wouldn't release. Try again, or wait for the current task to finish.",
+    });
   });
 });
 

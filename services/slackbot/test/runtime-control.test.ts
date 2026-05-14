@@ -97,6 +97,14 @@ function createImmediateStreamClient(): any {
     claimFinalDeliveries: vi.fn(async () => ({ deliveries: [] })),
     listExecutions: vi.fn(async (threadKey: string) => ({ thread_key: threadKey, executions: [] })),
     getExecution: vi.fn(async () => ({ status: "completed", result_text: "done" })),
+    http: {
+      get: vi.fn(async () => ({
+        data: {
+          eng: {},
+          invest: {},
+        },
+      })),
+    },
   };
 }
 
@@ -832,7 +840,8 @@ describe("SlackBot runtime control", () => {
     await (bot as any).drainFinalDeliveriesOnce();
 
     expect(postMessage).toHaveBeenCalledTimes(1);
-    const payload = postMessage.mock.calls[0][1] as { markdown: string };
+    const postCalls = postMessage.mock.calls as unknown[][];
+    const payload = postCalls[0][1] as { markdown: string };
     expect(payload.markdown).toContain("*Deployment Summary*");
     expect(payload.markdown).toContain("*Checks:* 3");
     expect(payload.markdown).not.toContain("```dashboard");
@@ -876,7 +885,11 @@ describe("SlackBot runtime control", () => {
     await (bot as any).drainFinalDeliveriesOnce();
 
     expect(postMessage).toHaveBeenCalledTimes(1);
-    const payload = postMessage.mock.calls[0][1] as { markdown: string; files?: Array<{ filename: string; data: Buffer }> };
+    const postCalls = postMessage.mock.calls as unknown[][];
+    const payload = postCalls[0][1] as {
+      markdown: string;
+      files?: Array<{ filename: string; data: Buffer }>;
+    };
     expect(payload.markdown).toContain("Chart attached:");
     expect(payload.markdown).toContain("*Latency*");
     expect(payload.markdown).not.toContain("```dashboard");
@@ -912,7 +925,8 @@ describe("SlackBot runtime control", () => {
 
     await (bot as any).drainFinalDeliveriesOnce();
 
-    const markdowns = postMessage.mock.calls.map((call) => (call[1] as { markdown: string }).markdown);
+    const postCalls = postMessage.mock.calls as unknown[][];
+    const markdowns = postCalls.map((call) => (call[1] as { markdown: string }).markdown);
     expect(markdowns).toHaveLength(2);
     expect(markdowns[0]).toMatch(/^Part 1\/2\n\n/);
     expect(markdowns[1]).toMatch(/^Part 2\/2\n\n/);
