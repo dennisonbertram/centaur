@@ -158,6 +158,10 @@ GET /agent/threads/slack:C0AJ07U8Z1N:1773364194.179929/events?execution_id=exe_1
 
 Releases the thread-to-runtime pin and optionally cancels any non-terminal execution still tied to that assignment generation.
 
+**Inspect the active runtime for a thread** (`GET /agent/runtime?key={thread_key}`)
+
+Returns `{persona_id, persona, harness, engine, overlay: {loaded, mount_api, mount_sandbox, image}, available_personas, …}`. Sandboxes call this through `call agent runtime '?key='"$CENTAUR_THREAD_KEY"`; clients can call it directly to confirm what persona/overlay an assignment is actually running.
+
 **Durable state written for one turn:**
 
 | Table | What |

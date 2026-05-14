@@ -169,12 +169,12 @@ case "$tool" in
   tools)
     # Inject the built-in agent sub-command into the tool listing
     response="$(request "GET" "$U/tools")" || { printf '%s\n' "$response"; exit 1; }
-    printf '%s' "$response" | jq -c '. + {"agent":{"description":"Sub-agent dispatch (built-in). Use: call agent execute, call agent status, call agent stop","methods":["execute","status","stop"]}}'
+    printf '%s' "$response" | jq -c '. + {"agent":{"description":"Sub-agent dispatch (built-in). Use: call agent execute, call agent status, call agent runtime, call agent stop","methods":["execute","status","runtime","stop"]}}'
     printf '\n'
     ;;
   discover)
     if [ "$2" = "agent" ]; then
-      printf '%s\n' '{"tool":"agent","description":"Sub-agent dispatch (built-in, not a tool plugin)","methods":[{"name":"execute","description":"Spawn a sub-agent. Body: {\"thread_key\":\"task:<purpose>-<id>\",\"message\":\"...\",\"harness\":\"<persona>\"}. Returns {execution_id, status}."},{"name":"status","description":"Poll sub-agent. Usage: call agent status '\''?key=<thread_key>'\''"},{"name":"stop","description":"Stop sub-agent. Body: {\"thread_key\":\"...\"}"}]}'
+      printf '%s\n' '{"tool":"agent","description":"Sub-agent dispatch (built-in, not a tool plugin)","methods":[{"name":"execute","description":"Spawn a sub-agent. Body: {\"thread_key\":\"task:<purpose>-<id>\",\"message\":\"...\",\"harness\":\"<persona>\"}. Returns {execution_id, status}."},{"name":"status","description":"Poll sub-agent. Usage: call agent status '\''?key=<thread_key>'\''"},{"name":"runtime","description":"Inspect active persona/overlay/available personas for a thread. Usage: call agent runtime '\''?key=<thread_key>'\''"},{"name":"stop","description":"Stop sub-agent. Body: {\"thread_key\":\"...\"}"}]}'
     else
       request "GET" "$U/tools/$2"
     fi
@@ -184,8 +184,11 @@ case "$tool" in
     #        call agent execute '{"thread_key":"...","assignment_generation":1,...}'
     #        call agent stop '{"thread_key":"..."}'
     #        call agent status '?key=...'
+    #        call agent runtime '?key=...'
     if [ "$method" = "status" ]; then
       request "GET" "$U/agent/status$body"
+    elif [ "$method" = "runtime" ]; then
+      request "GET" "$U/agent/runtime$body"
     elif [ "$method" = "execute" ]; then
       agent_execute "$body"
     else

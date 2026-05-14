@@ -13,12 +13,14 @@ import contextlib
 import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import structlog
 
 from api.agent import _get_runtime
 from api.deps import mint_sandbox_token
 from api.sandbox.base import SandboxSession
+from api.sandbox.prompt_assembly import assemble_prompt
 from api.sandbox.registry import get_backend
 
 log = structlog.get_logger()
@@ -55,6 +57,21 @@ class WarmContainer:
 _pool_lock = asyncio.Lock()
 _pool: list[WarmContainer] = []
 _replenish_task: asyncio.Task | None = None
+
+
+def _repo_root() -> Path:
+    for candidate in Path(__file__).resolve().parents:
+        if (candidate / "services" / "sandbox" / "SYSTEM_PROMPT.md").is_file():
+            return candidate
+    raise FileNotFoundError("could not locate services/sandbox/SYSTEM_PROMPT.md")
+
+
+def _overlay_root() -> Path | None:
+    value = (os.getenv("CENTAUR_OVERLAY_DIR") or "").strip()
+    if not value:
+        return None
+    path = Path(value)
+    return path if path.exists() else None
 
 
 def pool_status() -> dict:
@@ -212,31 +229,44 @@ fi
             user="agent",
         )
 
-    # 2. Append persona prompt overlay
+    # 2. Rebuild the effective prompt from the same helper used for cold spawns.
+    persona_info = None
     if persona:
         from api.app import get_tool_manager
 
         persona_info = get_tool_manager().get_persona(persona)
-        if persona_info:
-            prompt_path = persona_info.tool_dir / "PROMPT.md"
-            if prompt_path.is_file():
-                prompt_content = prompt_path.read_text()
-                # Replace the base identity line so the persona overlay wins.
-                await backend.exec_run(
-                    sandbox_id,
-                    [
-                        "sed", "-i",
-                        f's/^|You are .*assistant.*$/|You are running the **{persona}** persona. See the persona overlay below for your identity and behavior./',
-                        "/home/agent/workspace/AGENTS.md",
-                    ],
-                    user="agent",
-                )
-                await backend.exec_run(
-                    sandbox_id,
-                    ["sh", "-c", 'printf "%s" "$_CONTENT" >> /home/agent/workspace/AGENTS.md'],
-                    environment={"_CONTENT": f"\n\n---\n\n{prompt_content}"},
-                    user="agent",
-                )
+    overlay_root = _overlay_root()
+    overlay_prompt = (
+        overlay_root / "services" / "sandbox" / "SYSTEM_PROMPT.md"
+        if overlay_root is not None
+        else None
+    )
+    prompt_content = assemble_prompt(
+        persona,
+        base_prompt=(_repo_root() / "services" / "sandbox" / "SYSTEM_PROMPT.md").read_text(),
+        overlay_prompt_path=overlay_prompt,
+        persona_info=persona_info,
+        api_overlay_dir=overlay_root,
+        sandbox_overlay_dir="/home/agent/overlay/org"
+        if (os.getenv("CENTAUR_OVERLAY_IMAGE") or "").strip()
+        else None,
+    )
+    await backend.exec_run(
+        sandbox_id,
+        [
+            "sh",
+            "-c",
+            (
+                'mkdir -p /home/agent/workspace && printf "%s" "$_CONTENT" > /home/agent/workspace/AGENTS.md && '
+                "if [ -f /home/agent/AGENTS_OVERLAY.md ]; then "
+                'printf "\\n\\n---\\n\\n" >> /home/agent/workspace/AGENTS.md && '
+                'cat /home/agent/AGENTS_OVERLAY.md >> /home/agent/workspace/AGENTS.md; '
+                "fi"
+            ),
+        ],
+        environment={"_CONTENT": prompt_content},
+        user="agent",
+    )
 
     # 3. Write env overrides
     env_lines: list[str] = []

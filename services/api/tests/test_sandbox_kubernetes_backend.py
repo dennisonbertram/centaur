@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+import types
 from types import SimpleNamespace
 
 import pytest
@@ -181,6 +183,7 @@ def test_prompt_bundle_includes_live_capability_inventory_guidance(
     assert "[Authoritative deployment-capability answers]" in prompt
     assert "prefer a live capability listing over workspace files or memory" in prompt
     assert "partial and non-exhaustive" in prompt
+    assert "call agent runtime" in prompt
 
 
 def test_prompt_bundle_includes_named_skill_resolution_guidance(
@@ -202,6 +205,45 @@ def test_prompt_bundle_includes_named_skill_resolution_guidance(
         in prompt
     )
     assert "ask one targeted clarification instead of guessing" in prompt
+
+
+def test_prompt_bundle_starts_with_active_deployment_block(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    from api.sandbox.kubernetes import _prompt_bundle
+
+    overlay_root = tmp_path / "overlay"
+    overlay_prompt_dir = overlay_root / "services" / "sandbox"
+    overlay_prompt_dir.mkdir(parents=True)
+    (overlay_prompt_dir / "SYSTEM_PROMPT.md").write_text("overlay guidance")
+    persona_dir = tmp_path / "personas" / "invest"
+    persona_dir.mkdir(parents=True)
+    (persona_dir / "INVEST.md").write_text("invest persona guidance")
+
+    fake_app = types.ModuleType("api.app")
+    fake_app.get_tool_manager = lambda: SimpleNamespace(
+        get_persona=lambda name: SimpleNamespace(
+            engine="amp",
+            prompt_file="INVEST.md",
+            tool_dir=persona_dir,
+            prompt_content="fallback guidance",
+        )
+        if name == "invest"
+        else None
+    )
+    monkeypatch.setitem(sys.modules, "api.app", fake_app)
+    monkeypatch.setenv("CENTAUR_OVERLAY_DIR", str(overlay_root))
+    monkeypatch.setenv("CENTAUR_OVERLAY_IMAGE", "ghcr.io/example/overlay:sha-test")
+
+    prompt = _prompt_bundle("invest")
+
+    assert prompt.startswith("[Active deployment]\n|Persona: invest (engine: amp)")
+    assert "|Overlay loaded: yes" in prompt
+    assert "|Overlay mount (sandbox): /home/agent/overlay/org" in prompt
+    assert "overlay guidance" in prompt
+    assert "invest persona guidance" in prompt
+    assert "fallback guidance" not in prompt
 
 
 @pytest.mark.asyncio

@@ -84,16 +84,7 @@ if [ -f "$HOME_DIR/AGENTS_OVERLAY.md" ] && [ -f "$TARGET_PROMPT" ]; then
     cat "$HOME_DIR/AGENTS_OVERLAY.md" >> "$TARGET_PROMPT"
 fi
 
-PERSONA="${AGENT_PERSONA:-}"
-if [ -n "$PERSONA" ] && [ -f "$TARGET_PROMPT" ]; then
-    OVERLAY="$HOME_DIR/tools/personas/$PERSONA/PROMPT.md"
-    if [ -f "$OVERLAY" ]; then
-        # Replace the base identity line so the persona overlay wins.
-        sed -i 's/^|You are .*assistant.*$/|You are running the **'"$PERSONA"'** persona. See the persona overlay below for your identity and behavior./' "$TARGET_PROMPT"
-        printf '\n\n---\n\n' >> "$TARGET_PROMPT"
-        cat "$OVERLAY" >> "$TARGET_PROMPT"
-    fi
-fi
+# Persona prompt injection is done by the API when it writes AGENTS_BASE.md.
 
 # Switch to workspace so the harness reads workspace/AGENTS.md (with persona overlay)
 cd "$WORKSPACE_DIR"

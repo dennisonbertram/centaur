@@ -187,6 +187,61 @@ curl -s -X POST "https://api.acme.com/agent/executions/exe_123/cancel" \
 
 ---
 
+## GET /agent/runtime
+
+Inspect the active runtime for a thread: which persona/harness/engine are pinned, whether an org overlay is loaded, and which personas are available.
+
+### Query
+
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| `key` | string | Yes | Thread key (must match a spawned thread). |
+
+### Response
+
+```json
+{
+  "thread_key": "my-thread-1",
+  "assignment_generation": 12,
+  "runtime_id": "rtm_123",
+  "harness": "amp",
+  "engine": "amp",
+  "persona_id": "invest",
+  "persona": {
+    "name": "invest",
+    "description": "Investment persona ...",
+    "engine": "amp",
+    "default_repo": "paradigmxyz/centaur",
+    "prompt_file": "PROMPT.md",
+    "has_custom_executor": false
+  },
+  "overlay": {
+    "loaded": true,
+    "mount_api": "/app/overlay/org",
+    "mount_sandbox": "/home/agent/overlay/org",
+    "image": "ghcr.io/paradigmxyz/centaur-paradigm:sha-..."
+  },
+  "available_personas": ["eng", "events", "editorial", "invest", "legal"]
+}
+```
+
+When the thread has no active assignment, `assignment_generation`, `runtime_id`, `harness`, `engine`, `persona_id`, and `persona` are `null`. `overlay.loaded` reflects what the API actually has on disk, not just env-var presence.
+
+### Example
+
+```bash
+curl -s "https://api.acme.com/agent/runtime?key=my-thread-1" \
+  -H "X-Api-Key: $CENTAUR_API_KEY"
+```
+
+Sandbox agents can call this through the `call` helper:
+
+```bash
+call agent runtime '?key='"$CENTAUR_THREAD_KEY"
+```
+
+---
+
 ## POST /agent/threads/\{thread_key\}/release
 
 Release the thread-to-runtime assignment. Optionally cancels any non-terminal execution still tied to this assignment generation.

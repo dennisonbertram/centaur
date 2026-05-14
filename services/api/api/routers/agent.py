@@ -206,6 +206,47 @@ def _json_error(code: str, message: str, status: int) -> JSONResponse:
     return JSONResponse(status_code=status, content={"code": code, "message": message})
 
 
+def _persona_payload(persona_name: str | None) -> dict[str, Any] | None:
+    if not persona_name:
+        return None
+    from api.app import get_tool_manager
+
+    persona = get_tool_manager().get_persona(persona_name)
+    if persona is None:
+        return None
+    return {
+        "name": persona.name,
+        "description": persona.description,
+        "engine": persona.engine,
+        "default_repo": persona.default_repo,
+        "prompt_file": persona.prompt_file,
+        "has_custom_executor": persona.has_custom_executor,
+    }
+
+
+def _available_personas() -> list[str]:
+    from api.app import get_tool_manager
+
+    return sorted(get_tool_manager().personas)
+
+
+def _overlay_runtime_payload() -> dict[str, Any]:
+    from pathlib import Path as _Path
+
+    api_mount_raw = (os.getenv("CENTAUR_OVERLAY_DIR") or "").strip() or None
+    overlay_image = (os.getenv("CENTAUR_OVERLAY_IMAGE") or "").strip() or None
+    # `loaded` mirrors what `assemble_prompt` actually saw on disk so the runtime
+    # endpoint can never disagree with the [Active deployment] block we baked
+    # into the prompt.
+    api_mount_present = bool(api_mount_raw and _Path(api_mount_raw).exists())
+    return {
+        "loaded": bool(api_mount_present or overlay_image),
+        "mount_api": api_mount_raw if api_mount_present else None,
+        "mount_sandbox": "/home/agent/overlay/org" if overlay_image else None,
+        "image": overlay_image,
+    }
+
+
 @router.post("/execute", dependencies=[Depends(require_scope("agent:execute"))])
 async def execute(request: Request):
     body = ExecuteRequest.model_validate(await request.json())
@@ -799,6 +840,24 @@ async def status(request: Request, key: str):
     except Exception:
         pass
     return result
+
+
+@router.get("/runtime", dependencies=[Depends(require_scope("agent:status"))])
+async def runtime(request: Request, key: str):
+    _enforce_sandbox_thread_scope(request, key)
+    active = await get_active_assignment(request.app.state.db_pool, key)
+    persona_id = active["persona_id"] if active else None
+    return {
+        "thread_key": key,
+        "assignment_generation": int(active["assignment_generation"]) if active else None,
+        "runtime_id": active["runtime_id"] if active else None,
+        "harness": active["harness"] if active else None,
+        "engine": active["engine"] if active else None,
+        "persona_id": persona_id,
+        "persona": _persona_payload(persona_id),
+        "overlay": _overlay_runtime_payload(),
+        "available_personas": _available_personas(),
+    }
 
 
 @router.get("/executions/{execution_id}", dependencies=[Depends(require_scope("agent:execute"))])

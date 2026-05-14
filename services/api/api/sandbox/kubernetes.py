@@ -32,6 +32,7 @@ from api.sandbox.config import (
     image,
     runtime_for_session,
 )
+from api.sandbox.prompt_assembly import assemble_prompt
 
 log = structlog.get_logger()
 
@@ -320,40 +321,28 @@ def _pod_resources() -> dict[str, Any]:
 
 
 def _prompt_bundle(persona: str | None) -> str:
-    prompt = (_repo_root() / "services" / "sandbox" / "SYSTEM_PROMPT.md").read_text()
-
+    base_prompt = (_repo_root() / "services" / "sandbox" / "SYSTEM_PROMPT.md").read_text()
     overlay_root = _overlay_root()
-    if overlay_root is not None:
-        overlay_prompt = overlay_root / "services" / "sandbox" / "SYSTEM_PROMPT.md"
-        if overlay_prompt.is_file():
-            prompt += f"\n\n---\n\n{overlay_prompt.read_text()}"
-
+    overlay_prompt = (
+        overlay_root / "services" / "sandbox" / "SYSTEM_PROMPT.md"
+        if overlay_root is not None
+        else None
+    )
+    persona_info = None
     if persona:
         from api.app import get_tool_manager
 
         persona_info = get_tool_manager().get_persona(persona)
-        if persona_info is not None:
-            persona_prompt = persona_info.tool_dir / "PROMPT.md"
-            if persona_prompt.is_file():
-                prompt = re.sub(
-                    r"^\|You are .*assistant.*$",
-                    (
-                        f"|You are running the **{persona}** persona. "
-                        "See the persona overlay below for your identity and behavior."
-                    ),
-                    prompt,
-                    count=1,
-                    flags=re.MULTILINE,
-                )
-                prompt += f"\n\n---\n\n{persona_prompt.read_text()}"
-            else:
-                log.warning(
-                    "persona_prompt_missing", persona=persona, path=str(persona_prompt)
-                )
-        else:
+        if persona_info is None:
             log.warning("persona_not_found_for_kubernetes_backend", persona=persona)
-
-    return prompt
+    return assemble_prompt(
+        persona,
+        base_prompt=base_prompt,
+        overlay_prompt_path=overlay_prompt,
+        persona_info=persona_info,
+        api_overlay_dir=overlay_root,
+        sandbox_overlay_dir=_SANDBOX_OVERLAY_DIR if _overlay_image() else None,
+    )
 
 
 def _parse_ws_frame(data: bytes | str) -> tuple[int, str]:
