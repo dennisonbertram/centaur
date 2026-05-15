@@ -31,6 +31,7 @@ from workflows.slack_sync_shared import (
     repo_slack_client_paths,
     record_run_finish,
     record_run_start,
+    seed_channel_bootstrap_job,
     upsert_messages,
     workflow_run_id_to_sync_run_id,
 )
@@ -69,7 +70,9 @@ def _channel_name(channel: dict[str, Any]) -> str:
     return str(channel.get("name") or "").strip().lower().lstrip("#")
 
 
-def _channel_exclusion_reason(channel: dict[str, Any], patterns: list[str]) -> str | None:
+def _channel_exclusion_reason(
+    channel: dict[str, Any], patterns: list[str]
+) -> str | None:
     """Return the configured pattern excluding a channel, if any."""
     name = _channel_name(channel)
     if not name:
@@ -143,9 +146,9 @@ def _ts_now_minus_days(days: int) -> str:
     return f"{max(now - (days * 86_400), 0.0):.6f}"
 
 
-def _bootstrap_backfill_job_key(channel_id: str, latest_ts: str) -> str:
-    """Return the stable job key for the initial older-than-recent-history backfill."""
-    return f"bootstrap:{channel_id}:{latest_ts}"
+def _bootstrap_backfill_job_key(channel_id: str) -> str:
+    """Return the stable job key for a channel's initial historical bootstrap."""
+    return f"bootstrap:{channel_id}"
 
 
 def _continuation_backfill_job_key(
@@ -218,7 +221,9 @@ async def _upsert_users(pool, users: list[dict[str, Any]]) -> int:
                 user_id = str(user.get("id") or "")
                 if not user_id:
                     continue
-                profile = user.get("profile") if isinstance(user.get("profile"), dict) else {}
+                profile = (
+                    user.get("profile") if isinstance(user.get("profile"), dict) else {}
+                )
                 await conn.execute(
                     "INSERT INTO slack_sync_users ("
                     "user_id, user_name, real_name, display_name, is_bot, is_deleted, "
@@ -356,7 +361,11 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
 
     if not public_channels:
         reason = "no_public_channels"
-        ctx.log("slack_sync_skipped_no_public_channels", access_mode=access_mode, reason=reason)
+        ctx.log(
+            "slack_sync_skipped_no_public_channels",
+            access_mode=access_mode,
+            reason=reason,
+        )
         return {
             "status": "skipped",
             "reason": reason,
@@ -414,7 +423,9 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         channel_name = str(channel.get("name") or channel_id)
         try:
             checkpoint = await _load_checkpoint(ctx._pool, channel_id)
-            checkpoint_watermark = checkpoint.get("watermark_ts") if checkpoint else None
+            checkpoint_watermark = (
+                checkpoint.get("watermark_ts") if checkpoint else None
+            )
             state = {
                 "cursor": None,
                 "watermark": checkpoint_watermark,
@@ -424,7 +435,9 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             oldest = inp.oldest
             if oldest is None:
                 if state.get("watermark"):
-                    oldest = _ts_minus_days(str(state["watermark"]), thread_lookback_days)
+                    oldest = _ts_minus_days(
+                        str(state["watermark"]), thread_lookback_days
+                    )
                 else:
                     oldest = _ts_now_minus_hours(DEFAULT_BOOTSTRAP_RECENT_HOURS)
 
@@ -455,17 +468,24 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
                 if msg.get("timestamp") and int(msg.get("reply_count") or 0) > 0
             }
             refresh_now = dt.datetime.now(dt.timezone.utc)
-            refresh_cutoff = refresh_now - dt.timedelta(hours=DEFAULT_THREAD_REFRESH_INTERVAL_HOURS)
+            refresh_cutoff = refresh_now - dt.timedelta(
+                hours=DEFAULT_THREAD_REFRESH_INTERVAL_HOURS
+            )
             thread_refresh_times = await load_thread_refresh_times(
                 ctx._pool,
                 channel_id=channel_id,
                 thread_ts_values=sorted(thread_roots),
             )
             for thread_ts in sorted(thread_roots):
-                if not _ts_within_days(thread_ts, thread_lookback_days, now=refresh_now):
+                if not _ts_within_days(
+                    thread_ts, thread_lookback_days, now=refresh_now
+                ):
                     continue
                 last_refreshed_at = thread_refresh_times.get(thread_ts)
-                if last_refreshed_at is not None and last_refreshed_at >= refresh_cutoff:
+                if (
+                    last_refreshed_at is not None
+                    and last_refreshed_at >= refresh_cutoff
+                ):
                     continue
                 await enqueue_backfill_job(
                     ctx._pool,
@@ -491,33 +511,30 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             initial_backfill_seeded = False
             if checkpoint_watermark is None and oldest and inp.oldest is None:
                 bootstrap_oldest = _ts_now_minus_days(lookback_days)
-                await enqueue_backfill_job(
+                initial_backfill_seeded = await seed_channel_bootstrap_job(
                     ctx._pool,
-                    job_key=_bootstrap_backfill_job_key(channel_id, oldest),
-                    job_type=BACKFILL_JOB_CHANNEL_BOOTSTRAP,
                     channel_id=channel_id,
-                    payload={
-                        "cursor": None,
-                        "oldest": bootstrap_oldest,
-                        "latest": oldest,
-                        "lookback_days": lookback_days,
-                        "thread_lookback_days": thread_lookback_days,
-                    },
+                    window_oldest=bootstrap_oldest,
+                    window_latest=oldest,
+                    lookback_days=lookback_days,
+                    thread_lookback_days=thread_lookback_days,
                     run_id=run_id,
                     priority=200,
                 )
-                record_etl_items_enqueued("slack", "channel", "channel_bootstrap_job", 1)
-                initial_backfill_seeded = True
-                ctx.log(
-                    "slack_sync_backfill_seeded",
-                    channel_id=channel_id,
-                    channel_name=channel_name,
-                    job_type=BACKFILL_JOB_CHANNEL_BOOTSTRAP,
-                    job_key=_bootstrap_backfill_job_key(channel_id, oldest),
-                    bootstrap_recent_hours=DEFAULT_BOOTSTRAP_RECENT_HOURS,
-                    oldest_ts=bootstrap_oldest,
-                    latest_ts=oldest,
-                )
+                if initial_backfill_seeded:
+                    record_etl_items_enqueued(
+                        "slack", "channel", "channel_bootstrap_job", 1
+                    )
+                    ctx.log(
+                        "slack_sync_backfill_seeded",
+                        channel_id=channel_id,
+                        channel_name=channel_name,
+                        job_type=BACKFILL_JOB_CHANNEL_BOOTSTRAP,
+                        job_key=_bootstrap_backfill_job_key(channel_id),
+                        bootstrap_recent_hours=DEFAULT_BOOTSTRAP_RECENT_HOURS,
+                        window_oldest_ts=bootstrap_oldest,
+                        window_latest_ts=oldest,
+                    )
             if next_state.get("cursor"):
                 await enqueue_backfill_job(
                     ctx._pool,
@@ -543,7 +560,9 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
                     oldest_ts=str(next_state.get("oldest") or "") or None,
                     latest_ts=str(next_state.get("latest") or "") or None,
                 )
-                record_etl_items_enqueued("slack", "channel", "channel_continuation_job", 1)
+                record_etl_items_enqueued(
+                    "slack", "channel", "channel_continuation_job", 1
+                )
                 ctx.log(
                     "slack_sync_backfill_enqueued",
                     channel_id=channel_id,

@@ -37,14 +37,13 @@ def env_flag_enabled(name: str, default: bool = True) -> bool:
 class SlackSyncClient(Protocol):
     """Small protocol for the Slack client methods used by Slack ETL workflows."""
 
-    def _etl_access_mode(self) -> str:
-        ...
+    def _etl_access_mode(self) -> str: ...
 
-    def _list_etl_channels(self, limit: int = 200, force_refresh: bool = False) -> list[dict]:
-        ...
+    def _list_etl_channels(
+        self, limit: int = 200, force_refresh: bool = False
+    ) -> list[dict]: ...
 
-    def _list_etl_users(self, limit: int = 200) -> list[dict]:
-        ...
+    def _list_etl_users(self, limit: int = 200) -> list[dict]: ...
 
     def _sync_etl_channel_history(
         self,
@@ -54,8 +53,7 @@ class SlackSyncClient(Protocol):
         lookback_days: int = 30,
         oldest: str | int | float | None = None,
         latest: str | int | float | None = None,
-    ) -> dict[str, Any]:
-        ...
+    ) -> dict[str, Any]: ...
 
     def _get_etl_thread_replies_page(
         self,
@@ -66,8 +64,7 @@ class SlackSyncClient(Protocol):
         oldest: str | int | float | None = None,
         latest: str | int | float | None = None,
         inclusive: bool = True,
-    ) -> dict[str, Any]:
-        ...
+    ) -> dict[str, Any]: ...
 
 
 def slack_ts_to_datetime(ts: str | None) -> dt.datetime | None:
@@ -139,7 +136,11 @@ def failure_reason(error: str) -> str:
     lowered = error.lower()
     if "rate_limited" in lowered or "ratelimited" in lowered:
         return "rate_limited"
-    if "missing_scope" in lowered or "not_in_channel" in lowered or "permission" in lowered:
+    if (
+        "missing_scope" in lowered
+        or "not_in_channel" in lowered
+        or "permission" in lowered
+    ):
         return "permission_error"
     if "repeated reply cursor" in lowered or "cursor" in lowered:
         return "cursor_error"
@@ -242,7 +243,9 @@ async def replace_thread_replies(
 ) -> tuple[int, int]:
     """Replace the stored reply set for one thread with the fetched authoritative set."""
     upserted = await upsert_messages(pool, reply_rows)
-    reply_ts_values = [str(row["message_ts"]) for row in reply_rows if row.get("message_ts")]
+    reply_ts_values = [
+        str(row["message_ts"]) for row in reply_rows if row.get("message_ts")
+    ]
     async with pool.acquire() as conn:
         async with conn.transaction():
             if reply_ts_values:
@@ -382,7 +385,9 @@ def repo_slack_client_paths() -> list[Path]:
 
 def slack_client_class_from_path(client_path: Path) -> type:
     """Load SlackClient from a repo checkout path when package import is unavailable."""
-    spec = importlib.util.spec_from_file_location("_slack_sync_tool_client", client_path)
+    spec = importlib.util.spec_from_file_location(
+        "_slack_sync_tool_client", client_path
+    )
     if not spec or not spec.loader:
         raise ImportError(f"Could not load Slack client module from {client_path}")
     module = importlib.util.module_from_spec(spec)
@@ -401,7 +406,9 @@ def slack_client_class() -> type:
             if client_path.exists():
                 return slack_client_class_from_path(client_path)
         candidates = ", ".join(str(path) for path in repo_slack_client_paths())
-        raise FileNotFoundError(f"Could not find Slack client module. Tried: {candidates}")
+        raise FileNotFoundError(
+            f"Could not find Slack client module. Tried: {candidates}"
+        )
 
 
 def client() -> SlackSyncClient:
@@ -418,10 +425,16 @@ async def enqueue_backfill_job(
     payload: dict[str, Any],
     run_id: str,
     priority: int = 100,
+    refresh_completed: bool = True,
 ) -> None:
     """Store or refresh a queued backfill job outside the incremental checkpoint."""
     if not payload:
         return
+    completion_guard = (
+        ""
+        if refresh_completed
+        else " WHERE slack_sync_backfill_jobs.status <> 'completed'"
+    )
     await pool.execute(
         "INSERT INTO slack_sync_backfill_jobs ("
         "job_key, job_type, payload_version, channel_id, status, payload_json, "
@@ -442,7 +455,7 @@ async def enqueue_backfill_job(
         "last_enqueued_at = NOW(), "
         "last_completed_at = NULL, "
         "last_error = '', "
-        "updated_at = NOW()",
+        "updated_at = NOW()" + completion_guard,
         job_key,
         job_type,
         BACKFILL_JOB_PAYLOAD_VERSION,
@@ -451,6 +464,49 @@ async def enqueue_backfill_job(
         priority,
         run_id,
     )
+
+
+async def seed_channel_bootstrap_job(
+    pool,
+    *,
+    channel_id: str,
+    window_oldest: str,
+    window_latest: str,
+    lookback_days: int,
+    thread_lookback_days: int,
+    run_id: str,
+    priority: int = 200,
+) -> bool:
+    """Create the one initial historical bootstrap job for a channel.
+
+    Bootstrap rows are channel state, not per-sync-run events: once a row exists,
+    incremental sync must leave its fixed window and cursor progress alone.
+    """
+    if not channel_id or not window_oldest or not window_latest:
+        return False
+    result = await pool.execute(
+        "INSERT INTO slack_sync_backfill_jobs ("
+        "job_key, job_type, payload_version, channel_id, status, payload_json, "
+        "priority, last_run_id, last_enqueued_at, last_error, updated_at"
+        ") VALUES ($1, $2, $3, $4, 'pending', $5::jsonb, $6, $7, NOW(), '', NOW()) "
+        "ON CONFLICT DO NOTHING",
+        f"bootstrap:{channel_id}",
+        BACKFILL_JOB_CHANNEL_BOOTSTRAP,
+        BACKFILL_JOB_PAYLOAD_VERSION,
+        channel_id,
+        canonical_json(
+            {
+                "cursor": None,
+                "window_oldest": window_oldest,
+                "window_latest": window_latest,
+                "lookback_days": lookback_days,
+                "thread_lookback_days": thread_lookback_days,
+            }
+        ),
+        priority,
+        run_id,
+    )
+    return result == "INSERT 0 1"
 
 
 async def claim_backfill_jobs(pool, limit: int) -> list[dict[str, Any]]:
@@ -499,13 +555,30 @@ async def mark_backfill_job_failed(
     )
 
 
-async def mark_backfill_job_completed(pool, *, job_id: int, run_id: str) -> None:
+async def mark_backfill_job_completed(
+    pool,
+    *,
+    job_id: int,
+    run_id: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
     """Mark a finished backfill job as completed for observability and auditability."""
+    if payload is None:
+        await pool.execute(
+            "UPDATE slack_sync_backfill_jobs SET "
+            "status = 'completed', last_run_id = $2, last_completed_at = NOW(), "
+            "last_error = '', updated_at = NOW() "
+            "WHERE job_id = $1",
+            job_id,
+            run_id,
+        )
+        return
     await pool.execute(
         "UPDATE slack_sync_backfill_jobs SET "
-        "status = 'completed', last_run_id = $2, last_completed_at = NOW(), "
-        "last_error = '', updated_at = NOW() "
+        "status = 'completed', last_run_id = $2, payload_json = $3::jsonb, "
+        "last_completed_at = NOW(), last_error = '', updated_at = NOW() "
         "WHERE job_id = $1",
         job_id,
         run_id,
+        canonical_json(payload),
     )
