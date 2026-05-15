@@ -25,6 +25,7 @@ export async function normalizeSlackEnvelope(opts: {
   if (opts.envelope.type !== 'event_callback') return null
   const event = opts.envelope.event as SlackMessageEvent | undefined
   if (!event || !isMessageLikeEvent(event)) return null
+  if (event.type === 'message' && event.subtype === 'file_share') return null
   if (event.subtype && event.subtype !== 'file_share') return null
   if (!event.user || !event.channel || !event.ts) return null
   if (event.bot_id) return null
