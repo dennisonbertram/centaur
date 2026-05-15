@@ -1,3 +1,5 @@
+import { splitThreadKey } from "@centaur/harness-events";
+
 import { SLACK_PLAIN_TEXT_MESSAGE_CHARS } from "./markdown";
 
 const SLACK_MSG_MAX_CHARS = SLACK_PLAIN_TEXT_MESSAGE_CHARS;
@@ -41,15 +43,22 @@ function codeFence(value: string, language = "text"): string {
 }
 
 export function slackThreadPermalink(threadKey: string | undefined): string | null {
-  const parts = (threadKey || "").trim().split(":");
-  const channel = parts[0] === "slack" ? parts[1] : parts[0];
-  const threadTs = parts[0] === "slack" ? parts[2] : parts[1];
-  if (!channel || !threadTs || !/^[CGD][A-Z0-9]+$/.test(channel)) return null;
+  if (!threadKey) return null;
+
+  let channel: string;
+  let threadTs: string;
+  try {
+    ({ channel, threadTs } = splitThreadKey(threadKey));
+  } catch {
+    return null;
+  }
+
+  if (!/^[CGD][A-Z0-9]+$/.test(channel)) return null;
 
   const permalinkTs = threadTs.replace(".", "");
   if (!/^\d+$/.test(permalinkTs)) return null;
 
-  return `https://app.slack.com/archives/${encodeURIComponent(channel)}/p${permalinkTs}`;
+  return `https://slack.com/archives/${encodeURIComponent(channel)}/p${permalinkTs}`;
 }
 
 export function formatSlackThreadReference(threadKey: string | undefined): string {

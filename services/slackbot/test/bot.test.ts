@@ -931,8 +931,92 @@ describe("execute streams structured progress immediately", () => {
       }));
       expect(alertPost).toHaveBeenCalledWith(
         "slack:C_ENG_CENTAUR_ALERTS",
-        { markdown: expect.stringContaining("**Slack empty message detected**") },
+        {
+          markdown: expect.stringContaining(
+            "*Thread:* `C123456:1770000000.001000`",
+          ),
+        },
       );
+      expect(alertPost).toHaveBeenCalledWith(
+        "slack:C_ENG_CENTAUR_ALERTS",
+        {
+          markdown: expect.stringContaining(
+            "*Thread link:* [https://slack.com/archives/C123456/p1770000000001000](https://slack.com/archives/C123456/p1770000000001000)",
+          ),
+        },
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("does not log or alert when stored terminal state shows a cancelled early stop", async () => {
+    const mockClient = {
+      execute: vi.fn().mockResolvedValue({ execution_id: "exe-stale-empty-live" }),
+      getExecution: vi.fn(async () => ({
+        status: "cancelled",
+        terminal_reason: "cancel_requested",
+        result_text: "",
+        error_text: "cancel_requested",
+        agent_thread_id: "T-stale-empty-live",
+      })),
+    };
+
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const alertPost = vi.fn(async (_threadId: string, _message: { markdown: string }) => ({ id: "alert-1" }));
+    const bot = new SlackBot(
+      mockClient as any,
+      "",
+      { postMessage: alertPost } as any,
+      "C_ENG_CENTAUR_ALERTS",
+    );
+
+    vi.spyOn(bot as any, "streamExecution").mockImplementation((async function* (
+      _threadKey: string,
+      _executionId: string,
+      tracker: { agentThreadId: string; observeTerminal: (source: unknown) => void },
+    ) {
+      tracker.agentThreadId = "T-stale-empty-live";
+      tracker.observeTerminal({
+        status: "completed",
+        resultText: "",
+        errorText: "",
+      });
+      yield { type: "plan_update", title: "Completed" };
+    }) as any);
+    vi.spyOn(bot as any, "ackFinalDelivery").mockResolvedValue(undefined);
+    vi.spyOn(bot as any, "setAssistantTitle").mockResolvedValue(undefined);
+    const errorSpy = vi.spyOn(log, "error").mockImplementation(() => {});
+
+    const edit = vi.fn(async () => {});
+    const thread = {
+      id: "C123456:1770000000.001020",
+      post: vi.fn(async (content: AsyncIterable<unknown>) => {
+        for await (const _chunk of content) { /* drain */ }
+        return {
+          id: "1770000000.001021",
+          streamMessageTs: "1770000000.001021",
+          edit,
+        };
+      }),
+    };
+
+    try {
+      await (bot as any).execute(thread, thread.id, {
+        assignmentGeneration: 7,
+        userId: "U123456",
+        teamId: "T123456",
+      });
+
+      expect(mockClient.getExecution).toHaveBeenCalledWith("exe-stale-empty-live");
+      expect(errorSpy).not.toHaveBeenCalledWith(
+        "slack_empty_bot_message_detected",
+        expect.anything(),
+      );
+      expect(alertPost).not.toHaveBeenCalled();
+      expect(edit).toHaveBeenCalledWith(expect.objectContaining({
+        markdown: expect.stringContaining("Request cancelled."),
+      }));
     } finally {
       errorSpy.mockRestore();
     }
@@ -982,7 +1066,19 @@ describe("execute streams structured progress immediately", () => {
       }));
       expect(postMessage).toHaveBeenCalledWith(
         "slack:C_ENG_CENTAUR_ALERTS",
-        { markdown: expect.stringContaining("**Slack empty message detected**") },
+        {
+          markdown: expect.stringContaining(
+            "*Thread:* `slack:C123456:1770000000.001100`",
+          ),
+        },
+      );
+      expect(postMessage).toHaveBeenCalledWith(
+        "slack:C_ENG_CENTAUR_ALERTS",
+        {
+          markdown: expect.stringContaining(
+            "*Thread link:* [https://slack.com/archives/C123456/p1770000000001100](https://slack.com/archives/C123456/p1770000000001100)",
+          ),
+        },
       );
       expect(postMessage).toHaveBeenCalledWith(
         "slack:C123456:1770000000.001100",
@@ -992,6 +1088,108 @@ describe("execute streams structured progress immediately", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it("includes a Slack thread link in empty message alerts", async () => {
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const postMessage = vi.fn(async (_threadId: string, _message: { markdown: string }) => ({ id: "alert-1" }));
+    const bot = new SlackBot(
+      {} as any,
+      "",
+      { postMessage } as any,
+      "C_ENG_CENTAUR_ALERTS",
+    );
+
+    await (bot as any).notifySlackEmptyBotMessage({
+      deliveryPath: "live_stream",
+      threadKey: "C0A87C21805:1778864286.243799",
+      executionId: "exe_6c528d7dd79344a8",
+      streamMessageTs: "1778864886.631249",
+      resultLength: 0,
+      renderedMarkdownLength: 0,
+      deliveredToSlack: true,
+    });
+
+    expect(postMessage).toHaveBeenCalledWith(
+      "slack:C_ENG_CENTAUR_ALERTS",
+      {
+        markdown: expect.stringContaining(
+          "*Thread:* `C0A87C21805:1778864286.243799`",
+        ),
+      },
+    );
+    expect(postMessage).toHaveBeenCalledWith(
+      "slack:C_ENG_CENTAUR_ALERTS",
+      {
+        markdown: expect.stringContaining(
+          "*Thread link:* [https://slack.com/archives/C0A87C21805/p1778864286243799](https://slack.com/archives/C0A87C21805/p1778864286243799)",
+        ),
+      },
+    );
+  });
+
+  it("keeps a thread link field when an alert thread key is not linkable", async () => {
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const postMessage = vi.fn(async (_threadId: string, _message: { markdown: string }) => ({ id: "alert-1" }));
+    const bot = new SlackBot(
+      {} as any,
+      "",
+      { postMessage } as any,
+      "C_ENG_CENTAUR_ALERTS",
+    );
+
+    await (bot as any).notifySlackEmptyBotMessage({
+      deliveryPath: "live_stream",
+      threadKey: "workflow:wfr_123",
+      executionId: "exe-unlinkable",
+    });
+
+    expect(postMessage).toHaveBeenCalledWith(
+      "slack:C_ENG_CENTAUR_ALERTS",
+      {
+        markdown: expect.stringContaining("*Thread:* `workflow:wfr_123`"),
+      },
+    );
+    expect(postMessage).toHaveBeenCalledWith(
+      "slack:C_ENG_CENTAUR_ALERTS",
+      {
+        markdown: expect.stringContaining("*Thread link:* _unavailable_"),
+      },
+    );
+  });
+
+  it("includes a Slack thread link in duplicate render alerts", async () => {
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const postMessage = vi.fn(async (_threadId: string, _message: { markdown: string }) => ({ id: "alert-1" }));
+    const bot = new SlackBot(
+      {} as any,
+      "",
+      { postMessage } as any,
+      "C_ENG_CENTAUR_ALERTS",
+    );
+
+    await (bot as any).notifySlackOverflowDuplicateRendered({
+      threadKey: "C0A87C21805:1778864286.243799",
+      executionId: "exe-dupe",
+      resultLength: 123,
+    });
+
+    expect(postMessage).toHaveBeenCalledWith(
+      "slack:C_ENG_CENTAUR_ALERTS",
+      {
+        markdown: expect.stringContaining(
+          "*Thread:* `C0A87C21805:1778864286.243799`",
+        ),
+      },
+    );
+    expect(postMessage).toHaveBeenCalledWith(
+      "slack:C_ENG_CENTAUR_ALERTS",
+      {
+        markdown: expect.stringContaining(
+          "*Thread link:* [https://slack.com/archives/C0A87C21805/p1778864286243799](https://slack.com/archives/C0A87C21805/p1778864286243799)",
+        ),
+      },
+    );
   });
 
   it.each([

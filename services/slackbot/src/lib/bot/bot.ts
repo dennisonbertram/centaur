@@ -21,6 +21,7 @@ import {
   normalizedTerminalString,
   renderTerminalResultCopy,
   shouldNotifyRuntimeErrorChannel,
+  slackThreadPermalink,
   splitSlackMessage,
 } from "@/lib/slack/delivery";
 import type { SlackBlock, StreamChunk, StreamOverflowMetadata } from "@/lib/slack/types";
@@ -294,6 +295,11 @@ function isEmptyCompletedLiveStreamResult(tracker: ProgressTracker): boolean {
     resultText: tracker.terminalResultText,
     errorText: tracker.terminalErrorText,
   });
+}
+
+function formatAlertThreadLink(threadKey: string): string {
+  const permalink = slackThreadPermalink(threadKey);
+  return permalink ? `[${permalink}](${permalink})` : "_unavailable_";
 }
 
 /** Return a generic prompt for bare `--<persona>` mentions with no other content.
@@ -1057,7 +1063,13 @@ export class SlackBot {
         tracker.pendingFiles = [];
       }
 
-      const finalText = (tracker.resultText || tracker.lastAssistantText).trim();
+      let finalText = (tracker.resultText || tracker.lastAssistantText).trim();
+      if (!finalText && deliveredToSlack) {
+        const hydrated = await this.hydrateStoredTerminalResult(executionId, tracker);
+        if (hydrated) {
+          finalText = (tracker.resultText || tracker.lastAssistantText).trim();
+        }
+      }
       if (!finalText && deliveredToSlack && isEmptyCompletedLiveStreamResult(tracker)) {
         await this.reportEmptyBotMessage({
           deliveryPath: "live_stream",
@@ -1792,9 +1804,11 @@ export class SlackBot {
   private async notifySlackEmptyBotMessage(opts: EmptyBotMessageReport): Promise<boolean> {
     if (!this.runtimeErrorChannelId || !this.slack) return false;
     try {
+      const threadLink = formatAlertThreadLink(opts.threadKey);
       const lines = [
         "**Slack empty message detected**",
         `*Thread:* \`${opts.threadKey}\``,
+        `*Thread link:* ${threadLink}`,
         `*Execution:* \`${opts.executionId}\``,
         `*Delivery path:* \`${opts.deliveryPath}\``,
         opts.agentThreadId ? `*Amp thread:* \`${opts.agentThreadId}\`` : "",
@@ -1837,9 +1851,11 @@ export class SlackBot {
   }): Promise<boolean> {
     if (!this.runtimeErrorChannelId || !this.slack) return false;
     try {
+      const threadLink = formatAlertThreadLink(opts.threadKey);
       const lines = [
         "**Slack duplicate render confirmed**",
         `*Thread:* \`${opts.threadKey}\``,
+        `*Thread link:* ${threadLink}`,
         `*Execution:* \`${opts.executionId}\``,
         opts.agentThreadId ? `*Amp thread:* \`${opts.agentThreadId}\`` : "",
         opts.streamMessageTs ? `*Stream message:* \`${opts.streamMessageTs}\`` : "",

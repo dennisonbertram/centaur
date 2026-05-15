@@ -1291,7 +1291,7 @@ describe("SlackBot runtime control", () => {
 
     await (bot as any).drainFinalDeliveriesOnce();
 
-    const threadLink = "[thread](https://app.slack.com/archives/C123/p1700000000000100)";
+    const threadLink = "[thread](https://slack.com/archives/C123/p1700000000000100)";
     // Should have posted to the original thread + alert channel summary + alert channel detail
     expect(postMessage).toHaveBeenCalledWith(
       "slack:C_ERROR_CHANNEL",
