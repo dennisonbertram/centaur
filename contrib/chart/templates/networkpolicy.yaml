@@ -195,12 +195,11 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 14 }}
+              centaur.ai/iron-proxy: "true"
+              centaur.ai/sandbox-id: api
       ports:
         - protocol: TCP
           port: {{ .Values.ironProxy.service.proxyPort }}
-        - protocol: TCP
-          port: {{ .Values.ironProxy.manager.service.controlPort }}
 {{- if .Values.laminar.enabled }}
     - to:
         - podSelector:
@@ -260,12 +259,11 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 14 }}
+              centaur.ai/iron-proxy: "true"
+              centaur.ai/sandbox-id: api
       ports:
         - protocol: TCP
           port: {{ .Values.ironProxy.service.proxyPort }}
-        - protocol: TCP
-          port: {{ .Values.ironProxy.manager.service.controlPort }}
 {{- if .Values.laminar.enabled }}
     - to:
         - podSelector:
@@ -286,13 +284,14 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "centaur.componentName" (dict "root" . "component" "iron-proxy") }}
+  name: {{ include "centaur.componentName" (dict "root" . "component" "iron-proxy-api") }}
   labels:
 {{ include "centaur.componentLabels" (dict "root" . "component" "iron-proxy") | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 6 }}
+      centaur.ai/iron-proxy: "true"
+      centaur.ai/sandbox-id: api
   policyTypes:
     - Ingress
     - Egress
@@ -313,32 +312,16 @@ spec:
       ports:
         - protocol: TCP
           port: {{ .Values.ironProxy.service.proxyPort }}
-    - from:
-        - podSelector:
-            matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "api") | nindent 14 }}
-      ports:
-        - protocol: TCP
-          port: {{ .Values.ironProxy.manager.service.controlPort }}
   egress:
-    # firewall-manager polls the api for the injection map.
-    - to:
-        - podSelector:
-            matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "api") | nindent 14 }}
-      ports:
-        - protocol: TCP
-          port: 8000
-    # iron-proxy forwards sandbox traffic to external HTTP(S) endpoints.
-    # Restricting to 80/443 keeps in-cluster services (notably the
-    # secret manager on 8100) unreachable from this pod.
     - ports:
         - protocol: TCP
           port: 443
         - protocol: TCP
           port: 80
+        - protocol: TCP
+          port: 5432
 ---
-{{- if eq .Values.ironProxy.manager.secretSource "onepassword-connect" }}
+{{- if eq .Values.ironProxy.secretSource "onepassword-connect" }}
 # Targets the 1Password Connect subchart's pods, which carry
 # `app: <applicationName>` (default `onepassword-connect`).
 apiVersion: networking.k8s.io/v1
@@ -358,7 +341,7 @@ spec:
     - from:
         - podSelector:
             matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 14 }}
+              centaur.ai/iron-proxy: "true"
       ports:
         - protocol: TCP
           port: {{ include "centaur.onepasswordConnectPort" . }}

@@ -79,7 +79,6 @@ jobs:
           for image in \
             centaur-api \
             centaur-iron-proxy \
-            centaur-firewall-manager \
             centaur-agent; do
             kind load docker-image "${image}:latest" --name centaur-e2e
           done

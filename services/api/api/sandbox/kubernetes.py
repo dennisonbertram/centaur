@@ -8,10 +8,12 @@ import hashlib
 import json
 import os
 import re
+import secrets as _secrets
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlunsplit
 
 from aiohttp import WSMsgType
 from kubernetes_asyncio import client, config
@@ -25,6 +27,10 @@ from kubernetes_asyncio.stream.ws_client import (
 )
 import structlog
 
+from api.proxy_config import (
+    assign_pg_listen_ports,
+    render_proxy_yaml,
+)
 from api.sandbox.base import SandboxBackend, SandboxSession
 from api.sandbox.config import (
     build_harness_cmd,
@@ -33,6 +39,7 @@ from api.sandbox.config import (
     runtime_for_session,
 )
 from api.sandbox.prompt_assembly import assemble_prompt
+from api.tool_manager import PgDsnSecret, SecretDef
 
 log = structlog.get_logger()
 
@@ -43,6 +50,8 @@ _AGENT_UID = 1001
 _SANDBOX_OVERLAY_ROOT = "/home/agent/overlay"
 _SANDBOX_OVERLAY_DIR = f"{_SANDBOX_OVERLAY_ROOT}/org"
 _PROXY_LABEL = "centaur.ai/iron-proxy"
+_API_PROXY_POD_NAME = "centaur-api-proxy"
+_API_PROXY_SANDBOX_ID = "api"
 
 
 def _get_rt(session: SandboxSession):
@@ -107,10 +116,6 @@ def _proxy_health_port() -> int:
     return _env_int("KUBERNETES_IRON_PROXY_HEALTH_PORT", 9090)
 
 
-def _proxy_manager_port() -> int:
-    return _env_int("KUBERNETES_FIREWALL_MANAGER_PORT", 8081)
-
-
 def _proxy_image() -> str:
     return os.getenv("KUBERNETES_IRON_PROXY_IMAGE", "centaur-iron-proxy:latest")
 
@@ -118,19 +123,6 @@ def _proxy_image() -> str:
 def _proxy_image_pull_policy() -> str:
     return (
         os.getenv("KUBERNETES_IRON_PROXY_IMAGE_PULL_POLICY") or _image_pull_policy()
-    ).strip()
-
-
-def _proxy_manager_image() -> str:
-    return os.getenv(
-        "KUBERNETES_FIREWALL_MANAGER_IMAGE", "centaur-firewall-manager:latest"
-    )
-
-
-def _proxy_manager_image_pull_policy() -> str:
-    return (
-        os.getenv("KUBERNETES_FIREWALL_MANAGER_IMAGE_PULL_POLICY")
-        or _image_pull_policy()
     ).strip()
 
 
@@ -149,8 +141,17 @@ def _secret_env_key(name: str) -> str:
     return f"{os.getenv('KUBERNETES_SECRET_ENV_PREFIX', '')}{name}"
 
 
-def _proxy_iron_env(secret_name: str) -> list[dict[str, Any]]:
-    """Env block for the per-sandbox iron-proxy container."""
+def _proxy_iron_env(
+    secret_name: str,
+    pg_secrets: list[tuple[PgDsnSecret, str]],
+) -> list[dict[str, Any]]:
+    """Env block for the iron-proxy container.
+
+    iron-proxy resolves the upstream DSN itself from its configured source
+    (env / 1Password). The API only injects the per-listener proxy-side
+    password env var so the sandbox can authenticate. ``pg_secrets`` carries
+    ``(secret, proxy_password)`` for each declared ``pg_dsn``.
+    """
     env: list[dict[str, Any]] = [
         {
             "name": "IRON_MANAGEMENT_API_KEY",
@@ -180,7 +181,20 @@ def _proxy_iron_env(secret_name: str) -> list[dict[str, Any]]:
                 },
             }
         )
+    for secret, proxy_password in pg_secrets:
+        env.append({"name": f"PG_PROXY_PASSWORD_{secret.name}", "value": proxy_password})
     return env
+
+
+def _build_proxied_pg_url(host: str, port: int, password: str, database: str) -> str:
+    """Build a local postgres URL pointing at iron-proxy's listener.
+
+    iron-proxy forwards the client's startup-packet database name to the
+    upstream, so the dbname declared in the tool's pyproject must match the
+    upstream's database name.
+    """
+    netloc = f"app_user:{password}@{host}:{port}"
+    return urlunsplit(("postgresql", netloc, f"/{database}", "", ""))
 
 
 def _api_pod_match_labels() -> dict[str, str]:
@@ -265,11 +279,19 @@ def _prompt_secret_name(pod_name: str) -> str:
 
 
 def _proxy_pod_name(sandbox_id: str) -> str:
+    if sandbox_id == _API_PROXY_SANDBOX_ID:
+        return _API_PROXY_POD_NAME
     return _resource_name("centaur-centaur-proxy", sandbox_id)
 
 
 def _proxy_service_name(sandbox_id: str) -> str:
+    if sandbox_id == _API_PROXY_SANDBOX_ID:
+        return _API_PROXY_POD_NAME
     return _resource_name("centaur-centaur-proxy", sandbox_id)
+
+
+def _proxy_configmap_name(sandbox_id: str) -> str:
+    return f"{_proxy_pod_name(sandbox_id)}-config"
 
 
 def _sandbox_egress_policy_name(sandbox_id: str) -> str:
@@ -280,13 +302,7 @@ def _proxy_policy_name(sandbox_id: str) -> str:
     return _resource_name("centaur-centaur-proxy-net", sandbox_id)
 
 
-def _local_dev_mode() -> bool:
-    return os.getenv("AGENT_LOCAL_DEV", "").strip().lower() in {"1", "true"}
-
-
 def _ensure_kubernetes_env() -> None:
-    if _local_dev_mode():
-        return
     if not (os.getenv("AGENT_API_URL") or "").strip():
         raise ValueError("AGENT_API_URL is required for kubernetes backend")
 
@@ -363,6 +379,7 @@ class KubernetesExecutorBackend(SandboxBackend):
     def __init__(self) -> None:
         self._core: client.CoreV1Api | None = None
         self._networking: client.NetworkingV1Api | None = None
+        self._apps: client.AppsV1Api | None = None
         self._ws_api_client: WsApiClient | None = None
         self._ws_core: client.CoreV1Api | None = None
         self._lock = asyncio.Lock()
@@ -407,6 +424,7 @@ class KubernetesExecutorBackend(SandboxBackend):
             _disable_proxy_env(core_api_client)
             self._core = client.CoreV1Api(api_client=core_api_client)
             self._networking = client.NetworkingV1Api(api_client=core_api_client)
+            self._apps = client.AppsV1Api(api_client=core_api_client)
 
             self._ws_api_client = WsApiClient(
                 configuration=client.Configuration.get_default_copy(),
@@ -424,6 +442,11 @@ class KubernetesExecutorBackend(SandboxBackend):
         if self._networking is None:
             raise RuntimeError("kubernetes client not initialized")
         return self._networking
+
+    def _apps_api(self) -> client.AppsV1Api:
+        if self._apps is None:
+            raise RuntimeError("kubernetes client not initialized")
+        return self._apps
 
     def _ws_core_api(self) -> client.CoreV1Api:
         if self._ws_core is None:
@@ -474,11 +497,69 @@ class KubernetesExecutorBackend(SandboxBackend):
             if not self._is_not_found(exc):
                 raise
 
+    async def _delete_configmap(self, name: str) -> None:
+        try:
+            await self._core_api().delete_namespaced_config_map(name, _namespace())
+        except Exception as exc:
+            if not self._is_not_found(exc):
+                raise
+
     async def _delete_proxy_resources(self, sandbox_id: str) -> None:
         await self._delete_pod(_proxy_pod_name(sandbox_id))
         await self._delete_service(_proxy_service_name(sandbox_id))
+        await self._delete_configmap(_proxy_configmap_name(sandbox_id))
         await self._delete_network_policy(_sandbox_egress_policy_name(sandbox_id))
         await self._delete_network_policy(_proxy_policy_name(sandbox_id))
+
+    def _collect_secrets(self) -> list[tuple[SecretDef, tuple[str, ...]]]:
+        from api.app import get_tool_manager
+
+        return get_tool_manager().collect_secrets()
+
+    def _resolved_pg_secrets(
+        self, secrets: list[tuple[SecretDef, tuple[str, ...]]]
+    ) -> list[tuple[PgDsnSecret, str]]:
+        """For every distinct ``PgDsnSecret`` return ``(secret, proxy_password)``.
+
+        The random proxy password is shared between iron-proxy (via env) and
+        the sandbox (via the constructed local DSN). iron-proxy resolves the
+        upstream DSN itself from the source declared in proxy.yaml.
+        """
+        out: dict[str, tuple[PgDsnSecret, str]] = {}
+        for secret, _ in secrets:
+            if not isinstance(secret, PgDsnSecret):
+                continue
+            if secret.name in out:
+                continue
+            out[secret.name] = (secret, _secrets.token_urlsafe(24))
+        return [out[name] for name in sorted(out)]
+
+    async def _create_proxy_configmap(
+        self,
+        sandbox_id: str,
+        secrets: list[tuple[SecretDef, tuple[str, ...]]],
+        pg_listen_ports: dict[str, int],
+    ) -> None:
+        rendered = render_proxy_yaml(
+            secrets, base_config=None, pg_listen_ports=pg_listen_ports
+        )
+        name = _proxy_configmap_name(sandbox_id)
+        await self._delete_configmap(name)
+        await self._core_api().create_namespaced_config_map(
+            _namespace(),
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": name,
+                    "labels": {
+                        _PROXY_LABEL: "true",
+                        "centaur.ai/sandbox-id": sandbox_id,
+                    },
+                },
+                "data": {"proxy.yaml": rendered},
+            },
+        )
 
     async def _create_prompt_secret(
         self, secret_name: str, persona: str | None
@@ -502,9 +583,28 @@ class KubernetesExecutorBackend(SandboxBackend):
             },
         )
 
-    async def _create_proxy_service(self, sandbox_id: str) -> None:
+    async def _create_proxy_service(
+        self, sandbox_id: str, pg_listen_ports: dict[str, int]
+    ) -> None:
         service_name = _proxy_service_name(sandbox_id)
         await self._delete_service(service_name)
+        ports: list[dict[str, Any]] = [
+            {
+                "name": "proxy",
+                "port": _proxy_port(),
+                "targetPort": _proxy_port(),
+                "protocol": "TCP",
+            }
+        ]
+        for name, port in sorted(pg_listen_ports.items(), key=lambda item: item[1]):
+            ports.append(
+                {
+                    "name": f"pg-{name[:11].lower().replace('_', '-')}",
+                    "port": port,
+                    "targetPort": port,
+                    "protocol": "TCP",
+                }
+            )
         await self._core_api().create_namespaced_service(
             _namespace(),
             {
@@ -522,21 +622,20 @@ class KubernetesExecutorBackend(SandboxBackend):
                         _PROXY_LABEL: "true",
                         "centaur.ai/sandbox-id": sandbox_id,
                     },
-                    "ports": [
-                        {
-                            "name": "proxy",
-                            "port": _proxy_port(),
-                            "targetPort": _proxy_port(),
-                            "protocol": "TCP",
-                        }
-                    ],
+                    "ports": ports,
                 },
             },
         )
 
-    async def _create_proxy_network_policies(self, sandbox_id: str) -> None:
+    async def _create_proxy_network_policies(
+        self, sandbox_id: str, pg_listen_ports: dict[str, int]
+    ) -> None:
         await self._delete_network_policy(_sandbox_egress_policy_name(sandbox_id))
         await self._delete_network_policy(_proxy_policy_name(sandbox_id))
+
+        sandbox_to_proxy_ports = [{"protocol": "TCP", "port": _proxy_port()}]
+        for _, port in sorted(pg_listen_ports.items(), key=lambda item: item[1]):
+            sandbox_to_proxy_ports.append({"protocol": "TCP", "port": port})
 
         await self._networking_api().create_namespaced_network_policy(
             _namespace(),
@@ -579,7 +678,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                                     }
                                 }
                             ],
-                            "ports": [{"protocol": "TCP", "port": _proxy_port()}],
+                            "ports": sandbox_to_proxy_ports,
                         },
                     ],
                 },
@@ -616,7 +715,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                                     }
                                 }
                             ],
-                            "ports": [{"protocol": "TCP", "port": _proxy_port()}],
+                            "ports": sandbox_to_proxy_ports,
                         }
                     ],
                     "egress": [
@@ -633,16 +732,26 @@ class KubernetesExecutorBackend(SandboxBackend):
                         {
                             "ports": [{"protocol": "TCP", "port": 443}],
                         },
+                        {
+                            "ports": [{"protocol": "TCP", "port": 5432}],
+                        },
                     ],
                 },
             },
         )
 
-    async def _create_proxy_pod(self, sandbox_id: str) -> None:
-        proxy_pod_name = _proxy_pod_name(sandbox_id)
+    def _build_proxy_pod_spec(
+        self,
+        sandbox_id: str,
+        pg_secrets: list[tuple[PgDsnSecret, str]],
+        pg_listen_ports: dict[str, int],
+        *,
+        restart_policy: str,
+    ) -> dict[str, Any]:
+        """Return the pod.spec dict shared by the sandbox bare Pod and the api-self Deployment."""
+        configmap_name = _proxy_configmap_name(sandbox_id)
         secret_name = _secret_env_name()
-        env_secret_ref = {"secretRef": {"name": secret_name}}
-        env_from = [env_secret_ref]
+        env_from: list[dict[str, Any]] = [{"secretRef": {"name": secret_name}}]
         bootstrap_secret_name = _bootstrap_secret_name()
         if (
             os.getenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
@@ -650,76 +759,99 @@ class KubernetesExecutorBackend(SandboxBackend):
             and bootstrap_secret_name
         ):
             env_from.append({"secretRef": {"name": bootstrap_secret_name}})
-        secret_key_refs = {
-            "FIREWALL_CONTROL_TOKEN": _secret_env_key("FIREWALL_CONTROL_TOKEN"),
-            "IRON_MANAGEMENT_API_KEY": _secret_env_key("IRON_MANAGEMENT_API_KEY"),
-        }
-        manager_env = [
-            {
-                "name": env_name,
-                "valueFrom": {
-                    "secretKeyRef": {
-                        "name": secret_name,
-                        "key": secret_key,
-                    }
-                },
-            }
-            for env_name, secret_key in secret_key_refs.items()
+        proxy_ports: list[dict[str, Any]] = [
+            {"containerPort": _proxy_port(), "name": "proxy"},
+            {"containerPort": _proxy_management_port(), "name": "management"},
+            {"containerPort": _proxy_health_port(), "name": "health"},
         ]
-        manager_env.extend(
-            [
+        for name, port in sorted(pg_listen_ports.items(), key=lambda item: item[1]):
+            proxy_ports.append(
                 {
-                    "name": "IRON_PROXY_CONFIG_PATH",
-                    "value": "/etc/iron-proxy/proxy.yaml",
-                },
+                    "containerPort": port,
+                    "name": f"pg-{name[:11].lower().replace('_', '-')}",
+                }
+            )
+        return {
+            "automountServiceAccountToken": False,
+            "restartPolicy": restart_policy,
+            "imagePullSecrets": _image_pull_secrets(),
+            "containers": [
                 {
-                    "name": "IRON_PROXY_MANAGEMENT_URL",
-                    "value": f"http://127.0.0.1:{_proxy_management_port()}",
+                    "name": "iron-proxy",
+                    "image": _proxy_image(),
+                    "imagePullPolicy": _proxy_image_pull_policy(),
+                    "env": _proxy_iron_env(secret_name, pg_secrets),
+                    "envFrom": env_from,
+                    "ports": proxy_ports,
+                    "readinessProbe": {
+                        "httpGet": {
+                            "path": "/healthz",
+                            "port": _proxy_health_port(),
+                        },
+                        "periodSeconds": 5,
+                        "failureThreshold": 30,
+                    },
+                    "livenessProbe": {
+                        "httpGet": {
+                            "path": "/healthz",
+                            "port": _proxy_health_port(),
+                        }
+                    },
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                        "capabilities": {"drop": ["ALL"]},
+                        "seccompProfile": {"type": "RuntimeDefault"},
+                    },
+                    "volumeMounts": [
+                        {
+                            "name": "iron-proxy-config-rendered",
+                            "mountPath": "/etc/iron-proxy-rendered",
+                            "readOnly": True,
+                        },
+                        {
+                            "name": "iron-proxy-config",
+                            "mountPath": "/etc/iron-proxy",
+                        },
+                        {"name": "iron-proxy-certs", "mountPath": "/certs"},
+                        {
+                            "name": "iron-proxy-ca",
+                            "mountPath": "/etc/iron-proxy-ca",
+                            "readOnly": True,
+                        },
+                    ],
+                    # Copy the read-only rendered config into the writable
+                    # /etc/iron-proxy mount where the entrypoint expects it.
+                    # iron-proxy's entrypoint script writes the CA cert/key
+                    # into the same directory.
+                    "command": ["/bin/sh", "-ec"],
+                    "args": [
+                        "cp /etc/iron-proxy-rendered/proxy.yaml /etc/iron-proxy/proxy.yaml && exec /entrypoint.sh"
+                    ],
                 },
-                {"name": "FIREWALL_MANAGER_PORT", "value": str(_proxy_manager_port())},
+            ],
+            "volumes": [
                 {
-                    "name": "FIREWALL_MANAGER_INJECTION_MAP_URL",
-                    "value": (
-                        os.getenv("KUBERNETES_FIREWALL_MANAGER_INJECTION_MAP_URL")
-                        or f"{os.getenv('AGENT_API_URL', 'http://api:8000').rstrip('/')}/internal/injection-map"
-                    ),
+                    "name": "iron-proxy-config-rendered",
+                    "configMap": {"name": configmap_name},
                 },
+                {"name": "iron-proxy-config", "emptyDir": {}},
+                {"name": "iron-proxy-certs", "emptyDir": {}},
                 {
-                    "name": "FIREWALL_MANAGER_POLL_INTERVAL_SECONDS",
-                    "value": os.getenv(
-                        "KUBERNETES_FIREWALL_MANAGER_POLL_INTERVAL_SECONDS", "30"
-                    ),
+                    "name": "iron-proxy-ca",
+                    "secret": {"secretName": _firewall_ca_key_secret_name()},
                 },
-                {
-                    "name": "FIREWALL_MANAGER_POLL_JITTER_SECONDS",
-                    "value": os.getenv(
-                        "KUBERNETES_FIREWALL_MANAGER_POLL_JITTER_SECONDS", "10"
-                    ),
-                },
-                {
-                    "name": "FIREWALL_MANAGER_STARTUP_BACKOFF_INITIAL_SECONDS",
-                    "value": os.getenv(
-                        "KUBERNETES_FIREWALL_MANAGER_STARTUP_BACKOFF_INITIAL_SECONDS",
-                        "0.5",
-                    ),
-                },
-                {
-                    "name": "FIREWALL_MANAGER_STARTUP_BACKOFF_MAX_SECONDS",
-                    "value": os.getenv(
-                        "KUBERNETES_FIREWALL_MANAGER_STARTUP_BACKOFF_MAX_SECONDS", "5"
-                    ),
-                },
-                {
-                    "name": "FIREWALL_MANAGER_SECRET_SOURCE",
-                    "value": os.getenv(
-                        "KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword"
-                    ),
-                },
-                {
-                    "name": "FIREWALL_MANAGER_SECRET_TTL",
-                    "value": os.getenv("KUBERNETES_FIREWALL_MANAGER_SECRET_TTL", "10m"),
-                },
-            ]
+            ],
+        }
+
+    async def _create_proxy_pod(
+        self,
+        sandbox_id: str,
+        pg_secrets: list[tuple[PgDsnSecret, str]],
+        pg_listen_ports: dict[str, int],
+    ) -> None:
+        proxy_pod_name = _proxy_pod_name(sandbox_id)
+        spec = self._build_proxy_pod_spec(
+            sandbox_id, pg_secrets, pg_listen_ports, restart_policy="Never"
         )
         await self._delete_pod(proxy_pod_name)
         await self._core_api().create_namespaced_pod(
@@ -734,110 +866,62 @@ class KubernetesExecutorBackend(SandboxBackend):
                         "centaur.ai/sandbox-id": sandbox_id,
                     },
                 },
-                "spec": {
-                    "automountServiceAccountToken": False,
-                    "restartPolicy": "Never",
-                    "imagePullSecrets": _image_pull_secrets(),
-                    "containers": [
-                        {
-                            "name": "iron-proxy",
-                            "image": _proxy_image(),
-                            "imagePullPolicy": _proxy_image_pull_policy(),
-                            "env": _proxy_iron_env(secret_name),
-                            "envFrom": env_from,
-                            "ports": [
-                                {"containerPort": _proxy_port(), "name": "proxy"},
-                                {
-                                    "containerPort": _proxy_management_port(),
-                                    "name": "management",
-                                },
-                                {
-                                    "containerPort": _proxy_health_port(),
-                                    "name": "health",
-                                },
-                            ],
-                            "readinessProbe": {
-                                "httpGet": {
-                                    "path": "/healthz",
-                                    "port": _proxy_health_port(),
-                                },
-                                "periodSeconds": 5,
-                                "failureThreshold": 30,
-                            },
-                            "livenessProbe": {
-                                "httpGet": {
-                                    "path": "/healthz",
-                                    "port": _proxy_health_port(),
-                                }
-                            },
-                            "securityContext": {
-                                "allowPrivilegeEscalation": False,
-                                "capabilities": {"drop": ["ALL"]},
-                                "seccompProfile": {"type": "RuntimeDefault"},
-                            },
-                            "volumeMounts": [
-                                {
-                                    "name": "iron-proxy-config",
-                                    "mountPath": "/etc/iron-proxy",
-                                },
-                                {"name": "iron-proxy-certs", "mountPath": "/certs"},
-                                {
-                                    "name": "iron-proxy-ca",
-                                    "mountPath": "/etc/iron-proxy-ca",
-                                    "readOnly": True,
-                                },
-                            ],
-                        },
-                        {
-                            "name": "firewall-manager",
-                            "image": _proxy_manager_image(),
-                            "imagePullPolicy": _proxy_manager_image_pull_policy(),
-                            "env": manager_env,
-                            "envFrom": env_from,
-                            "ports": [
-                                {
-                                    "containerPort": _proxy_manager_port(),
-                                    "name": "control",
-                                }
-                            ],
-                            "readinessProbe": {
-                                "httpGet": {
-                                    "path": "/health/ready",
-                                    "port": _proxy_manager_port(),
-                                },
-                                "periodSeconds": 5,
-                                "failureThreshold": 30,
-                            },
-                            "livenessProbe": {
-                                "httpGet": {
-                                    "path": "/health",
-                                    "port": _proxy_manager_port(),
-                                }
-                            },
-                            "securityContext": {
-                                "allowPrivilegeEscalation": False,
-                                "capabilities": {"drop": ["ALL"]},
-                                "seccompProfile": {"type": "RuntimeDefault"},
-                            },
-                            "volumeMounts": [
-                                {
-                                    "name": "iron-proxy-config",
-                                    "mountPath": "/etc/iron-proxy",
-                                },
-                            ],
-                        },
-                    ],
-                    "volumes": [
-                        {"name": "iron-proxy-config", "emptyDir": {}},
-                        {"name": "iron-proxy-certs", "emptyDir": {}},
-                        {
-                            "name": "iron-proxy-ca",
-                            "secret": {"secretName": _firewall_ca_key_secret_name()},
-                        },
-                    ],
-                },
+                "spec": spec,
             },
         )
+
+    async def _apply_api_proxy_deployment(
+        self,
+        pg_secrets: list[tuple[PgDsnSecret, str]],
+        pg_listen_ports: dict[str, int],
+        config_hash: str,
+    ) -> None:
+        """Create or replace the api-self iron-proxy Deployment.
+
+        Uses ``config_hash`` as a pod-template annotation so a changed
+        ConfigMap triggers a rolling restart even though the rest of the
+        template is unchanged. ``maxUnavailable: 0`` keeps the proxy
+        reachable through the rollout.
+        """
+        name = _proxy_pod_name(_API_PROXY_SANDBOX_ID)
+        labels = {
+            _PROXY_LABEL: "true",
+            "centaur.ai/sandbox-id": _API_PROXY_SANDBOX_ID,
+        }
+        pod_spec = self._build_proxy_pod_spec(
+            _API_PROXY_SANDBOX_ID,
+            pg_secrets,
+            pg_listen_ports,
+            restart_policy="Always",
+        )
+        body = {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"name": name, "labels": labels},
+            "spec": {
+                "replicas": 1,
+                "strategy": {
+                    "type": "RollingUpdate",
+                    "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0},
+                },
+                "selector": {"matchLabels": labels},
+                "template": {
+                    "metadata": {
+                        "labels": labels,
+                        "annotations": {"centaur.ai/config-hash": config_hash},
+                    },
+                    "spec": pod_spec,
+                },
+            },
+        }
+        try:
+            await self._apps_api().read_namespaced_deployment(name, _namespace())
+        except Exception as exc:
+            if not self._is_not_found(exc):
+                raise
+            await self._apps_api().create_namespaced_deployment(_namespace(), body)
+            return
+        await self._apps_api().replace_namespaced_deployment(name, _namespace(), body)
 
     async def _wait_pod_ready(self, pod_name: str) -> float:
         deadline = time.monotonic() + _READY_TIMEOUT_S
@@ -912,11 +996,26 @@ class KubernetesExecutorBackend(SandboxBackend):
         pod_name = _resource_name("centaur-centaur-sandbox", thread_key)
         secret_name = _prompt_secret_name(pod_name)
         firewall_host = _proxy_service_name(pod_name)
+
+        secrets = self._collect_secrets()
+        pg_listen_ports = assign_pg_listen_ports(secrets)
+        pg_secrets = self._resolved_pg_secrets(secrets)
+        sandbox_pg_dsns = {
+            secret.name: _build_proxied_pg_url(
+                firewall_host,
+                pg_listen_ports[secret.name],
+                proxy_password,
+                secret.database,
+            )
+            for secret, proxy_password in pg_secrets
+        }
+
         env = container_env(
             thread_key,
             pod_name,
+            firewall_host,
             resume_thread_id=resume_thread_id,
-            firewall_host=firewall_host,
+            pg_dsns=sandbox_pg_dsns,
         )
         overlay_image = _overlay_image()
         if overlay_image:
@@ -1088,9 +1187,10 @@ class KubernetesExecutorBackend(SandboxBackend):
         await self._delete_proxy_resources(pod_name)
         try:
             await self._create_prompt_secret(secret_name, persona)
-            await self._create_proxy_service(pod_name)
-            await self._create_proxy_network_policies(pod_name)
-            await self._create_proxy_pod(pod_name)
+            await self._create_proxy_configmap(pod_name, secrets, pg_listen_ports)
+            await self._create_proxy_service(pod_name, pg_listen_ports)
+            await self._create_proxy_network_policies(pod_name, pg_listen_ports)
+            await self._create_proxy_pod(pod_name, pg_secrets, pg_listen_ports)
             await self._wait_pod_ready(_proxy_pod_name(pod_name))
             await self._core_api().create_namespaced_pod(_namespace(), pod_spec)
             await self._wait_ready(pod_name)
@@ -1407,6 +1507,85 @@ class KubernetesExecutorBackend(SandboxBackend):
                 )
             )
         return sessions
+
+    async def _wait_deployment_ready(self, name: str) -> float:
+        deadline = time.monotonic() + _READY_TIMEOUT_S
+        while time.monotonic() < deadline:
+            dep = await self._apps_api().read_namespaced_deployment(name, _namespace())
+            spec_replicas = (dep.spec.replicas or 0) if dep.spec else 0
+            status = dep.status
+            ready = getattr(status, "ready_replicas", None) or 0
+            updated = getattr(status, "updated_replicas", None) or 0
+            if (
+                spec_replicas > 0
+                and ready >= spec_replicas
+                and updated >= spec_replicas
+            ):
+                return round(_READY_TIMEOUT_S - (deadline - time.monotonic()), 3)
+            await asyncio.sleep(0.5)
+        raise TimeoutError(
+            f"deployment readiness timed out after {_READY_TIMEOUT_S}s: {name}"
+        )
+
+    async def ensure_api_proxy_pod(self) -> None:
+        """Create or update the API server's iron-proxy Deployment.
+
+        Uses a Deployment (single replica, RollingUpdate with maxUnavailable=0)
+        so k8s reschedules the pod automatically on node failure or eviction.
+        The pod template carries a config-hash annotation; when this method
+        re-runs with a changed ConfigMap, the annotation changes and the
+        Deployment performs a zero-downtime rolling restart.
+        """
+        await self._ensure_clients()
+        secrets = self._collect_secrets()
+        pg_listen_ports = assign_pg_listen_ports(secrets)
+        pg_secrets = self._resolved_pg_secrets(secrets)
+        rendered = render_proxy_yaml(secrets, pg_listen_ports=pg_listen_ports)
+        config_hash = hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:16]
+
+        await self._apply_proxy_configmap_data(
+            _proxy_configmap_name(_API_PROXY_SANDBOX_ID), _API_PROXY_SANDBOX_ID, rendered
+        )
+        await self._create_proxy_service(_API_PROXY_SANDBOX_ID, pg_listen_ports)
+        await self._apply_api_proxy_deployment(
+            pg_secrets, pg_listen_ports, config_hash
+        )
+        await self._wait_deployment_ready(_proxy_pod_name(_API_PROXY_SANDBOX_ID))
+        log.info(
+            "api_proxy_deployment_ready",
+            deployment=_proxy_pod_name(_API_PROXY_SANDBOX_ID),
+            config_hash=config_hash,
+            pg_secrets=[s.name for s, _ in pg_secrets],
+        )
+
+    async def _apply_proxy_configmap_data(
+        self, name: str, sandbox_id: str, rendered: str
+    ) -> None:
+        """Create or patch the proxy ConfigMap with rendered YAML.
+
+        Used for the api-self proxy where deletes-and-recreate would clobber
+        a Deployment-managed ConfigMap mid-rollout.
+        """
+        body = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": name,
+                "labels": {
+                    _PROXY_LABEL: "true",
+                    "centaur.ai/sandbox-id": sandbox_id,
+                },
+            },
+            "data": {"proxy.yaml": rendered},
+        }
+        try:
+            await self._core_api().read_namespaced_config_map(name, _namespace())
+        except Exception as exc:
+            if not self._is_not_found(exc):
+                raise
+            await self._core_api().create_namespaced_config_map(_namespace(), body)
+            return
+        await self._core_api().replace_namespaced_config_map(name, _namespace(), body)
 
     async def rename_by_id(self, sandbox_id: str, new_name: str) -> None:
         raise NotImplementedError(

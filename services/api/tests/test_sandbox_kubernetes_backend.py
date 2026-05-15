@@ -22,9 +22,12 @@ class FakeCoreApi:
         self.deleted_secrets: list[tuple[str, str]] = []
         self.deleted_pods: list[tuple[str, str, int]] = []
         self.deleted_services: list[tuple[str, str]] = []
+        self.deleted_configmaps: list[tuple[str, str]] = []
         self.created_secrets: list[tuple[str, dict]] = []
         self.created_pods: list[tuple[str, dict]] = []
         self.created_services: list[tuple[str, dict]] = []
+        self.created_configmaps: list[tuple[str, dict]] = []
+        self.patched_configmaps: list[tuple[str, str, dict]] = []
         self.pods_to_read: list[SimpleNamespace] = []
         self.pod_list_items: list[SimpleNamespace] = []
 
@@ -50,6 +53,17 @@ class FakeCoreApi:
 
     async def create_namespaced_service(self, namespace: str, body: dict) -> None:
         self.created_services.append((namespace, body))
+
+    async def delete_namespaced_config_map(self, name: str, namespace: str) -> None:
+        self.deleted_configmaps.append((namespace, name))
+
+    async def create_namespaced_config_map(self, namespace: str, body: dict) -> None:
+        self.created_configmaps.append((namespace, body))
+
+    async def patch_namespaced_config_map(
+        self, name: str, namespace: str, body: dict
+    ) -> None:
+        self.patched_configmaps.append((namespace, name, body))
 
     async def read_namespaced_pod(self, name: str, namespace: str) -> SimpleNamespace:  # noqa: ARG002
         if self.pods_to_read:
@@ -158,15 +172,14 @@ def test_pod_resources_allows_explicitly_empty_memory_limit(
 def test_container_env_includes_firewall_host_for_secret_bootstrap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("AGENT_LOCAL_DEV", raising=False)
     monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
-    monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
 
-    env = sandbox_container_env("thread-key", "sandbox-id")
+    env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
     env_map = dict(item.split("=", 1) for item in env)
 
     assert "FIREWALL_HOST=firewall.internal" in env
-    assert "AMP_API_KEY=AMP_API_KEY" in env
+    # iron-proxy rewrites the placeholder mid-flight.
+    assert env_map["AMP_API_KEY"] == "AMP_API_KEY"
     assert env_map["NO_PROXY"] == "localhost,127.0.0.1,firewall.internal,api.internal"
     assert env_map["no_proxy"] == env_map["NO_PROXY"]
 
@@ -531,9 +544,10 @@ async def test_create_builds_per_sandbox_proxy_resources(
         "centaur.ai/iron-proxy": "true",
         "centaur.ai/sandbox-id": session.sandbox_id,
     }
+    # Iron-proxy is now the only container in the proxy pod (firewall-manager
+    # removed; the API server drives the ConfigMap directly).
     assert [container["name"] for container in proxy_pod["spec"]["containers"]] == [
         "iron-proxy",
-        "firewall-manager",
     ]
     assert proxy_pod["spec"]["containers"][0]["image"] == "centaur-iron-proxy:test"
     assert proxy_pod["spec"]["containers"][0]["readinessProbe"]["periodSeconds"] == 5
@@ -543,20 +557,13 @@ async def test_create_builds_per_sandbox_proxy_resources(
     assert proxy_pod["spec"]["containers"][0]["envFrom"] == [
         {"secretRef": {"name": "centaur-infra-env"}}
     ]
-    assert (
-        proxy_pod["spec"]["containers"][1]["image"] == "centaur-firewall-manager:test"
-    )
-    assert proxy_pod["spec"]["containers"][1]["envFrom"] == [
-        {"secretRef": {"name": "centaur-infra-env"}}
-    ]
-    assert (
-        proxy_pod["spec"]["containers"][1]["readinessProbe"]["httpGet"]["path"]
-        == "/health/ready"
-    )
-    assert proxy_pod["spec"]["containers"][1]["readinessProbe"]["periodSeconds"] == 5
-    assert (
-        proxy_pod["spec"]["containers"][1]["readinessProbe"]["failureThreshold"] == 30
-    )
+    # ConfigMap with the rendered proxy.yaml is created before the pod.
+    assert fake_core.created_configmaps, "proxy ConfigMap not created"
+    configmap = fake_core.created_configmaps[0][1]
+    assert "proxy.yaml" in configmap["data"]
+    # Pod mounts the ConfigMap as the rendered config source.
+    volume_names = {v["name"] for v in proxy_pod["spec"]["volumes"]}
+    assert "iron-proxy-config-rendered" in volume_names
     assert fake_networking.created_network_policies[0][1]["spec"]["podSelector"][
         "matchLabels"
     ] == {
@@ -585,14 +592,10 @@ async def test_per_sandbox_proxy_uses_bootstrap_secret_for_onepassword(
         return None
 
     monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
-    await backend._create_proxy_pod("sandbox-pod")
+    await backend._create_proxy_pod("sandbox-pod", [], {})
 
     proxy_pod = fake_core.created_pods[0][1]
     assert proxy_pod["spec"]["containers"][0]["envFrom"] == [
-        {"secretRef": {"name": "centaur-infra-env"}},
-        {"secretRef": {"name": "centaur-bootstrap"}},
-    ]
-    assert proxy_pod["spec"]["containers"][1]["envFrom"] == [
         {"secretRef": {"name": "centaur-infra-env"}},
         {"secretRef": {"name": "centaur-bootstrap"}},
     ]

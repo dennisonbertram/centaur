@@ -21,10 +21,6 @@ _HARNESS_STUB_KEYS = (
 )
 
 
-def agent_local_dev_enabled() -> bool:
-    return os.getenv("AGENT_LOCAL_DEV", "").lower() in ("1", "true")
-
-
 def amp_mode() -> str:
     return (os.getenv("AMP_MODE") or "deep").strip() or "deep"
 
@@ -57,13 +53,18 @@ def build_harness_cmd(engine: str, model: str | None = None) -> list[str]:
 def container_env(
     thread_key: str,
     container_name: str,
+    firewall_host: str,
     *,
     resume_thread_id: str | None = None,
-    firewall_host: str | None = None,
+    pg_dsns: dict[str, str] | None = None,
 ) -> list[str]:
-    """Build env vars for sandbox pods."""
-    local_dev = agent_local_dev_enabled()
+    """Build env vars for sandbox pods.
 
+    ``firewall_host`` is the in-cluster service name of the per-sandbox
+    iron-proxy. ``pg_dsns`` maps each ``pg_dsn`` secret name to the local
+    DSN the sandbox should see (constructed by the backend to point at
+    iron-proxy).
+    """
     api_key = mint_sandbox_token(thread_key, container_name)
     api_url = os.getenv("AGENT_API_URL", "http://api:8000")
 
@@ -79,37 +80,35 @@ def container_env(
     if resume_thread_id:
         env.append(f"AMP_CONTINUE_THREAD_ID={resume_thread_id}")
 
-    if local_dev:
-        for key in _HARNESS_STUB_KEYS:
-            real = os.getenv(key, "").strip()
-            if real:
-                env.append(f"{key}={real}")
-    else:
-        resolved_firewall_host = firewall_host or os.getenv(
-            "FIREWALL_HOST", "iron-proxy"
-        )
-        no_proxy_hosts = ["localhost", "127.0.0.1", resolved_firewall_host]
-        api_host = urlsplit(api_url).hostname
-        if api_host:
-            no_proxy_hosts.append(api_host)
-        no_proxy = ",".join(dict.fromkeys(no_proxy_hosts))
-        for key in _HARNESS_STUB_KEYS:
-            env.append(f"{key}={key}")
-        env.extend(
-            [
-                f"FIREWALL_HOST={resolved_firewall_host}",
-                f"HTTPS_PROXY=http://{resolved_firewall_host}:8080",
-                f"HTTP_PROXY=http://{resolved_firewall_host}:8080",
-                f"https_proxy=http://{resolved_firewall_host}:8080",
-                f"http_proxy=http://{resolved_firewall_host}:8080",
-                f"NO_PROXY={no_proxy}",
-                f"no_proxy={no_proxy}",
-                "NODE_EXTRA_CA_CERTS=/firewall-certs/ca-cert.pem",
-                "REQUESTS_CA_BUNDLE=/firewall-certs/ca-cert.pem",
-                "SSL_CERT_FILE=/firewall-certs/ca-cert.pem",
-                "GIT_SSL_CAINFO=/firewall-certs/ca-cert.pem",
-            ]
-        )
+    no_proxy_hosts = ["localhost", "127.0.0.1", firewall_host]
+    api_host = urlsplit(api_url).hostname
+    if api_host:
+        no_proxy_hosts.append(api_host)
+    no_proxy = ",".join(dict.fromkeys(no_proxy_hosts))
+    # Placeholder values for harness infra secrets. iron-proxy MITMs the
+    # outbound TLS connection and rewrites these strings in auth headers
+    # before they reach the real upstream.
+    for key in _HARNESS_STUB_KEYS:
+        env.append(f"{key}={key}")
+    env.extend(
+        [
+            f"FIREWALL_HOST={firewall_host}",
+            f"HTTPS_PROXY=http://{firewall_host}:8080",
+            f"HTTP_PROXY=http://{firewall_host}:8080",
+            f"https_proxy=http://{firewall_host}:8080",
+            f"http_proxy=http://{firewall_host}:8080",
+            f"NO_PROXY={no_proxy}",
+            f"no_proxy={no_proxy}",
+            "NODE_EXTRA_CA_CERTS=/firewall-certs/ca-cert.pem",
+            "REQUESTS_CA_BUNDLE=/firewall-certs/ca-cert.pem",
+            "SSL_CERT_FILE=/firewall-certs/ca-cert.pem",
+            "GIT_SSL_CAINFO=/firewall-certs/ca-cert.pem",
+        ]
+    )
+
+    if pg_dsns:
+        for name, dsn in pg_dsns.items():
+            env.append(f"{name}={dsn}")
 
     return env
 

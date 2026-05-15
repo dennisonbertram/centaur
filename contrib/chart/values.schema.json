@@ -35,19 +35,8 @@
             "healthPort": { "type": "integer" }
           }
         },
-        "manager": {
-          "type": "object",
-          "properties": {
-            "service": {
-              "type": "object",
-              "properties": {
-                "controlPort": { "type": "integer" }
-              }
-            },
-            "secretSource": { "type": "string" },
-            "secretTtl": { "type": "string" }
-          }
-        }
+        "secretSource": { "type": "string" },
+        "secretTtl": { "type": "string" }
       }
     },
     "secrets": {
@@ -93,15 +82,6 @@
     "sandbox": {
       "type": "object",
       "properties": {
-        "perWorkloadProxy": {
-          "type": "object",
-          "properties": {
-            "pollIntervalSeconds": { "type": "integer" },
-            "pollJitterSeconds": { "type": "integer" },
-            "startupBackoffInitialSeconds": { "type": "number" },
-            "startupBackoffMaxSeconds": { "type": "number" }
-          }
-        },
         "runtimeClassName": { "type": "string" },
         "reposPath": { "type": "string" },
         "resources": { "type": "object" }

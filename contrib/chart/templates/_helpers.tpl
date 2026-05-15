@@ -85,20 +85,8 @@ app.kubernetes.io/component: {{ .component }}
 {{- toJson $payload | sha256sum -}}
 {{- end -}}
 
-{{- define "centaur.firewallControlHost" -}}
-{{- include "centaur.componentName" (dict "root" . "component" "firewall-manager") -}}
-{{- end -}}
-
-{{- define "centaur.firewallControlPort" -}}
-{{- .Values.ironProxy.manager.service.controlPort -}}
-{{- end -}}
-
-{{- define "centaur.firewallControlUrl" -}}
-{{- printf "http://%s:%v" (include "centaur.firewallControlHost" .) (include "centaur.firewallControlPort" .) -}}
-{{- end -}}
-
 {{- define "centaur.firewallProxyHost" -}}
-{{- include "centaur.componentName" (dict "root" . "component" "iron-proxy") -}}
+centaur-api-proxy
 {{- end -}}
 
 {{- define "centaur.firewallProxyPort" -}}
@@ -110,7 +98,7 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
 {{- define "centaur.firewallNoProxyHosts" -}}
-{{- printf "%s,%s" (include "centaur.firewallProxyHost" .) (include "centaur.firewallControlHost" .) -}}
+{{- include "centaur.firewallProxyHost" . -}}
 {{- end -}}
 
 {{- define "centaur.laminarNoProxyHosts" -}}

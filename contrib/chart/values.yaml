@@ -24,23 +24,15 @@ ironProxy:
     proxyPort: 8080
     managementPort: 9092
     healthPort: 9090
-  manager:
-    image:
-      repository: centaur-firewall-manager
-      tag: latest
-      pullPolicy: IfNotPresent
-    service:
-      controlPort: 8081
-    secretSource: onepassword
-    secretTtl: 10m
-  extraEnv: {}
+  secretSource: onepassword
+  secretTtl: 10m
 
 # Values for the upstream 1Password Connect subchart
 # (https://github.com/1Password/connect-helm-charts/tree/main/charts/connect).
 # Deployment is gated on onepasswordConnect.connect.create AND on
-# ironProxy.manager.secretSource == "onepassword-connect"; just up sets
-# both when OP_CONNECT_CREDENTIALS_FILE is present. The credentials Secret
-# itself is created externally by contrib/scripts/bootstrap-k8s-secrets.sh.
+# ironProxy.secretSource == "onepassword-connect"; just up sets both when
+# OP_CONNECT_CREDENTIALS_FILE is present. The credentials Secret itself is
+# created externally by contrib/scripts/bootstrap-k8s-secrets.sh.
 onepasswordConnect:
   connect:
     create: false
@@ -103,11 +95,6 @@ sandbox:
     repository: centaur-agent
     tag: latest
     pullPolicy: IfNotPresent
-  perWorkloadProxy:
-    pollIntervalSeconds: 30
-    pollJitterSeconds: 10
-    startupBackoffInitialSeconds: 0.5
-    startupBackoffMaxSeconds: 5
   runtimeClassName: ""
   reposPath: ""
   extraEnv: {}

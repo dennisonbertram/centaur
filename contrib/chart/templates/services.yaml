@@ -17,34 +17,6 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "centaur.componentName" (dict "root" . "component" "iron-proxy") }}
-  labels:
-{{ include "centaur.componentLabels" (dict "root" . "component" "iron-proxy") | nindent 4 }}
-spec:
-  selector:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 4 }}
-  ports:
-    - name: proxy
-      port: {{ .Values.ironProxy.service.proxyPort }}
-      targetPort: {{ .Values.ironProxy.service.proxyPort }}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "centaur.componentName" (dict "root" . "component" "firewall-manager") }}
-  labels:
-{{ include "centaur.componentLabels" (dict "root" . "component" "firewall-manager") | nindent 4 }}
-spec:
-  selector:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 4 }}
-  ports:
-    - name: control
-      port: {{ .Values.ironProxy.manager.service.controlPort }}
-      targetPort: {{ .Values.ironProxy.manager.service.controlPort }}
----
-apiVersion: v1
-kind: Service
-metadata:
   name: {{ include "centaur.componentName" (dict "root" . "component" "api") }}
   labels:
 {{ include "centaur.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
@@ -105,7 +77,8 @@ spec:
 {{ toYaml . | nindent 4 }}
   {{- end }}
   selector:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 4 }}
+    centaur.ai/iron-proxy: "true"
+    centaur.ai/sandbox-id: api
   ports:
     - name: proxy
       port: {{ .Values.ironProxy.service.proxyPort }}

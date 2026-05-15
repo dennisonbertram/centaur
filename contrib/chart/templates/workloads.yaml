@@ -103,152 +103,6 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "centaur.componentName" (dict "root" . "component" "iron-proxy") }}
-  labels:
-{{ include "centaur.componentLabels" (dict "root" . "component" "iron-proxy") | nindent 4 }}
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 6 }}
-  template:
-    metadata:
-      annotations:
-        checksum/secret-env: {{ toJson (dict "secretManager" .Values.secretManager "ironProxy" .Values.ironProxy) | sha256sum }}
-        checksum/infra-secrets: {{ include "centaur.infraSecretsChecksum" . }}
-      labels:
-{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 8 }}
-        centaur.ai/iron-proxy: "true"
-    spec:
-      automountServiceAccountToken: false
-      {{- with .Values.global.imagePullSecrets }}
-      imagePullSecrets:
-{{ toYaml . | nindent 8 }}
-      {{- end }}
-      containers:
-        - name: iron-proxy
-          image: {{ printf "%s:%s" .Values.ironProxy.image.repository .Values.ironProxy.image.tag | quote }}
-          imagePullPolicy: {{ .Values.ironProxy.image.pullPolicy }}
-          env:
-            - name: IRON_MANAGEMENT_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "centaur.secretEnvName" . }}
-                  key: {{ printf "%sIRON_MANAGEMENT_API_KEY" .Values.secretManager.envPrefix }}
-{{- if eq .Values.ironProxy.manager.secretSource "onepassword-connect" }}
-            - name: OP_CONNECT_HOST
-              value: {{ include "centaur.onepasswordConnectUrl" . | quote }}
-            - name: OP_CONNECT_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "centaur.secretEnvName" . }}
-                  key: {{ printf "%sOP_CONNECT_TOKEN" .Values.secretManager.envPrefix }}
-{{- end }}
-{{- range $name, $value := .Values.ironProxy.extraEnv }}
-            - name: {{ $name }}
-              value: {{ $value | quote }}
-{{- end }}
-          envFrom:
-            - secretRef:
-                name: {{ include "centaur.secretEnvName" . }}
-{{- if and (eq .Values.ironProxy.manager.secretSource "onepassword") .Values.secrets.bootstrapSecretName }}
-            - secretRef:
-                name: {{ .Values.secrets.bootstrapSecretName | quote }}
-{{- end }}
-          ports:
-            - containerPort: {{ .Values.ironProxy.service.proxyPort }}
-              name: proxy
-            - containerPort: {{ .Values.ironProxy.service.managementPort }}
-              name: management
-            - containerPort: {{ .Values.ironProxy.service.healthPort }}
-              name: health
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: {{ .Values.ironProxy.service.healthPort }}
-            periodSeconds: 5
-            failureThreshold: 30
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: {{ .Values.ironProxy.service.healthPort }}
-          securityContext:
-{{ toYaml .Values.containerSecurityContext | nindent 12 }}
-          volumeMounts:
-            - name: iron-proxy-config
-              mountPath: /etc/iron-proxy
-            - name: iron-proxy-certs
-              mountPath: /certs
-            - name: iron-proxy-ca
-              mountPath: /etc/iron-proxy-ca
-              readOnly: true
-        - name: firewall-manager
-          image: {{ printf "%s:%s" .Values.ironProxy.manager.image.repository .Values.ironProxy.manager.image.tag | quote }}
-          imagePullPolicy: {{ .Values.ironProxy.manager.image.pullPolicy }}
-          env:
-            - name: FIREWALL_CONTROL_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "centaur.secretEnvName" . }}
-                  key: {{ printf "%sFIREWALL_CONTROL_TOKEN" .Values.secretManager.envPrefix }}
-            - name: IRON_MANAGEMENT_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "centaur.secretEnvName" . }}
-                  key: {{ printf "%sIRON_MANAGEMENT_API_KEY" .Values.secretManager.envPrefix }}
-            - name: IRON_PROXY_CONFIG_PATH
-              value: /etc/iron-proxy/proxy.yaml
-            - name: IRON_PROXY_MANAGEMENT_URL
-              value: {{ printf "http://127.0.0.1:%v" .Values.ironProxy.service.managementPort | quote }}
-            - name: FIREWALL_MANAGER_PORT
-              value: {{ .Values.ironProxy.manager.service.controlPort | quote }}
-            - name: FIREWALL_MANAGER_INJECTION_MAP_URL
-              value: {{ printf "http://%s:8000/internal/injection-map" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
-            - name: FIREWALL_MANAGER_POLL_INTERVAL_SECONDS
-              value: {{ .Values.sandbox.perWorkloadProxy.pollIntervalSeconds | quote }}
-            - name: FIREWALL_MANAGER_POLL_JITTER_SECONDS
-              value: {{ .Values.sandbox.perWorkloadProxy.pollJitterSeconds | quote }}
-            - name: FIREWALL_MANAGER_STARTUP_BACKOFF_INITIAL_SECONDS
-              value: {{ .Values.sandbox.perWorkloadProxy.startupBackoffInitialSeconds | quote }}
-            - name: FIREWALL_MANAGER_STARTUP_BACKOFF_MAX_SECONDS
-              value: {{ .Values.sandbox.perWorkloadProxy.startupBackoffMaxSeconds | quote }}
-            - name: FIREWALL_MANAGER_SECRET_SOURCE
-              value: {{ .Values.ironProxy.manager.secretSource | quote }}
-            - name: FIREWALL_MANAGER_SECRET_TTL
-              value: {{ .Values.ironProxy.manager.secretTtl | quote }}
-          envFrom:
-            - secretRef:
-                name: {{ include "centaur.secretEnvName" . }}
-          ports:
-            - containerPort: {{ .Values.ironProxy.manager.service.controlPort }}
-              name: control
-          readinessProbe:
-            httpGet:
-              path: /health/ready
-              port: {{ .Values.ironProxy.manager.service.controlPort }}
-            periodSeconds: 5
-            failureThreshold: 30
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: {{ .Values.ironProxy.manager.service.controlPort }}
-          securityContext:
-{{ toYaml .Values.containerSecurityContext | nindent 12 }}
-          volumeMounts:
-            - name: iron-proxy-config
-              mountPath: /etc/iron-proxy
-      volumes:
-        - name: iron-proxy-config
-          emptyDir: {}
-        - name: iron-proxy-certs
-          emptyDir: {}
-        - name: iron-proxy-ca
-          secret:
-            secretName: {{ include "centaur.trustedCaKeySecretName" . }}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
   name: {{ include "centaur.componentName" (dict "root" . "component" "api") }}
   labels:
 {{ include "centaur.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
@@ -318,11 +172,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "centaur.secretEnvName" . }}
                   key: {{ printf "%sSANDBOX_SIGNING_KEY" .Values.secretManager.envPrefix }}
-            - name: FIREWALL_CONTROL_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "centaur.secretEnvName" . }}
-                  key: {{ printf "%sFIREWALL_CONTROL_TOKEN" .Values.secretManager.envPrefix }}
             - name: LMNR_PROJECT_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -343,8 +192,6 @@ spec:
               value: {{ .Values.laminar.appServer.service.httpPort | quote }}
             - name: LMNR_GRPC_PORT
               value: {{ .Values.laminar.appServer.service.grpcPort | quote }}
-            - name: FIREWALL_HEALTH_URL
-              value: {{ include "centaur.firewallControlUrl" . | quote }}
             - name: HTTPS_PROXY
               value: {{ include "centaur.firewallProxyUrl" . | quote }}
             - name: REQUESTS_CA_BUNDLE
@@ -453,36 +300,22 @@ spec:
               value: {{ printf "%s:%s" .Values.ironProxy.image.repository .Values.ironProxy.image.tag | quote }}
             - name: KUBERNETES_IRON_PROXY_IMAGE_PULL_POLICY
               value: {{ .Values.ironProxy.image.pullPolicy | quote }}
-            - name: KUBERNETES_FIREWALL_MANAGER_IMAGE
-              value: {{ printf "%s:%s" .Values.ironProxy.manager.image.repository .Values.ironProxy.manager.image.tag | quote }}
-            - name: KUBERNETES_FIREWALL_MANAGER_IMAGE_PULL_POLICY
-              value: {{ .Values.ironProxy.manager.image.pullPolicy | quote }}
             - name: KUBERNETES_IRON_PROXY_PORT
               value: {{ .Values.ironProxy.service.proxyPort | quote }}
             - name: KUBERNETES_IRON_PROXY_MANAGEMENT_PORT
               value: {{ .Values.ironProxy.service.managementPort | quote }}
             - name: KUBERNETES_IRON_PROXY_HEALTH_PORT
               value: {{ .Values.ironProxy.service.healthPort | quote }}
-            - name: KUBERNETES_FIREWALL_MANAGER_PORT
-              value: {{ .Values.ironProxy.manager.service.controlPort | quote }}
-            - name: KUBERNETES_FIREWALL_MANAGER_POLL_INTERVAL_SECONDS
-              value: {{ .Values.sandbox.perWorkloadProxy.pollIntervalSeconds | quote }}
-            - name: KUBERNETES_FIREWALL_MANAGER_POLL_JITTER_SECONDS
-              value: {{ .Values.sandbox.perWorkloadProxy.pollJitterSeconds | quote }}
-            - name: KUBERNETES_FIREWALL_MANAGER_STARTUP_BACKOFF_INITIAL_SECONDS
-              value: {{ .Values.sandbox.perWorkloadProxy.startupBackoffInitialSeconds | quote }}
-            - name: KUBERNETES_FIREWALL_MANAGER_STARTUP_BACKOFF_MAX_SECONDS
-              value: {{ .Values.sandbox.perWorkloadProxy.startupBackoffMaxSeconds | quote }}
-            - name: KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE
-              value: {{ .Values.ironProxy.manager.secretSource | quote }}
-            - name: KUBERNETES_FIREWALL_MANAGER_SECRET_TTL
-              value: {{ .Values.ironProxy.manager.secretTtl | quote }}
-{{- if eq .Values.ironProxy.manager.secretSource "onepassword-connect" }}
+            - name: FIREWALL_MANAGER_SECRET_SOURCE
+              value: {{ .Values.ironProxy.secretSource | quote }}
+            - name: FIREWALL_MANAGER_SECRET_TTL
+              value: {{ .Values.ironProxy.secretTtl | quote }}
+{{- if eq .Values.ironProxy.secretSource "onepassword-connect" }}
             - name: KUBERNETES_OP_CONNECT_HOST
               value: {{ include "centaur.onepasswordConnectUrl" . | quote }}
 {{- end }}
-            - name: KUBERNETES_FIREWALL_MANAGER_INJECTION_MAP_URL
-              value: {{ printf "http://%s:8000/internal/injection-map" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
+            - name: KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE
+              value: {{ .Values.ironProxy.secretSource | quote }}
             - name: KUBERNETES_API_POD_LABEL_SELECTOR
               value: {{ printf "app.kubernetes.io/name=%s,app.kubernetes.io/instance=%s,app.kubernetes.io/component=api" (include "centaur.name" .) .Release.Name | quote }}
 {{- with .Values.sandbox.resources.limits }}
@@ -534,6 +367,13 @@ spec:
 {{- range $name, $value := .Values.api.extraEnv }}
             - name: {{ $name }}
               value: {{ $value | quote }}
+{{- end }}
+          envFrom:
+            - secretRef:
+                name: {{ include "centaur.secretEnvName" . }}
+{{- if and (eq .Values.ironProxy.secretSource "onepassword") .Values.secrets.bootstrapSecretName }}
+            - secretRef:
+                name: {{ .Values.secrets.bootstrapSecretName | quote }}
 {{- end }}
           ports:
             - containerPort: 8000

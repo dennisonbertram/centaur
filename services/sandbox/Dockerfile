@@ -12,6 +12,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libssl-dev libclang-dev protobuf-compiler \
     libcairo2-dev libpango1.0-dev \
     ripgrep fd-find jq tree tmux unzip xz-utils gettext-base \
+    postgresql-client libpq-dev \
     python3 python3-pip python3-venv python3-dev \
     texlive texlive-latex-base texlive-latex-extra \
     texlive-latex-recommended texlive-fonts-recommended \

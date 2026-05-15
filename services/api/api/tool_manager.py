@@ -35,15 +35,106 @@ from centaur_sdk import ToolContext, reset_tool_context, set_tool_context
 
 log = structlog.get_logger()
 
-async def _resolve_secrets(keys: list[str]) -> dict[str, str]:
-    """Return placeholder values for declared secret keys.
 
-    Real values are substituted at the network boundary by iron-proxy via the
-    injection map. Tools see the key name as a stub; outbound requests carry it
-    in auth headers and iron-proxy MITMs the connection to swap in the real
-    credential.
+@dataclass(frozen=True)
+class HeaderSecret:
+    """Header-based HTTP credential injected by iron-proxy's ``secrets`` transform.
+
+    The tool sees ``replacer`` (a placeholder token) inside the sandbox; iron-proxy
+    swaps it for the real value resolved from ``secret_ref`` (env var or 1Password
+    item) when scanning outbound request headers.
     """
-    return {k: k for k in keys}
+
+    name: str
+    secret_ref: str
+    replacer: str
+
+
+@dataclass(frozen=True)
+class GcpAuthSecret:
+    """GCP service-account keyfile fed to iron-proxy's ``gcp_auth`` transform.
+
+    iron-proxy loads the keyfile from ``secret_ref``, mints OAuth2 tokens, and
+    injects them as ``Authorization: Bearer`` on ``*.googleapis.com``.
+    """
+
+    name: str
+    secret_ref: str
+
+
+@dataclass(frozen=True)
+class PgDsnSecret:
+    """Postgres DSN proxied by iron-proxy's ``postgres`` transform.
+
+    The sandbox sees a local DSN pointing at iron-proxy on a per-secret listen
+    port; iron-proxy fronts the real upstream resolved from ``secret_ref``.
+
+    ``database`` is the dbname the sandbox connects to. iron-proxy forwards
+    the client's startup-packet database to the upstream, so this must match
+    the dbname in the upstream DSN for the connection to land on the right
+    database without an explicit ``\\c`` after connecting.
+    """
+
+    name: str
+    secret_ref: str
+    database: str
+
+
+SecretDef = HeaderSecret | GcpAuthSecret | PgDsnSecret
+
+
+def _parse_secret(entry: Any) -> SecretDef:
+    """Normalize a single secret entry from pyproject.toml into a SecretDef.
+
+    Raw strings are accepted for back-compat: ``"FOO"`` becomes
+    ``HeaderSecret(name="FOO", secret_ref="FOO", replacer="FOO")``.
+    """
+    if isinstance(entry, str):
+        return HeaderSecret(name=entry, secret_ref=entry, replacer=entry)
+    if not isinstance(entry, dict):
+        raise ValueError(f"secret entry must be a string or table, got {type(entry).__name__}")
+    name = entry.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"secret entry missing 'name': {entry!r}")
+    secret_type = entry.get("type", "header")
+    secret_ref = entry.get("secret_ref", name)
+    if not isinstance(secret_ref, str) or not secret_ref:
+        raise ValueError(f"secret entry has invalid 'secret_ref': {entry!r}")
+    if secret_type == "header":
+        replacer = entry.get("replacer", name)
+        if not isinstance(replacer, str) or not replacer:
+            raise ValueError(f"secret entry has invalid 'replacer': {entry!r}")
+        return HeaderSecret(name=name, secret_ref=secret_ref, replacer=replacer)
+    if secret_type == "gcp_auth":
+        return GcpAuthSecret(name=name, secret_ref=secret_ref)
+    if secret_type == "pg_dsn":
+        database = entry.get("database")
+        if not isinstance(database, str) or not database:
+            raise ValueError(
+                f"pg_dsn entry {name!r} requires a non-empty 'database' field"
+            )
+        return PgDsnSecret(name=name, secret_ref=secret_ref, database=database)
+    raise ValueError(f"unknown secret type {secret_type!r}")
+
+
+def _parse_secrets(entries: Any) -> list[SecretDef]:
+    if entries is None:
+        return []
+    if not isinstance(entries, list):
+        raise ValueError("'secrets'/'optional_secrets' must be an array")
+    return [_parse_secret(e) for e in entries]
+
+
+async def _resolve_secrets(secrets: list[SecretDef]) -> dict[str, str]:
+    """Return placeholder values for header secrets.
+
+    Only ``HeaderSecret`` entries end up in the tool's ``ToolContext`` — the
+    tool gets back the ``replacer`` token, which iron-proxy swaps for the
+    real credential at the network boundary. ``GcpAuthSecret`` and
+    ``PgDsnSecret`` are not exposed via context; they reach the tool through
+    environment variables set on the sandbox by the kubernetes backend.
+    """
+    return {s.name: s.replacer for s in secrets if isinstance(s, HeaderSecret)}
 
 
 _MAX_INLINE_TOOL_BINARY_BYTES = max(
@@ -314,16 +405,25 @@ class LoadedTool:
         ctx: ToolContext,
         methods: list[ToolMethod],
         hosts: list[str] | None = None,
-        secrets_keys: list[str] | None = None,
-        optional_secrets_keys: list[str] | None = None,
+        secrets: list[SecretDef] | None = None,
+        optional_secrets: list[SecretDef] | None = None,
     ):
         self.name = name
         self.description = description
         self.ctx = ctx
         self.methods = methods
         self.hosts: list[str] = hosts or []
-        self.secrets_keys: list[str] = secrets_keys or []
-        self.optional_secrets_keys: list[str] = optional_secrets_keys or []
+        self.secrets: list[SecretDef] = secrets or []
+        self.optional_secrets: list[SecretDef] = optional_secrets or []
+
+    @property
+    def all_secrets(self) -> list[SecretDef]:
+        return self.secrets + self.optional_secrets
+
+    @property
+    def secret_names(self) -> list[str]:
+        """Names of all declared secrets (required + optional), in declaration order."""
+        return [s.name for s in self.all_secrets]
 
 
 @dataclass
@@ -414,8 +514,16 @@ class ToolManager:
 
                 name = tool_dir.name
                 hosts = tool_conf.get("hosts", [])
-                secrets_keys = tool_conf.get("secrets", [])
-                optional_secrets_keys = tool_conf.get("optional_secrets", [])
+                try:
+                    secrets = _parse_secrets(tool_conf.get("secrets"))
+                    optional_secrets = _parse_secrets(tool_conf.get("optional_secrets"))
+                except ValueError as exc:
+                    log.warning(
+                        "tool_invalid_secrets",
+                        tool=name,
+                        error=str(exc),
+                    )
+                    continue
 
                 # Validate host patterns
                 for h in hosts:
@@ -443,8 +551,8 @@ class ToolManager:
                     "description": project.get("description", ""),
                     "module": tool_conf.get("module", "client.py"),
                     "hosts": hosts,
-                    "secrets_keys": secrets_keys,
-                    "optional_secrets_keys": optional_secrets_keys,
+                    "secrets": secrets,
+                    "optional_secrets": optional_secrets,
                 }
 
                 if name in seen:
@@ -569,35 +677,33 @@ class ToolManager:
         )
         return loaded
 
-    # Hardcoded infrastructure entries for the injection map.
-    _INFRA_INJECTION_MAP: ClassVar[dict[str, list[str]]] = {
-        "api.anthropic.com": ["ANTHROPIC_API_KEY"],
-        "api.openai.com": ["OPENAI_API_KEY"],
-        "api.x.ai": ["XAI_API_KEY"],
-        "generativelanguage.googleapis.com": ["GEMINI_API_KEY"],
-        "ampcode.com": ["AMP_API_KEY"],
-        "github.com": ["GITHUB_TOKEN"],
-        "api.github.com": ["GITHUB_TOKEN"],
-        "*.slack.com": ["SLACK_BOT_TOKEN"],
-    }
+    # Hardcoded infrastructure entries for the injection map. Each entry is a
+    # ``HeaderSecret`` paired with the hosts iron-proxy attaches it to.
+    _INFRA_SECRETS: ClassVar[list[tuple[HeaderSecret, tuple[str, ...]]]] = [
+        (HeaderSecret("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"), ("api.anthropic.com",)),
+        (HeaderSecret("OPENAI_API_KEY", "OPENAI_API_KEY", "OPENAI_API_KEY"), ("api.openai.com",)),
+        (HeaderSecret("XAI_API_KEY", "XAI_API_KEY", "XAI_API_KEY"), ("api.x.ai",)),
+        (HeaderSecret("GEMINI_API_KEY", "GEMINI_API_KEY", "GEMINI_API_KEY"), ("generativelanguage.googleapis.com",)),
+        (HeaderSecret("AMP_API_KEY", "AMP_API_KEY", "AMP_API_KEY"), ("ampcode.com",)),
+        (HeaderSecret("GITHUB_TOKEN", "GITHUB_TOKEN", "GITHUB_TOKEN"), ("github.com", "api.github.com")),
+        (HeaderSecret("SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN"), ("*.slack.com",)),
+    ]
 
-    def build_injection_map(self) -> dict[str, list[str]]:
-        """Build host→allowed_keys injection map from tool manifests + infra entries."""
-        result: dict[str, set[str]] = {}
+    def collect_secrets(self) -> list[tuple[SecretDef, tuple[str, ...]]]:
+        """Return all secrets (infra + tool) paired with the hosts they apply to.
 
-        # 1. Hardcoded infra entries
-        for host, keys in self._INFRA_INJECTION_MAP.items():
-            result.setdefault(host, set()).update(keys)
-
-        # 2. Dynamic tool entries
+        Hosts apply to ``HeaderSecret`` only — ``GcpAuthSecret`` and
+        ``PgDsnSecret`` ignore the host list (gcp_auth is fixed to
+        ``*.googleapis.com``; pg_dsn is a TCP listener, no host).
+        """
+        out: list[tuple[SecretDef, tuple[str, ...]]] = [
+            (s, hosts) for s, hosts in self._INFRA_SECRETS
+        ]
         for lt in self.tools.values():
-            all_keys = lt.secrets_keys + lt.optional_secrets_keys
-            if not lt.hosts or not all_keys:
-                continue
-            for host in lt.hosts:
-                result.setdefault(host, set()).update(all_keys)
-
-        return {host: sorted(keys) for host, keys in sorted(result.items())}
+            hosts = tuple(lt.hosts)
+            for s in lt.all_secrets:
+                out.append((s, hosts))
+        return out
 
     def reload(self) -> dict[str, Any]:
         """Reload all tools by clearing module caches and re-discovering."""
@@ -675,8 +781,8 @@ class ToolManager:
             ctx=ctx,
             methods=methods,
             hosts=manifest.get("hosts", []),
-            secrets_keys=manifest.get("secrets_keys", []),
-            optional_secrets_keys=manifest.get("optional_secrets_keys", []),
+            secrets=manifest.get("secrets", []),
+            optional_secrets=manifest.get("optional_secrets", []),
         )
         log.info(
             "tool_loaded",
@@ -816,9 +922,9 @@ class ToolManager:
             return validation_error
 
         ctx = lt.ctx
-        all_secret_keys = lt.secrets_keys + lt.optional_secrets_keys
-        if all_secret_keys:
-            resolved = await _resolve_secrets(all_secret_keys)
+        all_secrets = lt.all_secrets
+        if all_secrets:
+            resolved = await _resolve_secrets(all_secrets)
             if resolved:
                 ctx = ToolContext(
                     name=lt.name,
@@ -968,13 +1074,13 @@ class ToolManager:
 
         # Resolve real secrets for tools that declare them
         ctx = lt.ctx
-        if lt.secrets_keys:
-            resolved = await _resolve_secrets(lt.secrets_keys)
+        if lt.secrets:
+            resolved = await _resolve_secrets(lt.secrets)
             log.info(
                 "tool_secrets_resolved",
                 tool=tool_name,
                 keys=list(resolved.keys()),
-                declared=lt.secrets_keys,
+                declared=[s.name for s in lt.secrets],
             )
             if resolved:
                 ctx = ToolContext(
@@ -1108,9 +1214,10 @@ class ToolManager:
             for name, p in pm.tools.items():
                 if not check_scope(key_info, "tools", name):
                     continue
-                if p.secrets_keys:
-                    resolved = await _resolve_secrets(p.secrets_keys)
-                    if len(resolved) < len(p.secrets_keys):
+                required_headers = [s for s in p.secrets if isinstance(s, HeaderSecret)]
+                if required_headers:
+                    resolved = await _resolve_secrets(required_headers)
+                    if len(resolved) < len(required_headers):
                         continue
                 result[name] = {
                     "description": p.description,
@@ -1164,13 +1271,15 @@ class ToolManager:
         async def describe_tool(tool_name: str, request: Request) -> dict:
             _require_tool_scope(request, tool_name)
             p = pm.tools.get(tool_name)
-            if p and p.secrets_keys:
-                resolved = await _resolve_secrets(p.secrets_keys)
-                if len(resolved) < len(p.secrets_keys):
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"Tool '{tool_name}' is not available (missing secrets)",
-                    )
+            if p:
+                required_headers = [s for s in p.secrets if isinstance(s, HeaderSecret)]
+                if required_headers:
+                    resolved = await _resolve_secrets(required_headers)
+                    if len(resolved) < len(required_headers):
+                        raise HTTPException(
+                            status_code=404,
+                            detail=f"Tool '{tool_name}' is not available (missing secrets)",
+                        )
             return pm.describe_tool(tool_name)
 
         @router.post("/{tool_name}/{method_name}")

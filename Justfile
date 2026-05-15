@@ -15,7 +15,7 @@ build:
       just _build-all-sequential
     else
       pids=()
-      for recipe in _build-api _build-iron-proxy _build-firewall-manager _build-slackbot _build-agent; do
+      for recipe in _build-api _build-iron-proxy _build-slackbot _build-agent; do
         just "$recipe" &
         pids+=("$!")
       done
@@ -29,7 +29,6 @@ build:
 _build-all-sequential:
     just _build-api
     just _build-iron-proxy
-    just _build-firewall-manager
     just _build-slackbot
     just _build-agent
 
@@ -39,7 +38,6 @@ build-one service:
     case "{{service}}" in
       api) just _build-api ;;
       iron-proxy) just _build-iron-proxy ;;
-      firewall-manager) just _build-firewall-manager ;;
       slackbot) just _build-slackbot ;;
       agent|sandbox) just _build-agent ;;
       *) echo "unknown service: {{service}}" >&2; exit 2 ;;
@@ -50,9 +48,6 @@ _build-api:
 
 _build-iron-proxy:
     docker build -t centaur-iron-proxy:latest -f services/iron-proxy/Dockerfile .
-
-_build-firewall-manager:
-    docker build -t centaur-firewall-manager:latest -f services/firewall-manager/Dockerfile .
 
 _build-slackbot:
     docker build -t centaur-slackbot:latest -f services/slackbot/Dockerfile .
@@ -70,7 +65,7 @@ deploy:
     extra_args=()
     if [[ -n "${OP_CONNECT_CREDENTIALS_FILE:-}" ]]; then
       extra_args+=(
-        --set ironProxy.manager.secretSource=onepassword-connect
+        --set ironProxy.secretSource=onepassword-connect
         --set onepasswordConnect.connect.create=true
       )
     fi

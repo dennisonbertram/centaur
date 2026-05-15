@@ -37,7 +37,6 @@ from api.routers import (
     attachments as attachments_mod,
     deprecated,
     health,
-    internal,
 )
 from api.routers import agent as agent_router_mod
 from api.routers import workflows as workflow_router_mod
@@ -185,6 +184,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     }
     discover_workflow_handlers()
     await sync_registered_workflow_schedules(app.state.db_pool)
+    # Bring up the API's own iron-proxy pod (replaces the previously
+    # helm-managed deployment).
+    try:
+        from api.sandbox.kubernetes import KubernetesExecutorBackend
+        from api.sandbox.registry import get_backend
+
+        backend = get_backend()
+        if isinstance(backend, KubernetesExecutorBackend):
+            await backend.ensure_api_proxy_pod()
+    except Exception as exc:
+        log.warning("api_proxy_pod_bootstrap_failed", error=str(exc))
     if execution_worker_enabled:
         await recover_interrupted_executions_on_startup(app.state.db_pool)
         await start_execution_worker(app.state.db_pool)
@@ -363,7 +373,6 @@ app.include_router(agent_router_mod.router)
 app.include_router(workflow_router_mod.router)
 app.include_router(attachments_mod.router)
 app.include_router(admin.router)
-app.include_router(internal.router)
 app.include_router(deprecated.router)
 
 
