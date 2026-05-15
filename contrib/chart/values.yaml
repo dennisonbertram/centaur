@@ -24,6 +24,11 @@ ironProxy:
     proxyPort: 8080
     managementPort: 9092
     healthPort: 9090
+    # Postgres listener ports. iron-proxy allocates one listener per pg_dsn
+    # secret, starting at pgPortRangeStart and incrementing. NetworkPolicies
+    # allow the whole range so callers can reach any listener.
+    pgPortRangeStart: 5432
+    pgPortRangeEnd: 5471
   secretSource: onepassword
   secretTtl: 10m
 

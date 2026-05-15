@@ -32,7 +32,9 @@
           "properties": {
             "proxyPort": { "type": "integer" },
             "managementPort": { "type": "integer" },
-            "healthPort": { "type": "integer" }
+            "healthPort": { "type": "integer" },
+            "pgPortRangeStart": { "type": "integer" },
+            "pgPortRangeEnd": { "type": "integer" }
           }
         },
         "secretSource": { "type": "string" },
