@@ -13,7 +13,7 @@ postgres:
     existingSecretKey: POSTGRES_PASSWORD
 
 slackbot:
-  enabled: false
+  enabled: true
 
 api:
   executionWorkerEnabled: true

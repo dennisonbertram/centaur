@@ -27,7 +27,7 @@ log = structlog.get_logger()
 
 # Pool configuration
 POOL_SIZE = int(os.getenv("WARM_POOL_SIZE", "5"))
-POOL_HARNESS = os.getenv("WARM_POOL_HARNESS", "amp")
+POOL_HARNESS = os.getenv("WARM_POOL_HARNESS", "codex")
 POOL_REPLENISH_INTERVAL = float(os.getenv("WARM_POOL_REPLENISH_INTERVAL", "5.0"))
 POOL_BACKEND_TIMEOUT = float(os.getenv("WARM_POOL_BACKEND_TIMEOUT", "30.0"))
 # Recycle existing warm pods on startup instead of adopting them. After an image
@@ -93,7 +93,7 @@ async def _spawn_warm_container() -> WarmContainer | None:
     backend = get_backend()
     if not backend.supports_warm_pool:
         return None
-    engine = POOL_HARNESS if POOL_HARNESS in {"amp", "claude-code", "codex"} else "amp"
+    engine = POOL_HARNESS if POOL_HARNESS in {"amp", "claude-code", "codex"} else "codex"
 
     placeholder_key = f"warm-{int(time.time() * 1000)}-{id(asyncio.current_task())}"
     try:
@@ -293,7 +293,7 @@ fi
 
 async def claim_container(
     thread_key: str,
-    harness: str = "amp",
+    harness: str = "codex",
     *,
     persona: str | None = None,
     repo: str | None = None,

@@ -52,15 +52,24 @@ _VALID_STDOUT_EVENT_TYPES = frozenset(
         "message_delta",
         "message_start",
         "message_stop",
+        "item.completed",
+        "item.started",
+        "item.updated",
         "reasoning",
         "result",
         "status",
         "subagent",
         "system",
+        "thread.goal.cleared",
+        "thread.goal.updated",
+        "thread.started",
         "tool",
         "tool_result",
         "tool_use",
         "turn.done",
+        "turn.completed",
+        "turn.failed",
+        "turn.started",
         "usage",
         "user",
     }
@@ -71,6 +80,7 @@ _REUSABLE_DB_STATES = {"running", "idle", "delivering", "error", "suspended"}
 
 IDLE_TTL_S = int(os.getenv("IDLE_TTL_S", "86400"))  # 24 hours
 SUSPENDED_RETENTION_S = int(os.getenv("SUSPENDED_RETENTION_S", str(7 * 24 * 60 * 60)))
+MAX_ACTIVE_SANDBOX_SESSIONS = int(os.getenv("MAX_ACTIVE_SANDBOX_SESSIONS", "45"))
 STREAM_EOF_REATTACH_MAX = int(os.getenv("STREAM_EOF_REATTACH_MAX", "6"))
 STREAM_EOF_REATTACH_BACKOFF_S = float(os.getenv("STREAM_EOF_REATTACH_BACKOFF_S", "1.0"))
 
@@ -306,6 +316,70 @@ async def _db_delete_session(thread_key: str) -> None:
     await pool.execute("DELETE FROM sandbox_sessions WHERE thread_key = $1", thread_key)
 
 
+async def _evict_idle_sessions_for_capacity(backend) -> int:
+    """Keep enough pod headroom for a new sandbox + per-sandbox proxy.
+
+    Local Kubernetes nodes have a hard pod count limit. Slack threads can leave
+    many idle runtimes pinned for fast follow-ups; once the node reaches that
+    limit, new proxy pods stay Pending and spawn fails after the readiness
+    timeout. Evict the oldest idle sessions before cold-spawning a new runtime.
+    """
+    if MAX_ACTIVE_SANDBOX_SESSIONS <= 0:
+        return 0
+
+    pool = _get_pool()
+    active_count = await pool.fetchval(
+        "SELECT COUNT(*) FROM sandbox_sessions "
+        "WHERE state IN ('running', 'idle', 'delivering', 'error')"
+    )
+    overage = int(active_count or 0) - MAX_ACTIVE_SANDBOX_SESSIONS + 1
+    if overage <= 0:
+        return 0
+
+    rows = await pool.fetch(
+        "SELECT ss.thread_key, ss.sandbox_id FROM sandbox_sessions ss "
+        "WHERE ss.state = 'idle' "
+        "AND NOT EXISTS ("
+        "  SELECT 1 FROM agent_execution_requests er "
+        "  WHERE er.thread_key = ss.thread_key "
+        "    AND er.status IN ('queued', 'running', 'retry_wait', 'cancel_requested')"
+        ") "
+        "ORDER BY ss.updated_at ASC "
+        "LIMIT $1",
+        overage,
+    )
+
+    evicted = 0
+    for row in rows:
+        thread_key = row["thread_key"]
+        sandbox_id = row["sandbox_id"]
+        try:
+            log.info(
+                "idle_capacity_eviction",
+                thread_key=thread_key,
+                sandbox=sandbox_id[:12],
+                active_count=int(active_count or 0),
+                max_active=MAX_ACTIVE_SANDBOX_SESSIONS,
+            )
+            with contextlib.suppress(Exception):
+                await backend.stop_by_id(sandbox_id)
+            await pool.execute(
+                "UPDATE sandbox_sessions SET state = 'suspended', updated_at = NOW() "
+                "WHERE thread_key = $1 AND state = 'idle'",
+                thread_key,
+            )
+            _drop_runtime(sandbox_id)
+            evicted += 1
+        except Exception:
+            log.warning(
+                "idle_capacity_eviction_failed",
+                thread_key=thread_key,
+                sandbox=sandbox_id[:12],
+                exc_info=True,
+            )
+    return evicted
+
+
 # ── Wire lease helpers (separate from sandbox lifecycle) ─────────────────────
 
 
@@ -454,13 +528,15 @@ def _resolve_harness_profile(
 ) -> tuple[str, str | None, str | None]:
     from api.app import get_tool_manager
 
-    normalized = (harness or "").strip() or "amp"
+    normalized = (harness or "").strip() or "codex"
     normalized_engine_override = (engine_override or "").strip() or None
     if (
         normalized_engine_override
         and normalized_engine_override not in _ENGINE_HARNESSES
     ):
         raise ValueError(f"Unknown engine override: {normalized_engine_override}")
+    if normalized == "amp":
+        return normalized_engine_override or "codex", None, None
     if normalized in _ENGINE_HARNESSES:
         return normalized_engine_override or normalized, None, None
     persona_info = get_tool_manager().get_persona(normalized)
@@ -470,7 +546,7 @@ def _resolve_harness_profile(
             persona_info.name,
             persona_info.default_repo,
         )
-    return normalized_engine_override or "amp", None, None
+    return normalized_engine_override or "codex", None, None
 
 
 # ── Async public API ─────────────────────────────────────────────────────────
@@ -478,7 +554,7 @@ def _resolve_harness_profile(
 
 async def get_or_spawn(
     thread_key: str,
-    harness: str = "amp",
+    harness: str = "codex",
     *,
     engine: str | None = None,
 ) -> SandboxSession:
@@ -528,7 +604,10 @@ async def get_or_spawn(
 
     # Try warm pool first
     should_try_warm = (
-        not engine and not old_agent_thread_id and not old_inflight_turn_id
+        not engine
+        and not old_agent_thread_id
+        and not old_inflight_turn_id
+        and not (harness == "amp" and resolved_engine == "codex")
     )
     if should_try_warm:
         from api.warm_pool import claim_container
@@ -557,6 +636,7 @@ async def get_or_spawn(
         harness, engine_override=engine
     )
     backend = get_backend()
+    await _evict_idle_sessions_for_capacity(backend)
     session = await backend.create(
         thread_key,
         harness,

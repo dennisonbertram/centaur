@@ -48,7 +48,7 @@ RUN useradd -m -s /bin/bash -u 1001 agent \
 
 # ── Global npm CLIs (root, cached) ──────────────────────────────────────────
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    npm install -g @anthropic-ai/claude-code@1.0.16 @openai/codex@0.121.0 @mariozechner/pi-coding-agent@0.67.2 agent-browser@0.26.0
+    npm install -g @anthropic-ai/claude-code@1.0.16 @openai/codex@0.130.0 @mariozechner/pi-coding-agent@0.67.2 agent-browser@0.26.0
 
 # ── agent-browser system deps (must run as root before USER agent) ───────────
 # Chrome for Testing doesn't provide Linux ARM64 builds; fall back to system chromium
@@ -62,7 +62,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         libcairo-gobject2 libcairo2 libgdk-pixbuf-2.0-0 libxrender1 \
         libasound2t64 libfreetype6 libfontconfig1 libdbus-1-3 libnss3 \
         libnspr4 libatk-bridge2.0-0t64 libdrm2 libxkbcommon0 \
-        libatspi2.0-0t64 libcups2t64 libxshmfence1 libgbm1 \
+        libatspi2.0-0t64 libcups2t64 libxshmfence1 libgbm1 file \
         fonts-noto-color-emoji fonts-noto-cjk fonts-freefont-ttf; \
     else \
       apt-get update && apt-get install -y --no-install-recommends \
@@ -127,6 +127,7 @@ COPY --link --chmod=755 services/sandbox/call.sh /usr/local/bin/call
 COPY --link --chmod=755 services/sandbox/slack-upload.sh /usr/local/bin/slack-upload
 COPY --link --chmod=755 services/sandbox/md2docx.py /usr/local/bin/md2docx
 COPY --link --chmod=755 services/sandbox/amp-wrapper.py /usr/local/bin/amp-wrapper
+COPY --link --chmod=755 services/sandbox/codex-app-wrapper.py /usr/local/bin/codex-app-wrapper
 COPY --link --chmod=755 services/sandbox/git-branch.sh /usr/local/bin/git-branch
 COPY --link --chmod=755 services/sandbox/entrypoint.sh /entrypoint.sh
 
@@ -138,5 +139,5 @@ COPY --link --chown=1001:1001 .agents/skills/ /home/agent/.agents/skills/
 COPY --link --chown=1001:1001 services/sandbox/SYSTEM_PROMPT.md /home/agent/AGENTS.md
 
 ENTRYPOINT ["/entrypoint.sh"]
-# Default CMD uses amp-wrapper which handles follow-handoff chaining.
-CMD ["amp-wrapper"]
+# Default CMD uses Codex app-server through Centaur's NDJSON bridge.
+CMD ["codex-app-wrapper"]

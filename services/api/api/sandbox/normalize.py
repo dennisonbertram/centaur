@@ -485,15 +485,28 @@ def _codex_tool_call_id(item: dict) -> str:
 def _normalize_codex_item(item: dict, phase: str) -> list[dict]:
     item_type = _as_str(item.get("type"))
 
-    if item_type == "agent_message" and phase == "completed":
-        text = _as_str(item.get("text"))
-        return [_assistant_text_event(text)] if text else []
+    if item_type in ("agent_message", "agentMessage") and phase == "completed":
+        # Codex app-server streams text through item/agentMessage/delta, which
+        # the wrapper emits as assistant text events. Keep completed items for
+        # result extraction only; re-emitting them duplicates Slack output.
+        return []
 
     if item_type == "reasoning" and phase in ("updated", "completed"):
         text = _as_str(item.get("text")) or _as_str(item.get("thinking"))
         return [{"type": "reasoning", "text": text}] if text else []
 
-    if item_type in ("mcp_tool_call", "tool_call", "function_call", "custom_tool_call"):
+    if item_type in (
+        "mcp_tool_call",
+        "mcpToolCalls",
+        "tool_call",
+        "toolCall",
+        "function_call",
+        "functionCall",
+        "custom_tool_call",
+        "customToolCall",
+        "dynamicToolCalls",
+        "collabToolCalls",
+    ):
         tool_id = _codex_tool_call_id(item)
         tool_name = _codex_tool_name(item)
         if tool_name.strip().lower() == "subagent":
@@ -566,7 +579,7 @@ def _normalize_codex_item(item: dict, phase: str) -> list[dict]:
             return [_tool_result_event(tool_id, output, bool(item.get("error")))]
         return []
 
-    if item_type == "command_execution":
+    if item_type in ("command_execution", "commandExecution"):
         if phase == "completed":
             return [
                 {
@@ -580,7 +593,7 @@ def _normalize_codex_item(item: dict, phase: str) -> list[dict]:
             ]
         return []
 
-    if item_type == "file_change" and phase == "completed":
+    if item_type in ("file_change", "fileChange") and phase == "completed":
         changes = item.get("changes")
         return [
             {
@@ -608,6 +621,9 @@ def _normalize_codex_event(event: dict) -> list[dict]:
             else []
         )
 
+    if event_type == "assistant":
+        return [event]
+
     if event_type == "error":
         return [
             {"type": "error", "error": _as_str(event.get("message")) or "Unknown error"}
@@ -625,12 +641,26 @@ def _normalize_codex_event(event: dict) -> list[dict]:
     if event_type == "turn.completed":
         return _attach_usage_metadata([], event, authoritative=True)
 
-    if event_type == "item.started":
-        return _normalize_codex_item(_as_record(event.get("item")), "started")
-    if event_type == "item.updated":
-        return _normalize_codex_item(_as_record(event.get("item")), "updated")
-    if event_type == "item.completed":
-        return _normalize_codex_item(_as_record(event.get("item")), "completed")
+    if event_type in {"item.started", "item.updated", "item.completed"}:
+        item = _as_record(event.get("item"))
+        if _as_str(item.get("type")) == "error":
+            return _normalize_codex_item(item, event_type.rsplit(".", 1)[-1])
+
+    if event_type in {
+        "turn.plan.updated",
+        "item.started",
+        "item.updated",
+        "item.completed",
+        "item.agentMessage.delta",
+        "item.plan.delta",
+        "item.commandExecution.outputDelta",
+        "item.fileChange.outputDelta",
+        "item.fileChange.patchUpdated",
+        "item.reasoning.summaryTextDelta",
+        "item.reasoning.summaryPartAdded",
+        "item.reasoning.textDelta",
+    }:
+        return [event]
 
     return []
 

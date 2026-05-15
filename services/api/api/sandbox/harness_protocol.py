@@ -75,10 +75,17 @@ def extract_result(engine: str, event: dict) -> str | None:
             if texts:
                 return texts[-1]
         return None
-    if engine == "codex" and t == "item.completed":
-        item = event.get("item", {})
-        if item.get("type") == "agent_message":
-            return item.get("text", "")
+    if engine == "codex":
+        if t == "assistant":
+            msg = event.get("message", {})
+            content = msg.get("content", [])
+            texts = [c.get("text", "") for c in content if c.get("type") == "text"]
+            if texts:
+                return texts[-1]
+        if t == "item.completed":
+            item = event.get("item", {})
+            if item.get("type") in {"agent_message", "agentMessage"}:
+                return item.get("text", "")
         return None
     if engine == "pi-mono" and t == "message_end":
         msg = event.get("message", {})

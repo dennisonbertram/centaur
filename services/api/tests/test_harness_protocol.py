@@ -149,6 +149,13 @@ class TestExtractResult:
         }
         assert extract_result("codex", event) == "codex says"
 
+    def test_codex_item_completed_camel_case(self):
+        event = {
+            "type": "item.completed",
+            "item": {"type": "agentMessage", "text": "codex says"},
+        }
+        assert extract_result("codex", event) == "codex says"
+
     def test_codex_non_agent_message(self):
         event = {
             "type": "item.completed",

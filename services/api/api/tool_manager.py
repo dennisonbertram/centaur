@@ -31,6 +31,7 @@ from api.api_keys import check_scope
 from api.laminar_tracing import set_span_attributes, start_span
 from api.vm_metrics import record_tool_call
 from api.deps import get_key_info, get_sandbox_claims, verify_api_key
+from api import slackbot_v2_client
 from centaur_sdk import ToolContext, reset_tool_context, set_tool_context
 
 log = structlog.get_logger()
@@ -193,6 +194,69 @@ def _resolve_timeout_s(tool_conf: dict[str, Any], *, tool: str) -> float | None:
 
 def _timeout_label(timeout_s: float | None) -> str:
     return "no timeout" if timeout_s is None else f"{timeout_s:g}s"
+
+
+async def _capture_live_slack_send(
+    *,
+    request: Request | None,
+    sandbox_claims: dict[str, Any] | None,
+    tool_name: str,
+    method_name: str,
+    args: dict[str, Any],
+) -> dict[str, Any] | None:
+    if request is None or not sandbox_claims:
+        return None
+    if tool_name != "slack" or method_name != "send_message":
+        return None
+
+    thread_key = str(sandbox_claims.get("thread_key") or "")
+    parts = thread_key.split(":")
+    if len(parts) < 4 or parts[0] != "slack":
+        return None
+    active_channel = parts[2]
+    active_thread_ts = parts[3]
+    requested_channel = str(args.get("channel") or args.get("channel_id") or "").lstrip("#")
+    requested_thread_ts = str(args.get("thread_ts") or "")
+    channel_is_id = bool(re.match(r"^[CDG][A-Z0-9]+$", requested_channel))
+    if channel_is_id and requested_channel != active_channel:
+        return None
+    if requested_thread_ts and requested_thread_ts != active_thread_ts:
+        return None
+
+    text = str(args.get("text") or args.get("message") or "").strip()
+    if not text:
+        return None
+
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        return None
+    session_id = await pool.fetchval(
+        "SELECT metadata->>'slackbot_agent_session_id' "
+        "FROM agent_execution_requests "
+        "WHERE thread_key = $1 "
+        "AND status = 'running' "
+        "AND metadata->>'slackbot_v2_live_delivery' = 'true' "
+        "AND COALESCE(metadata->>'slackbot_agent_session_id', '') <> '' "
+        "ORDER BY started_at DESC NULLS LAST, created_at DESC LIMIT 1",
+        thread_key,
+    )
+    session_id = str(session_id or "").strip()
+    if not session_id:
+        return None
+
+    await slackbot_v2_client.session_text(session_id, text)
+    log.info(
+        "slack_send_message_captured",
+        thread_key=thread_key,
+        sandbox_container_id=sandbox_claims.get("container_id"),
+        slackbot_agent_session_id=session_id,
+    )
+    return {
+        "captured": True,
+        "message": "Captured into the active Slackbot-v2 live reply; no separate Slack message was posted.",
+        "channel": active_channel,
+        "thread_ts": active_thread_ts,
+    }
 
 
 async def _extract_tool_attachment(
@@ -958,6 +1022,24 @@ class ToolManager:
         }
         t0 = time.monotonic()
         log.info("tool_call_started", **call_fields)
+        captured_slack_send = await _capture_live_slack_send(
+            request=request,
+            sandbox_claims=sandbox_claims,
+            tool_name=tool_name,
+            method_name=method_name,
+            args=args,
+        )
+        if captured_slack_send is not None:
+            duration_ms = round((time.monotonic() - t0) * 1000)
+            log.info(
+                "tool_call_completed",
+                duration_ms=duration_ms,
+                success=True,
+                result_size_bytes=_payload_size_bytes(captured_slack_send),
+                captured=True,
+                **call_fields,
+            )
+            return captured_slack_send
         validation_error = _tool_arg_validation_error(method, args)
         if validation_error is not None:
             log.warning(
@@ -1109,6 +1191,27 @@ class ToolManager:
         }
         t0 = time.monotonic()
         log.info("tool_call_started", **call_fields)
+        captured_slack_send = await _capture_live_slack_send(
+            request=request,
+            sandbox_claims=sandbox_claims,
+            tool_name=tool_name,
+            method_name=method_name,
+            args=args,
+        )
+        if captured_slack_send is not None:
+            duration_ms = round((time.monotonic() - t0) * 1000)
+            log.info(
+                "tool_call_completed",
+                duration_ms=duration_ms,
+                success=True,
+                result_size_bytes=_payload_size_bytes(captured_slack_send),
+                captured=True,
+                **call_fields,
+            )
+            record_tool_call(tool_name, method_name, True, duration_ms / 1000)
+            if format == "toon":
+                return _to_toon(captured_slack_send)
+            return _normalize_for_serialization(captured_slack_send)
         validation_error = _tool_arg_validation_error(method, args)
         if validation_error is not None:
             log.warning(

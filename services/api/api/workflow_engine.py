@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
+from api import slackbot_v2_client
 from api.runtime_control import (
     ControlPlaneError,
     append_message,
@@ -67,6 +68,8 @@ class Delivery:
     thread_ts: str | None = None
     recipient_user_id: str | None = None
     recipient_team_id: str | None = None
+    channel_id: str | None = None
+    team_id: str | None = None
 
     @classmethod
     def slack(
@@ -91,14 +94,16 @@ class Delivery:
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"platform": self.platform}
-        if self.channel:
-            d["channel"] = self.channel
+        channel = self.channel or self.channel_id
+        recipient_team_id = self.recipient_team_id or self.team_id
+        if channel:
+            d["channel"] = channel
         if self.thread_ts:
             d["thread_ts"] = self.thread_ts
         if self.recipient_user_id:
             d["recipient_user_id"] = self.recipient_user_id
-        if self.recipient_team_id:
-            d["recipient_team_id"] = self.recipient_team_id
+        if recipient_team_id:
+            d["recipient_team_id"] = recipient_team_id
         return d
 
     @classmethod
@@ -107,10 +112,10 @@ class Delivery:
             return cls()
         return cls(
             platform=str(d.get("platform") or "dev"),
-            channel=d.get("channel"),
+            channel=d.get("channel") or d.get("channel_id"),
             thread_ts=d.get("thread_ts"),
-            recipient_user_id=d.get("recipient_user_id"),
-            recipient_team_id=d.get("recipient_team_id"),
+            recipient_user_id=d.get("recipient_user_id") or d.get("user_id"),
+            recipient_team_id=d.get("recipient_team_id") or d.get("team_id"),
         )
 
 
@@ -1053,15 +1058,34 @@ async def do_agent_turn(
         selector = _resolve_prompt_selector(prompt_selector)
         effective_history = history_messages or run_in.get("history_messages") or []
 
-        spawn = await spawn_assignment(
-            ctx._pool,
+        slackbot_session_id = await slackbot_v2_client.open_agent_session(
+            delivery=effective_delivery,
+            metadata=effective_metadata,
             thread_key=effective_thread_key,
-            spawn_id=f"{step_id}:spawn",
-            harness=selector["harness"],
-            engine=None,
-            persona_id=selector["persona_id"],
-            agents_md_override=agents_md_override,
+            title="Centaur execution",
         )
+        if slackbot_session_id:
+            effective_metadata["slackbot_agent_session_id"] = slackbot_session_id
+            effective_metadata["slackbot_v2_live_delivery"] = True
+
+        try:
+            spawn = await spawn_assignment(
+                ctx._pool,
+                thread_key=effective_thread_key,
+                spawn_id=f"{step_id}:spawn",
+                harness=selector["harness"],
+                engine=None,
+                persona_id=selector["persona_id"],
+                agents_md_override=agents_md_override,
+            )
+        except Exception as exc:
+            if slackbot_session_id:
+                await slackbot_v2_client.session_text(
+                    slackbot_session_id,
+                    f"Failed to start the Codex runtime: {exc}",
+                )
+                await slackbot_v2_client.session_done(slackbot_session_id)
+            raise
         ag = int(spawn["assignment_generation"])
 
         if isinstance(effective_history, list):

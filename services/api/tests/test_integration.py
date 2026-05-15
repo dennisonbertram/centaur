@@ -333,17 +333,11 @@ class TestBuildUserInput:
 class TestBuildHarnessCmd:
     """Tests for build_harness_cmd."""
 
-    def test_amp(self):
+    def test_codex(self):
         from api.sandbox.config import build_harness_cmd
 
-        cmd = build_harness_cmd("amp")
-        assert cmd[0] == "amp-wrapper"
-
-    def test_amp_with_model(self):
-        from api.sandbox.config import build_harness_cmd
-
-        cmd = build_harness_cmd("amp", model="claude-sonnet-4-20250514")
-        assert cmd[0] == "amp-wrapper"
+        cmd = build_harness_cmd("codex")
+        assert cmd == ["codex-app-wrapper"]
 
     def test_claude_code(self):
         from api.sandbox.config import build_harness_cmd
@@ -359,12 +353,6 @@ class TestBuildHarnessCmd:
         cmd = build_harness_cmd("claude-code", model="opus")
         assert "--model" in cmd
         assert "opus" in cmd
-
-    def test_codex(self):
-        from api.sandbox.config import build_harness_cmd
-
-        cmd = build_harness_cmd("codex")
-        assert cmd == ["sleep", "infinity"]
 
     def test_unknown_engine(self):
         from api.sandbox.config import build_harness_cmd
@@ -383,7 +371,7 @@ class TestBuildHarnessCmd:
         monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
         monkeypatch.setenv("AMP_MODE", "smart")
 
-        env = container_env("thread-key", "sandbox-id")
+        env = container_env("thread-key", "sandbox-id", "firewall.internal")
 
         assert "AMP_MODE=smart" in env
 

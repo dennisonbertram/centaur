@@ -62,7 +62,7 @@ class BatchMessageRequest(BaseModel):
 
 class ExecuteRequest(BaseModel):
     thread_key: str
-    harness: str = "amp"
+    harness: str = "codex"
     engine: str | None = None
     platform: str | None = None
     user_id: str | None = None

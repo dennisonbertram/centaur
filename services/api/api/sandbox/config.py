@@ -34,6 +34,8 @@ def build_harness_cmd(engine: str, model: str | None = None) -> list[str]:
     """Build the container CMD for a given harness engine."""
     if engine == "amp":
         return ["amp-wrapper"]
+    if engine == "codex":
+        return ["codex-app-wrapper"]
     if engine == "claude-code":
         cmd = [
             "claude",

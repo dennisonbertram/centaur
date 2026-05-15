@@ -59,6 +59,16 @@ PYEOF
     fi
 fi
 
+# ── Codex settings ──────────────────────────────────────────────────────────
+mkdir -p "$HOME_DIR/.codex"
+cat > "$HOME_DIR/.codex/config.toml" <<EOF
+sandbox_mode = "danger-full-access"
+approval_policy = "never"
+
+[features]
+goals = true
+EOF
+
 # ── Pi-mono settings ─────────────────────────────────────────────────────────
 mkdir -p "$HOME_DIR/.pi/agent/extensions"
 cat > "$HOME_DIR/.pi/agent/settings.json" <<EOF

@@ -117,16 +117,42 @@ class TestCodex:
         ]
 
     def test_item_completed_message(self):
+        event = {
+            "type": "item.completed",
+            "item": {"type": "agent_message", "text": "hello"},
+        }
         result = normalize_harness_event(
             "codex",
-            {
-                "type": "item.completed",
-                "item": {"type": "agent_message", "text": "hello"},
-            },
+            event,
         )
-        assert len(result) == 1
-        assert result[0]["type"] == "assistant"
-        assert result[0]["message"]["content"][0]["text"] == "hello"
+        assert result == [event]
+
+    def test_agent_message_delta_passthrough(self):
+        event = {
+            "type": "item.agentMessage.delta",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "msg-1",
+            "delta": "hello",
+        }
+        assert normalize_harness_event("codex", event) == [event]
+
+    def test_command_execution_camel_case_item(self):
+        event = {
+            "type": "item.completed",
+            "item": {
+                "type": "commandExecution",
+                "command": "node hello.js",
+                "aggregated_output": "hello\n",
+                "exit_code": 0,
+                "status": "completed",
+            },
+        }
+        result = normalize_harness_event(
+            "codex",
+            event,
+        )
+        assert result == [event]
 
     def test_turn_failed(self):
         result = normalize_harness_event(
