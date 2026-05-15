@@ -1,8 +1,9 @@
 import type { WebClient } from '@slack/web-api'
 import { centaurApiKey, type AppConfig } from '../config'
 import { AgentSessionRenderer } from '../slack/agent-session'
+import { codexFooter } from '../slack/codex-session'
 
-const CONSUMER_ID = `slackbot-v2-${process.pid}`
+const CONSUMER_ID = `slackbot-${process.pid}`
 
 export function startFinalDeliveryPoller(config: AppConfig, client: WebClient): void {
   if (!centaurApiKey(config)) return
@@ -58,7 +59,7 @@ async function deliver(client: WebClient, delivery: any): Promise<void> {
     title: 'Execution steps'
   })
   await renderer.text(sessionId, extractText(payload))
-  await renderer.done(sessionId, deliveryFooter(delivery))
+  await renderer.done(sessionId, deliveryFooter(payload))
 }
 
 function extractText(payload: any): string {
@@ -76,12 +77,9 @@ function extractText(payload: any): string {
   )
 }
 
-function deliveryFooter(delivery: any): string {
-  const executionId = String(delivery.execution_id ?? '')
-  const threadKey = String(delivery.thread_key ?? '')
-  return [`thread: ${threadKey}`, executionId ? `execution: ${executionId}` : '']
-    .filter(Boolean)
-    .join('\n')
+function deliveryFooter(payload: any): string | undefined {
+  const threadId = String(payload?.agent_thread_id ?? '').trim()
+  return threadId ? codexFooter(threadId) : undefined
 }
 
 function targetFromDelivery(delivery: any): {

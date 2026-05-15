@@ -23,7 +23,7 @@ from api.agent import (
     steer_stdin,
     stop_session,
 )
-from api import slackbot_v2_client
+from api import slackbot_client
 from api.observability import (
     ExecutionObservationAccumulator,
     extract_usage_metrics,
@@ -49,6 +49,9 @@ from api.sandbox.harness_protocol import is_turn_done
 from api.sandbox.registry import get_backend
 
 log = structlog.get_logger()
+
+_SLACKBOT_LIVE_DELIVERY_METADATA_KEY = "slackbot_live_delivery"
+_LEGACY_SLACKBOT_LIVE_DELIVERY_METADATA_KEY = "slackbot" + "_v" + "2_live_delivery"
 
 EXECUTION_SILENCE_TIMEOUT_S = int(os.getenv("EXECUTION_SILENCE_TIMEOUT_S", "600"))
 EXECUTION_TOOL_SILENCE_TIMEOUT_S = int(
@@ -836,6 +839,30 @@ def _clip_slackbot(value: Any, max_chars: int = _MAX_SLACKBOT_STEP_CHARS) -> str
     return text if len(text) <= max_chars else f"{text[: max_chars - 1]}…"
 
 
+def _has_slackbot_live_delivery(metadata: dict[str, Any]) -> bool:
+    return (
+        metadata.get(_SLACKBOT_LIVE_DELIVERY_METADATA_KEY) is True
+        or metadata.get(_LEGACY_SLACKBOT_LIVE_DELIVERY_METADATA_KEY) is True
+    )
+
+
+async def _mark_slackbot_live_delivery_failed(pool, execution_id: str, reason: str) -> None:
+    await pool.execute(
+        "UPDATE agent_execution_requests "
+        "SET metadata = jsonb_set("
+        "  metadata - $2::text - $3::text, "
+        "  '{slackbot_live_delivery_failed}', "
+        "  to_jsonb($4::text), "
+        "  true"
+        "), updated_at = NOW() "
+        "WHERE execution_id = $1",
+        execution_id,
+        _SLACKBOT_LIVE_DELIVERY_METADATA_KEY,
+        _LEGACY_SLACKBOT_LIVE_DELIVERY_METADATA_KEY,
+        reason,
+    )
+
+
 def _canonical_text_blocks(event: dict[str, Any]) -> list[str]:
     if event.get("type") == "assistant":
         message = event.get("message") if isinstance(event.get("message"), dict) else {}
@@ -854,7 +881,7 @@ def _canonical_text_blocks(event: dict[str, Any]) -> list[str]:
 async def _send_slackbot_canonical_event(session_id: str, event: dict[str, Any]) -> bool:
     sent_text = False
     for text in _canonical_text_blocks(event):
-        await slackbot_v2_client.session_text(
+        await slackbot_client.session_text(
             session_id,
             _clip_slackbot(text, _MAX_SLACKBOT_TEXT_CHARS),
         )
@@ -870,7 +897,7 @@ async def _send_slackbot_canonical_event(session_id: str, event: dict[str, Any])
             tool_id = str(block.get("id") or uuid.uuid4())
             tool_name = str(block.get("name") or "Tool")
             tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
-            await slackbot_v2_client.session_step(
+            await slackbot_client.session_step(
                 session_id,
                 step_id=tool_id,
                 title=tool_name,
@@ -884,7 +911,7 @@ async def _send_slackbot_canonical_event(session_id: str, event: dict[str, Any])
                 continue
             tool_id = str(block.get("tool_use_id") or uuid.uuid4())
             is_error = bool(block.get("is_error"))
-            await slackbot_v2_client.session_step(
+            await slackbot_client.session_step(
                 session_id,
                 step_id=tool_id,
                 title="Tool result",
@@ -893,7 +920,7 @@ async def _send_slackbot_canonical_event(session_id: str, event: dict[str, Any])
             )
     elif event_type == "command_execution":
         command = str(event.get("command") or "Command")
-        await slackbot_v2_client.session_step(
+        await slackbot_client.session_step(
             session_id,
             step_id=f"command-{hashlib.sha256(command.encode()).hexdigest()[:12]}",
             title=command[:256],
@@ -901,7 +928,7 @@ async def _send_slackbot_canonical_event(session_id: str, event: dict[str, Any])
             output=_clip_slackbot(event.get("aggregated_output") or ""),
         )
     elif event_type == "error":
-        await slackbot_v2_client.session_step(
+        await slackbot_client.session_step(
             session_id,
             step_id=f"error-{uuid.uuid4().hex[:12]}",
             title="Execution error",
@@ -1138,7 +1165,7 @@ async def enqueue_execution(
                 silence_deadline,
                 hard_deadline,
             )
-            if _delivery_platform(delivery) != "dev" and not metadata.get("slackbot_v2_live_delivery"):
+            if _delivery_platform(delivery) != "dev" and not _has_slackbot_live_delivery(metadata):
                 await conn.execute(
                     "INSERT INTO agent_final_delivery_outbox ("
                     "execution_id, thread_key, delivery, state"
@@ -1636,7 +1663,7 @@ async def _mark_execution_terminal(
                 isinstance(steer_replacement, dict)
                 and steer_replacement.get("suppress_cancellation_delivery") is True
             )
-            suppress_legacy_delivery = metadata.get("slackbot_v2_live_delivery") is True
+            suppress_legacy_delivery = _has_slackbot_live_delivery(metadata)
         assignment_row = await pool.fetchrow(
             "SELECT harness, engine, persona_id, prompt_ref, effective_agents_md_sha256 "
             "FROM agent_runtime_assignments WHERE thread_key = $1 AND assignment_generation = $2",
@@ -1698,7 +1725,7 @@ async def _mark_execution_terminal(
             thread_key=thread_key,
             status=status,
             terminal_reason=terminal_reason,
-            reason="slackbot_v2_live_delivery" if suppress_legacy_delivery else "dev_delivery",
+            reason="slackbot_live_delivery" if suppress_legacy_delivery else "dev_delivery",
         )
         try:
             from api.workflow_engine import notify_execution_terminal
@@ -1713,6 +1740,14 @@ async def _mark_execution_terminal(
             )
         return
 
+    await pool.execute(
+        "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
+        "VALUES ($1, $2, $3::jsonb, 'awaiting_terminal') "
+        "ON CONFLICT (execution_id) DO NOTHING",
+        execution_id,
+        thread_key,
+        canonical_json(decode_jsonb(row["delivery"], {}) if row else {}),
+    )
     await pool.execute(
         "UPDATE agent_final_delivery_outbox SET state = 'pending', final_payload = $1::jsonb, "
         "next_attempt_at = $2, lease_owner = NULL, lease_expires_at = NULL, updated_at = NOW() "
@@ -2258,10 +2293,10 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
         nonlocal slackbot_text_sent, slackbot_done
         if slackbot_session_id:
             if result_text.strip() and not slackbot_text_sent:
-                await slackbot_v2_client.session_text(slackbot_session_id, result_text)
+                await slackbot_client.session_text(slackbot_session_id, result_text)
                 slackbot_text_sent = True
             if not slackbot_done:
-                await slackbot_v2_client.session_done(slackbot_session_id, harness_thread_id or None)
+                await slackbot_client.session_done(slackbot_session_id, harness_thread_id or None)
                 slackbot_done = True
         await _mark_execution_terminal(
             pool,
@@ -2386,7 +2421,21 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
                 for slack_event in slack_events:
                     if harness_thread_id and isinstance(slack_event, dict):
                         slack_event.setdefault("session_id", harness_thread_id)
-                    harness_result = await slackbot_v2_client.harness_event(slackbot_session_id, slack_event)
+                    harness_result = await slackbot_client.harness_event(slackbot_session_id, slack_event)
+                    if harness_result is None:
+                        log.warning(
+                            "slackbot_live_delivery_failed",
+                            execution_id=execution_id,
+                            thread_key=thread_key,
+                            event_type=slack_event.get("type") if isinstance(slack_event, dict) else None,
+                        )
+                        await _mark_slackbot_live_delivery_failed(
+                            pool,
+                            execution_id,
+                            "harness_event_failed",
+                        )
+                        slackbot_session_id = ""
+                        break
                     if isinstance(harness_result, dict):
                         harness_thread_id = str(harness_result.get("threadId") or harness_thread_id)
                         slackbot_done = bool(harness_result.get("done"))

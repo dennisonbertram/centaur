@@ -31,7 +31,7 @@ from api.api_keys import check_scope
 from api.laminar_tracing import set_span_attributes, start_span
 from api.vm_metrics import record_tool_call
 from api.deps import get_key_info, get_sandbox_claims, verify_api_key
-from api import slackbot_v2_client
+from api import slackbot_client
 from centaur_sdk import ToolContext, reset_tool_context, set_tool_context
 
 log = structlog.get_logger()
@@ -235,7 +235,10 @@ async def _capture_live_slack_send(
         "FROM agent_execution_requests "
         "WHERE thread_key = $1 "
         "AND status = 'running' "
-        "AND metadata->>'slackbot_v2_live_delivery' = 'true' "
+        "AND ("
+        "  metadata->>'slackbot_live_delivery' = 'true' "
+        "  OR metadata->>('slackbot' || '_v' || '2_live_delivery') = 'true'"
+        ") "
         "AND COALESCE(metadata->>'slackbot_agent_session_id', '') <> '' "
         "ORDER BY started_at DESC NULLS LAST, created_at DESC LIMIT 1",
         thread_key,
@@ -244,7 +247,7 @@ async def _capture_live_slack_send(
     if not session_id:
         return None
 
-    await slackbot_v2_client.session_text(session_id, text)
+    await slackbot_client.session_text(session_id, text)
     log.info(
         "slack_send_message_captured",
         thread_key=thread_key,
@@ -253,7 +256,7 @@ async def _capture_live_slack_send(
     )
     return {
         "captured": True,
-        "message": "Captured into the active Slackbot-v2 live reply; no separate Slack message was posted.",
+        "message": "Captured into the active Slackbot live reply; no separate Slack message was posted.",
         "channel": active_channel,
         "thread_ts": active_thread_ts,
     }

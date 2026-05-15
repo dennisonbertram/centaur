@@ -32,7 +32,7 @@ from zoneinfo import ZoneInfo
 
 import structlog
 
-from api import slackbot_v2_client
+from api import slackbot_client
 from api.runtime_control import (
     ControlPlaneError,
     append_message,
@@ -1058,7 +1058,7 @@ async def do_agent_turn(
         selector = _resolve_prompt_selector(prompt_selector)
         effective_history = history_messages or run_in.get("history_messages") or []
 
-        slackbot_session_id = await slackbot_v2_client.open_agent_session(
+        slackbot_session_id = await slackbot_client.open_agent_session(
             delivery=effective_delivery,
             metadata=effective_metadata,
             thread_key=effective_thread_key,
@@ -1066,7 +1066,7 @@ async def do_agent_turn(
         )
         if slackbot_session_id:
             effective_metadata["slackbot_agent_session_id"] = slackbot_session_id
-            effective_metadata["slackbot_v2_live_delivery"] = True
+            effective_metadata["slackbot_live_delivery"] = True
 
         try:
             spawn = await spawn_assignment(
@@ -1080,11 +1080,11 @@ async def do_agent_turn(
             )
         except Exception as exc:
             if slackbot_session_id:
-                await slackbot_v2_client.session_text(
+                await slackbot_client.session_text(
                     slackbot_session_id,
                     f"Failed to start the Codex runtime: {exc}",
                 )
-                await slackbot_v2_client.session_done(slackbot_session_id)
+                await slackbot_client.session_done(slackbot_session_id)
             raise
         ag = int(spawn["assignment_generation"])
 

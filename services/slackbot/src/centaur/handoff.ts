@@ -31,7 +31,7 @@ export class CentaurHandoff {
           message_id: event.message_id,
           user_id: event.user_id,
           metadata: {
-            source: 'slackbot-v2',
+            source: 'slackbot',
             slack: event.slack,
             is_mention: event.is_mention
           },

@@ -59,7 +59,7 @@ app
   .get('/health', c =>
     c.json({
       ok: true,
-      service: 'slackbot-v2',
+      service: 'slackbot',
       commit: process.env.COMMIT_SHA ?? 'local'
     })
   )

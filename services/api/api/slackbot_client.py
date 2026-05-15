@@ -39,7 +39,7 @@ async def post(path: str, body: dict[str, Any]) -> dict[str, Any] | None:
             text = response.text
             if not response.is_success:
                 log.warning(
-                    "slackbot_v2_call_failed",
+                    "slackbot_call_failed",
                     path=path,
                     status=response.status_code,
                     response=text[:500],
@@ -50,7 +50,7 @@ async def post(path: str, body: dict[str, Any]) -> dict[str, Any] | None:
             data = response.json()
             return data if isinstance(data, dict) else {}
     except Exception as exc:
-        log.warning("slackbot_v2_call_error", path=path, error=str(exc))
+        log.warning("slackbot_call_error", path=path, error=str(exc))
         return None
 
 
