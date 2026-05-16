@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import importlib.util
 from pathlib import Path
 from types import ModuleType
+
+from pydantic import BaseModel
 
 
 WRAPPER_PY = Path(__file__).resolve().parents[2] / "sandbox" / "codex-app-wrapper.py"
@@ -46,22 +47,13 @@ def test_laminar_otel_writes_use_turn_trace_id(monkeypatch) -> None:
     }
 
 
-def test_notification_parts_dump_pydantic_aliases() -> None:
+def test_payload_dict_dumps_pydantic_aliases() -> None:
     wrapper = _load_wrapper()
 
-    class Payload(wrapper.BaseModel):
+    class Payload(BaseModel):
         turn_id: str
 
         model_config = {"alias_generator": lambda value: "turnId", "populate_by_name": True}
 
-    @dataclass
-    class Notification:
-        method: str
-        payload: Payload
-
-    method, params = wrapper._notification_parts(
-        Notification("item/agentMessage/delta", Payload(turn_id="turn-1"))
-    )
-
-    assert method == "item/agentMessage/delta"
+    params = wrapper._payload_dict(Payload(turn_id="turn-1"))
     assert params == {"turnId": "turn-1"}

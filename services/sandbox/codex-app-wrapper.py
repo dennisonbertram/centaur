@@ -10,15 +10,7 @@ import os
 import shutil
 import signal
 import sys
-import uuid
-from collections.abc import Awaitable, Callable
 from typing import Any
-
-from pydantic import BaseModel
-
-
-class EmptyResponse(BaseModel):
-    pass
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -38,12 +30,6 @@ def _payload_dict(payload: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _notification_parts(notification: Any) -> tuple[str, dict[str, Any]]:
-    return str(getattr(notification, "method", "") or ""), _payload_dict(
-        getattr(notification, "payload", {})
-    )
-
-
 def text_from_blocks(blocks: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for block in blocks:
@@ -59,25 +45,11 @@ def text_from_blocks(blocks: list[dict[str, Any]]) -> str:
     return "\n".join(part for part in parts if part).strip()
 
 
-def input_items(turn_input: dict[str, Any]) -> list[Any]:
+def input_text(turn_input: dict[str, Any]) -> str:
     blocks = turn_input.get("message", {}).get("content") or []
     if not isinstance(blocks, list):
         blocks = []
-    text = text_from_blocks(blocks)
-    return [{"type": "text", "text": text or "continue"}]
-
-
-def split_goal(items: list[Any]) -> tuple[str | None, list[Any]]:
-    if len(items) != 1:
-        return None, items
-    item = items[0]
-    if not isinstance(item, dict) or item.get("type") != "text":
-        return None, items
-    text = str(item.get("text") or "").strip()
-    if not text.startswith("/goal"):
-        return None, items
-    goal = text[len("/goal") :].strip()
-    return goal or None, []
+    return text_from_blocks(blocks) or "continue"
 
 
 def _laminar_otel_endpoint() -> str:
@@ -137,7 +109,6 @@ class CodexBridge:
         self.thread: Any | None = None
         self.thread_id: str | None = None
         self.active_turn: Any | None = None
-        self.active_turn_id: str | None = None
         self.configured_otel_trace_id: str | None = None
         self.shutting_down = False
 
@@ -190,12 +161,13 @@ class CodexBridge:
                 approval_mode=ApprovalMode.deny_all,
                 cwd=os.getcwd(),
             )
-        self.thread_id = str(getattr(self.thread, "id", None) or resume or uuid.uuid4())
+        self.thread_id = str(getattr(self.thread, "id", None) or resume)
         emit({"type": "thread.started", "thread_id": self.thread_id})
         return self.thread_id
 
     def emit_notification(self, notification: Any) -> bool:
-        method, params = _notification_parts(notification)
+        method = str(getattr(notification, "method", "") or "")
+        params = _payload_dict(getattr(notification, "payload", {}))
 
         if method == "thread/started":
             thread = params.get("thread") or {}
@@ -205,37 +177,30 @@ class CodexBridge:
                 emit({"type": "thread.started", "thread_id": self.thread_id})
             return False
 
-        if method == "turn/started":
-            turn = params.get("turn") or {}
-            self.active_turn_id = (
-                str(turn.get("id") or params.get("turnId") or "") or self.active_turn_id
-            )
-            emit({"type": "turn.started", "turn_id": self.active_turn_id or ""})
-            return False
-
-        if method in {"item/started", "item/updated", "item/completed"}:
-            emit({"type": method.replace("/", "."), "item": params.get("item") or params})
-            return False
-
         if method in {
+            "turn/started",
+            "item/started",
+            "item/updated",
+            "item/completed",
             "item/commandExecution/outputDelta",
+            "item/agentMessage/delta",
             "item/fileChange/outputDelta",
             "item/fileChange/patchUpdated",
             "item/plan/delta",
             "item/reasoning/summaryTextDelta",
             "item/reasoning/summaryPartAdded",
             "item/reasoning/textDelta",
+            "turn/plan/updated",
+            "thread/goal/updated",
+            "thread/goal/cleared",
         }:
-            emit({"type": method.replace("/", "."), **params})
-            return False
-
-        if method == "turn/plan/updated":
-            emit({"type": method.replace("/", "."), **params})
-            return False
-
-        if method == "item/agentMessage/delta":
             payload = {"type": method.replace("/", "."), **params}
-            if self.thread_id and "session_id" not in payload and "thread_id" not in payload:
+            if (
+                method == "item/agentMessage/delta"
+                and self.thread_id
+                and "session_id" not in payload
+                and "thread_id" not in payload
+            ):
                 payload["session_id"] = self.thread_id
             emit(payload)
             return False
@@ -250,18 +215,12 @@ class CodexBridge:
                 }
             )
             self.active_turn = None
-            self.active_turn_id = None
             return True
 
         if method in {"turn/failed", "error"}:
             emit({"type": "turn.failed", "error": params.get("error") or params})
             self.active_turn = None
-            self.active_turn_id = None
             return True
-
-        if method in {"thread/goal/updated", "thread/goal/cleared"}:
-            emit({"type": method.replace("/", "."), **params})
-            return False
 
         return False
 
@@ -312,9 +271,9 @@ class CodexBridge:
             turn_input.get("thread_key"),
         )
         thread_id = await self.start_or_resume_thread()
-        items = input_items(turn_input)
-        goal, items = split_goal(items)
-        if goal is not None:
+        text = input_text(turn_input)
+        stripped = text.strip()
+        if stripped.startswith("/goal") and (goal := stripped[len("/goal") :].strip()):
             await self.raw_request(
                 "thread/goal/set",
                 {"threadId": thread_id, "objective": goal},
@@ -329,21 +288,22 @@ class CodexBridge:
             emit({"type": "turn.completed"})
             return
 
+        from openai_codex import ApprovalMode, TextInput
+
+        text_input = TextInput(text)
         if self.active_turn is not None or turn_input.get("steer"):
             try:
                 if self.active_turn is None:
                     raise RuntimeError("no active turn to steer")
-                await self.active_turn.steer(items)
+                await self.active_turn.steer(text_input)
                 return
             except Exception:
                 await self.interrupt_active_turn()
 
         assert self.thread is not None
-        from openai_codex import ApprovalMode
 
-        turn = await self.thread.turn(items, approval_mode=ApprovalMode.deny_all)
+        turn = await self.thread.turn(text_input, approval_mode=ApprovalMode.deny_all)
         self.active_turn = turn
-        self.active_turn_id = str(getattr(turn, "id", "") or "") or None
         await self.drain_until_turn_done(turn)
 
     async def interrupt_active_turn(self) -> None:
@@ -353,7 +313,6 @@ class CodexBridge:
             except Exception as exc:
                 emit({"type": "error", "message": f"interrupt failed: {exc}"})
         self.active_turn = None
-        self.active_turn_id = None
 
     def stop(self) -> None:
         self.shutting_down = True
@@ -420,33 +379,20 @@ async def read_api_stdin(inputs: asyncio.Queue[dict[str, Any] | None]) -> None:
     await inputs.put(None)
 
 
-def install_signal_handlers(
-    bridge: CodexBridge,
-    create_task: Callable[[Awaitable[None]], asyncio.Task[None]],
-) -> None:
+def install_signal_handlers(bridge: CodexBridge) -> None:
     loop = asyncio.get_running_loop()
 
-    def stop() -> None:
-        bridge.stop()
-
-    def interrupt() -> None:
-        create_task(bridge.interrupt_active_turn())
-
     for sig in (signal.SIGTERM, signal.SIGINT):
-        try:
-            loop.add_signal_handler(sig, stop)
-        except NotImplementedError:
-            signal.signal(sig, lambda *_args: stop())
-    try:
-        loop.add_signal_handler(signal.SIGUSR1, interrupt)
-    except (AttributeError, NotImplementedError):
-        if hasattr(signal, "SIGUSR1"):
-            signal.signal(signal.SIGUSR1, lambda *_args: interrupt())
+        loop.add_signal_handler(sig, bridge.stop)
+    loop.add_signal_handler(
+        signal.SIGUSR1,
+        lambda: asyncio.create_task(bridge.interrupt_active_turn()),
+    )
 
 
 async def async_main() -> None:
     bridge = CodexBridge()
-    install_signal_handlers(bridge, asyncio.create_task)
+    install_signal_handlers(bridge)
     await bridge.run()
 
 
