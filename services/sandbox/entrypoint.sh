@@ -145,6 +145,13 @@ fi
 # Switch to workspace so the harness reads workspace/AGENTS.md (with persona overlay)
 cd "$WORKSPACE_DIR"
 
+# Codex reads its auth file when the app server starts. Complete this before
+# signaling readiness, otherwise warm pods can be claimed with no auth loaded.
+CODEX_KEY="${CODEX_API_KEY:-${OPENAI_API_KEY:-}}"
+if [ -n "$CODEX_KEY" ]; then
+    echo "$CODEX_KEY" | codex login --with-api-key 2>/dev/null || true
+fi
+
 # Signal readiness
 touch "$HOME_DIR/.ready"
 
@@ -155,10 +162,6 @@ touch "$HOME_DIR/.ready"
         printf 'https://oauth2:%s@github.com\n' "$GITHUB_TOKEN" > "$HOME_DIR/.git-credentials"
         echo "${GITHUB_TOKEN}" | gh auth login --with-token 2>/dev/null || true
         gh auth setup-git 2>/dev/null || true
-    fi
-    CODEX_KEY="${CODEX_API_KEY:-${OPENAI_API_KEY:-}}"
-    if [ -n "$CODEX_KEY" ]; then
-        echo "$CODEX_KEY" | codex login --with-api-key 2>/dev/null || true
     fi
 } &
 
