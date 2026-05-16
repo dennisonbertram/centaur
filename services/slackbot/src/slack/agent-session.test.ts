@@ -43,7 +43,7 @@ describe('AgentSessionRenderer', () => {
       id: 'sleep-1',
       title: 'Run command',
       status: 'in_progress',
-      details: '```bash\n$ sleep 2\n```'
+      details: '```bash\nsleep 2\n```'
     })
     await renderer.text(sessionId, '\n```js\nconsole.log("Hello, world!")\n```')
     await renderer.done(sessionId)
@@ -73,7 +73,7 @@ describe('AgentSessionRenderer', () => {
         id: 'sleep-1',
         title: 'Run command',
         status: 'in_progress',
-        details: '```bash\n$ sleep 2\n```',
+        details: '```bash\nsleep 2\n```',
         output: undefined,
         sources: undefined
       }
@@ -123,7 +123,7 @@ describe('AgentSessionRenderer', () => {
       id: 'cmd-1',
       title: 'Run command: pnpm test',
       status: 'in_progress',
-      details: '```bash\n$ pnpm test\n```'
+      details: '```bash\npnpm test\n```'
     })
     await renderer.step(sessionId, {
       id: 'cmd-1',
@@ -141,7 +141,7 @@ describe('AgentSessionRenderer', () => {
       id: 'cmd-1',
       title: 'Run command: pnpm test',
       status: 'complete',
-      details: '```bash\n$ pnpm test\n```',
+      details: undefined,
       output: '```text\nok\n```',
       sources: undefined
     })

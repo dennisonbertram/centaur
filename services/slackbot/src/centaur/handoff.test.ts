@@ -43,7 +43,10 @@ describe('CentaurHandoff', () => {
       await handoff.emit(event)
 
       expect(capturedInit).toBeDefined()
-      const body = JSON.parse(String(capturedInit?.body)) as {
+      const capturedBody = capturedInit?.body
+      expect(typeof capturedBody).toBe('string')
+      if (typeof capturedBody !== 'string') throw new Error('expected string request body')
+      const body = JSON.parse(capturedBody) as {
         trigger_key: string
         input: { metadata: { slack: unknown } }
       }

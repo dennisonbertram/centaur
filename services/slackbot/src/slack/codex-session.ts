@@ -54,7 +54,11 @@ export class CodexSessionRenderer {
       const task = commandTask(command, event?.type, existing, state.commandOutputById.get(id))
       const merged = mergeTask(existing, task)
       state.taskByUseId.set(merged.id, merged)
-      await this.publishTask(agentSessionId, merged)
+      await this.publishTask(agentSessionId, {
+        ...merged,
+        details: task.details,
+        output: task.output
+      })
     }
 
     const fileChange = fileChangeEvent(event)
@@ -83,7 +87,7 @@ export class CodexSessionRenderer {
         output: commandOutputElements(output)
       }
       state.taskByUseId.set(outputDelta.id, updated)
-      await this.publishTask(agentSessionId, updated)
+      await this.publishTask(agentSessionId, { ...updated, details: [], output: updated.output })
     }
 
     for (const tool of toolUses(event)) {
@@ -110,7 +114,7 @@ export class CodexSessionRenderer {
       state.taskByUseId.set(toolUseId || task.id, task)
       task.status = result.is_error ? 'error' : 'complete'
       task.output = outputElementsForResult(result)
-      await this.publishTask(agentSessionId, task)
+      await this.publishTask(agentSessionId, { ...task, details: [], output: task.output })
     }
 
     const assistantMessage = assistantText(event)
@@ -381,7 +385,7 @@ function commandTask(
     id,
     title: command === 'Command' ? 'Run command' : `Run command: ${oneLine(command, 220)}`,
     status,
-    details: isCompletionUpdate && existing ? [] : [pre(`$ ${command}`, 'bash')],
+    details: isCompletionUpdate && existing ? [] : [pre(command, 'bash')],
     output
   }
 }
@@ -485,7 +489,7 @@ function titleFor(tool: any): string {
 }
 
 function detailElementsForTool(tool: any): StreamRichTextElement[] {
-  if (tool.name === 'Bash') return [pre(`$ ${stringInput(tool.input, 'cmd')}`, 'bash')]
+  if (tool.name === 'Bash') return [pre(stringInput(tool.input, 'cmd'), 'bash')]
   if (tool.name === 'create_file') {
     const path = stringInput(tool.input, 'path', 'file')
     return [
