@@ -19,7 +19,7 @@ def test_sandbox_entrypoint_bootstraps_mock_google_adc(tmp_path: Path) -> None:
             str(ENTRYPOINT_SH),
             "sh",
             "-lc",
-            "printf '%s\n' \"$GOOGLE_APPLICATION_CREDENTIALS\" && cat \"$GOOGLE_APPLICATION_CREDENTIALS\"",
+            'printf \'%s\n\' "$GOOGLE_APPLICATION_CREDENTIALS" && cat "$GOOGLE_APPLICATION_CREDENTIALS"',
         ],
         check=False,
         capture_output=True,
@@ -55,3 +55,40 @@ def test_sandbox_entrypoint_bootstraps_mock_google_adc(tmp_path: Path) -> None:
 
     codex_config = (home / ".codex" / "config.toml").read_text()
     assert 'model_verbosity = "low"' in codex_config
+
+
+def test_sandbox_entrypoint_writes_codex_laminar_otel_config(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "sh",
+            "-lc",
+            'cat "$HOME/.codex/config.toml"',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "CENTAUR_THREAD_KEY": "slack:C123:1700000000.000100",
+            "CENTAUR_TRACE_ID": "00000000-0000-0000-0000-000000000123",
+            "CODEX_OTEL_ENVIRONMENT": "staging",
+            "LMNR_BASE_URL": "http://stg-laminar-app-server.stg-laminar.svc.cluster.local:8000",
+            "LMNR_PROJECT_API_KEY": "lmnr-key",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert 'trace_exporter = "otlp-http"' in result.stdout
+    assert (
+        'endpoint = "http://stg-laminar-app-server.stg-laminar.svc.cluster.local:8000/v1/traces"'
+        in result.stdout
+    )
+    assert '"x-trace-id" = "00000000-0000-0000-0000-000000000123"' in result.stdout
+    assert '"x-centaur-thread-key" = "slack:C123:1700000000.000100"' in result.stdout
+    assert '"authorization" = "Bearer lmnr-key"' in result.stdout
+    assert 'environment = "staging"' in result.stdout

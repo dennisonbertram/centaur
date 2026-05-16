@@ -20,6 +20,14 @@ _HARNESS_STUB_KEYS = (
     "GITHUB_TOKEN",
 )
 
+_SANDBOX_PASSTHROUGH_ENV_KEYS = (
+    "CODEX_OTEL_ENVIRONMENT",
+    "CODEX_OTEL_LAMINAR_ENDPOINT",
+    "CODEX_OTEL_LAMINAR_BASE_URL",
+    "LMNR_BASE_URL",
+    "LMNR_PROJECT_API_KEY",
+)
+
 
 def amp_mode() -> str:
     return (os.getenv("AMP_MODE") or "deep").strip() or "deep"
@@ -57,6 +65,7 @@ def container_env(
     container_name: str,
     firewall_host: str,
     *,
+    trace_id: str | None = None,
     resume_thread_id: str | None = None,
     pg_dsns: dict[str, str] | None = None,
 ) -> list[str]:
@@ -74,6 +83,7 @@ def container_env(
         f"CENTAUR_API_URL={api_url}",
         f"CENTAUR_API_KEY={api_key}",
         f"CENTAUR_THREAD_KEY={thread_key}",
+        f"CENTAUR_TRACE_ID={trace_id or ''}",
         f"AMP_MODE={amp_mode()}",
     ]
     visibility = amp_thread_visibility()
@@ -92,6 +102,10 @@ def container_env(
     # before they reach the real upstream.
     for key in _HARNESS_STUB_KEYS:
         env.append(f"{key}={key}")
+    for key in _SANDBOX_PASSTHROUGH_ENV_KEYS:
+        value = (os.getenv(key) or "").strip()
+        if value:
+            env.append(f"{key}={value}")
     env.extend(
         [
             f"FIREWALL_HOST={firewall_host}",

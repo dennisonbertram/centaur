@@ -14,6 +14,7 @@ CALL_SH = Path(__file__).resolve().parents[2] / "sandbox" / "call.sh"
 
 class _AgentHandler(BaseHTTPRequestHandler):
     requests: list[tuple[str, str, dict]] = []
+    headers_seen: list[dict[str, str]] = []
 
     def log_message(self, format: str, *args) -> None:  # noqa: A003
         return
@@ -23,6 +24,7 @@ class _AgentHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length).decode("utf-8") if length else ""
         payload = json.loads(raw) if raw else {}
         self.__class__.requests.append(("POST", self.path, payload))
+        self.__class__.headers_seen.append(dict(self.headers.items()))
 
         if self.path == "/agent/spawn":
             response = {"ok": True, "assignment_generation": 7}
@@ -41,6 +43,7 @@ class _AgentHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         self.__class__.requests.append(("GET", self.path, {}))
+        self.__class__.headers_seen.append(dict(self.headers.items()))
         if self.path.startswith("/agent/runtime"):
             self._respond(
                 200,
@@ -63,28 +66,35 @@ class _AgentHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def _run_call(body: str, server: ThreadingHTTPServer) -> subprocess.CompletedProcess[str]:
+def _run_call(
+    body: str, server: ThreadingHTTPServer
+) -> subprocess.CompletedProcess[str]:
     return _run_call_args(["agent", "execute", body], server)
 
 
 def _run_call_args(
-    args: list[str], server: ThreadingHTTPServer
+    args: list[str],
+    server: ThreadingHTTPServer,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "CENTAUR_API_URL": f"http://127.0.0.1:{server.server_port}",
+        "CENTAUR_API_KEY": "test-token",
+    }
+    env.update(extra_env or {})
     return subprocess.run(
         ["bash", str(CALL_SH), *args],
         check=False,
         capture_output=True,
         text=True,
-        env={
-            "PATH": "/usr/bin:/bin",
-            "CENTAUR_API_URL": f"http://127.0.0.1:{server.server_port}",
-            "CENTAUR_API_KEY": "test-token",
-        },
+        env=env,
     )
 
 
 def test_call_agent_execute_uses_spawn_message_execute_flow():
     _AgentHandler.requests = []
+    _AgentHandler.headers_seen = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _AgentHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -106,7 +116,11 @@ def test_call_agent_execute_uses_spawn_message_execute_flow():
         server.server_close()
 
     assert result.returncode == 0, result.stderr or result.stdout
-    assert json.loads(result.stdout) == {"ok": True, "execution_id": "exe-123", "status": "queued"}
+    assert json.loads(result.stdout) == {
+        "ok": True,
+        "execution_id": "exe-123",
+        "status": "queued",
+    }
 
     assert [(method, path) for method, path, _ in _AgentHandler.requests] == [
         ("POST", "/agent/spawn"),
@@ -122,7 +136,9 @@ def test_call_agent_execute_uses_spawn_message_execute_flow():
     assert message_payload["thread_key"] == "task:legal-review-123"
     assert message_payload["assignment_generation"] == 7
     assert message_payload["role"] == "user"
-    assert message_payload["parts"] == [{"type": "text", "text": "Review this SAFE for risks"}]
+    assert message_payload["parts"] == [
+        {"type": "text", "text": "Review this SAFE for risks"}
+    ]
 
     execute_payload = _AgentHandler.requests[2][2]
     assert execute_payload["thread_key"] == "task:legal-review-123"
@@ -133,6 +149,7 @@ def test_call_agent_execute_uses_spawn_message_execute_flow():
 
 def test_call_agent_execute_preserves_low_level_execute_payload():
     _AgentHandler.requests = []
+    _AgentHandler.headers_seen = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _AgentHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -168,6 +185,7 @@ def test_call_agent_execute_preserves_low_level_execute_payload():
 
 def test_call_agent_runtime_uses_get_with_query_string():
     _AgentHandler.requests = []
+    _AgentHandler.headers_seen = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _AgentHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -194,6 +212,8 @@ def test_call_agent_runtime_uses_get_with_query_string():
 
 
 def test_call_discover_agent_lists_runtime_method():
+    _AgentHandler.requests = []
+    _AgentHandler.headers_seen = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _AgentHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -209,3 +229,39 @@ def test_call_discover_agent_lists_runtime_method():
     body = json.loads(result.stdout)
     method_names = {entry["name"] for entry in body["methods"]}
     assert {"execute", "status", "runtime", "stop"} <= method_names
+
+
+def test_call_uses_trace_id_header_and_separate_thread_key_header():
+    _AgentHandler.requests = []
+    _AgentHandler.headers_seen = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _AgentHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        result = _run_call_args(
+            [
+                "agent",
+                "execute",
+                json.dumps(
+                    {
+                        "thread_key": "task:raw-execute-123",
+                        "assignment_generation": 5,
+                    }
+                ),
+            ],
+            server,
+            extra_env={
+                "CENTAUR_TRACE_ID": "00000000-0000-0000-0000-000000000123",
+                "CENTAUR_THREAD_KEY": "slack:C123:1700000000.000100",
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    headers = _AgentHandler.headers_seen[0]
+    assert headers["X-Trace-Id"] == "00000000-0000-0000-0000-000000000123"
+    assert headers["X-Centaur-Thread-Key"] == "slack:C123:1700000000.000100"

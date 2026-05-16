@@ -50,7 +50,11 @@ def is_turn_done(engine: str, event: dict) -> bool:
             # Amp can emit an assistant event containing only tool_use blocks
             # before the tool_result/final assistant text arrives. Those events
             # must not terminate the durable turn even when stop_reason=end_turn.
-            if any(block.get("type") == "tool_use" for block in content if isinstance(block, dict)):
+            if any(
+                block.get("type") == "tool_use"
+                for block in content
+                if isinstance(block, dict)
+            ):
                 return False
             return msg.get("stop_reason") == "end_turn"
         return False
@@ -112,7 +116,13 @@ def extract_thread_id(engine: str, event: dict) -> str | None:
     return None
 
 
-def build_user_input(content_blocks: list[dict], *, steer: bool = False) -> dict:
+def build_user_input(
+    content_blocks: list[dict],
+    *,
+    steer: bool = False,
+    thread_key: str | None = None,
+    trace_id: str | None = None,
+) -> dict:
     """Build a harness-native user input envelope from content blocks."""
     envelope = {
         "type": "user",
@@ -123,6 +133,10 @@ def build_user_input(content_blocks: list[dict], *, steer: bool = False) -> dict
     }
     if steer:
         envelope["steer"] = True
+    if thread_key:
+        envelope["thread_key"] = thread_key
+    if trace_id:
+        envelope["trace_id"] = trace_id
     return envelope
 
 
@@ -141,7 +155,9 @@ def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
         user_id = message.get("user_id")
         parts = message.get("parts", [])
         assistant_label = (
-            "Previous Centaur response" if message.get("history_backfill") else "Your previous response"
+            "Previous Centaur response"
+            if message.get("history_backfill")
+            else "Your previous response"
         )
         attributed = False
         for part in parts:

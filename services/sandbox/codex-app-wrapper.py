@@ -29,10 +29,13 @@ INPUTS: queue.Queue[dict[str, Any] | None] = queue.Queue()
 THREAD_ID: str | None = None
 ACTIVE_TURN_ID: str | None = None
 SHUTTING_DOWN = False
+CONFIGURED_OTEL_TRACE_ID: str | None = None
 
 
 def emit(payload: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
+    sys.stdout.write(
+        json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n"
+    )
     sys.stdout.flush()
 
 
@@ -47,11 +50,15 @@ def _next_id() -> int:
 def send_raw(payload: dict[str, Any]) -> None:
     assert APP is not None and APP.stdin is not None
     with WRITE_LOCK:
-        APP.stdin.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
+        APP.stdin.write(
+            json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n"
+        )
         APP.stdin.flush()
 
 
-def request(method: str, params: dict[str, Any] | None = None, timeout: float = 30.0) -> dict[str, Any]:
+def request(
+    method: str, params: dict[str, Any] | None = None, timeout: float = 30.0
+) -> dict[str, Any]:
     msg_id = _next_id()
     q: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
     RESPONSES[msg_id] = q
@@ -107,7 +114,9 @@ def text_from_blocks(blocks: list[dict[str, Any]]) -> str:
         if btype == "text":
             parts.append(str(block.get("text") or ""))
         elif btype == "image":
-            parts.append("[User sent an image attachment; if needed, ask them to upload it as a file reference.]")
+            parts.append(
+                "[User sent an image attachment; if needed, ask them to upload it as a file reference.]"
+            )
         else:
             parts.append(json.dumps(block, ensure_ascii=False))
     return "\n".join(p for p in parts if p).strip()
@@ -131,13 +140,74 @@ def split_goal(items: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, 
     return goal or None, []
 
 
+def _laminar_otel_endpoint() -> str:
+    endpoint = (os.environ.get("CODEX_OTEL_LAMINAR_ENDPOINT") or "").strip()
+    if endpoint:
+        return endpoint
+    base = (
+        os.environ.get("CODEX_OTEL_LAMINAR_BASE_URL")
+        or os.environ.get("LMNR_BASE_URL")
+        or ""
+    ).strip()
+    if not base:
+        return ""
+    base = base.rstrip("/")
+    if base.endswith("/v1/traces"):
+        return base
+    return f"{base}/v1/traces"
+
+
+def _configure_laminar_otel(trace_id: str | None, thread_key: str | None) -> None:
+    global CONFIGURED_OTEL_TRACE_ID
+    endpoint = _laminar_otel_endpoint()
+    trace_id = (trace_id or os.environ.get("CENTAUR_TRACE_ID") or "").strip()
+    if not endpoint or not trace_id or CONFIGURED_OTEL_TRACE_ID == trace_id:
+        return
+
+    headers = {"x-trace-id": trace_id}
+    thread_key = (thread_key or os.environ.get("CENTAUR_THREAD_KEY") or "").strip()
+    if thread_key:
+        headers["x-centaur-thread-key"] = thread_key
+    api_key = (os.environ.get("LMNR_PROJECT_API_KEY") or "").strip()
+    if api_key:
+        headers["authorization"] = f"Bearer {api_key}"
+    environment = (
+        os.environ.get("CODEX_OTEL_ENVIRONMENT")
+        or os.environ.get("DEPLOY_ENV")
+        or os.environ.get("ENVIRONMENT")
+        or "dev"
+    ).strip() or "dev"
+
+    writes = {
+        "otel.environment": environment,
+        "otel.log_user_prompt": False,
+        "otel.trace_exporter": "otlp-http",
+        "otel.exporter.otlp-http.endpoint": endpoint,
+        "otel.exporter.otlp-http.protocol": "binary",
+        "otel.exporter.otlp-http.headers": headers,
+    }
+    for key_path, value in writes.items():
+        request(
+            "config/value/write",
+            {"keyPath": key_path, "value": value, "mergeStrategy": "upsert"},
+            timeout=10,
+        )
+    CONFIGURED_OTEL_TRACE_ID = trace_id
+
+
 def start_or_resume_thread() -> str:
     global THREAD_ID
     if THREAD_ID:
         return THREAD_ID
-    resume = (os.environ.get("CODEX_CONTINUE_THREAD_ID") or os.environ.get("AMP_CONTINUE_THREAD_ID") or "").strip()
+    resume = (
+        os.environ.get("CODEX_CONTINUE_THREAD_ID")
+        or os.environ.get("AMP_CONTINUE_THREAD_ID")
+        or ""
+    ).strip()
     if resume:
-        result = request("thread/resume", {"threadId": resume, "cwd": os.getcwd()}, timeout=60)
+        result = request(
+            "thread/resume", {"threadId": resume, "cwd": os.getcwd()}, timeout=60
+        )
     else:
         result = request("thread/start", {"cwd": os.getcwd()}, timeout=60)
     thread = result.get("thread") or {}
@@ -161,7 +231,9 @@ def emit_notification(msg: dict[str, Any]) -> bool:
 
     if method == "turn/started":
         turn = params.get("turn") or {}
-        ACTIVE_TURN_ID = str(turn.get("id") or params.get("turnId") or "") or ACTIVE_TURN_ID
+        ACTIVE_TURN_ID = (
+            str(turn.get("id") or params.get("turnId") or "") or ACTIVE_TURN_ID
+        )
         emit({"type": "turn.started", "turn_id": ACTIVE_TURN_ID or ""})
         return False
 
@@ -193,7 +265,13 @@ def emit_notification(msg: dict[str, Any]) -> bool:
 
     if method == "turn/completed":
         turn = params.get("turn") or {}
-        emit({"type": "turn.completed", "turn": turn, "usage": params.get("usage") or turn.get("usage")})
+        emit(
+            {
+                "type": "turn.completed",
+                "turn": turn,
+                "usage": params.get("usage") or turn.get("usage"),
+            }
+        )
         ACTIVE_TURN_ID = None
         return True
 
@@ -236,12 +314,21 @@ def handle_input(turn_input: dict[str, Any]) -> None:
     if turn_input.get("type") != "user":
         return
 
+    _configure_laminar_otel(turn_input.get("trace_id"), turn_input.get("thread_key"))
     thread_id = start_or_resume_thread()
     items = input_items(turn_input)
     goal, items = split_goal(items)
     if goal is not None:
-        request("thread/goal/set", {"threadId": thread_id, "objective": goal}, timeout=30)
-        emit({"type": "assistant", "session_id": thread_id, "message": {"content": [{"type": "text", "text": "Goal set."}]}})
+        request(
+            "thread/goal/set", {"threadId": thread_id, "objective": goal}, timeout=30
+        )
+        emit(
+            {
+                "type": "assistant",
+                "session_id": thread_id,
+                "message": {"content": [{"type": "text", "text": "Goal set."}]},
+            }
+        )
         emit({"type": "turn.completed"})
         return
 
@@ -250,7 +337,15 @@ def handle_input(turn_input: dict[str, Any]) -> None:
         try:
             steer_params = {**params, "expectedTurnId": ACTIVE_TURN_ID or ""}
             result = request("turn/steer", steer_params, timeout=10)
-            ACTIVE_TURN_ID = str(result.get("turnId") or result.get("turn_id") or ACTIVE_TURN_ID or "") or None
+            ACTIVE_TURN_ID = (
+                str(
+                    result.get("turnId")
+                    or result.get("turn_id")
+                    or ACTIVE_TURN_ID
+                    or ""
+                )
+                or None
+            )
             return
         except Exception:
             interrupt_active_turn()
@@ -264,7 +359,11 @@ def interrupt_active_turn(*_args: object) -> None:
     global ACTIVE_TURN_ID
     if THREAD_ID and ACTIVE_TURN_ID:
         try:
-            request("turn/interrupt", {"threadId": THREAD_ID, "turnId": ACTIVE_TURN_ID}, timeout=5)
+            request(
+                "turn/interrupt",
+                {"threadId": THREAD_ID, "turnId": ACTIVE_TURN_ID},
+                timeout=5,
+            )
         except Exception as exc:
             emit({"type": "error", "message": f"interrupt failed: {exc}"})
     ACTIVE_TURN_ID = None

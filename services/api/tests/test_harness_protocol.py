@@ -246,6 +246,18 @@ class TestBuildUserInput:
         result = build_user_input(blocks)
         assert "steer" not in result
 
+    def test_thread_key_is_included_when_provided(self):
+        blocks = [{"type": "text", "text": "hi"}]
+        result = build_user_input(blocks, thread_key="slack:C123:1700000000.000100")
+        assert result["thread_key"] == "slack:C123:1700000000.000100"
+
+    def test_trace_id_is_included_when_provided(self):
+        blocks = [{"type": "text", "text": "hi"}]
+        result = build_user_input(
+            blocks, trace_id="00000000-0000-0000-0000-000000000123"
+        )
+        assert result["trace_id"] == "00000000-0000-0000-0000-000000000123"
+
 
 class TestMessagesToContentBlocks:
     def test_simple_text_message(self):
@@ -379,7 +391,10 @@ class TestMessagesToContentBlocks:
         ]
         result = messages_to_content_blocks(msgs)
         assert result == [
-            {"type": "text", "text": "[Previous Centaur response]: Prior default-session answer"},
+            {
+                "type": "text",
+                "text": "[Previous Centaur response]: Prior default-session answer",
+            },
         ]
 
     def test_assistant_non_text_parts_passthrough(self):

@@ -222,7 +222,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             log.info("graceful_shutdown_initiated", signal=signal.Signals(signum).name)
         # Re-install the original handler and re-raise so uvicorn proceeds
         # with its shutdown.
-        signal.signal(signum, _original_sigterm if signum == signal.SIGTERM else _original_sigint)
+        signal.signal(
+            signum, _original_sigterm if signum == signal.SIGTERM else _original_sigint
+        )
         os.kill(os.getpid(), signum)
 
     signal.signal(signal.SIGTERM, _on_shutdown_signal)
@@ -284,11 +286,11 @@ async def instrument_requests(request, call_next):
     structlog.contextvars.clear_contextvars()
 
     trace_id = request.headers.get("x-trace-id")
-    thread_key = None
+    thread_key = request.headers.get("x-centaur-thread-key")
 
     if trace_id:
         structlog.contextvars.bind_contextvars(trace_id=trace_id)
-        thread_key = trace_id
+    if thread_key:
         structlog.contextvars.bind_contextvars(thread_key=thread_key)
 
     if request.method == "POST" and request.url.path in (
@@ -318,16 +320,18 @@ async def instrument_requests(request, call_next):
             span_type="DEFAULT",
             metadata={
                 "service": "api",
+                "trace_id": trace_id,
                 "thread_key": thread_key,
                 "http_method": request.method,
                 "http_path": path,
             },
         ):
             set_trace_context(
-                session_id=thread_key,
+                session_id=trace_id or thread_key,
                 metadata={
                     "service": "api",
                     "environment": os.getenv("CENTAUR_ENVIRONMENT", "local"),
+                    "trace_id": trace_id,
                     "thread_key": thread_key,
                     "http_path": path,
                 },
@@ -339,6 +343,7 @@ async def instrument_requests(request, call_next):
                     "http.method": request.method,
                     "http.route": path,
                     "http.status_code": status_code,
+                    **({"centaur.trace_id": trace_id} if trace_id else {}),
                     **({"centaur.thread_key": thread_key} if thread_key else {}),
                 }
             )

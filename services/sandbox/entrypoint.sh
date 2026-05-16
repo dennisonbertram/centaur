@@ -61,6 +61,26 @@ fi
 
 # ── Codex settings ──────────────────────────────────────────────────────────
 mkdir -p "$HOME_DIR/.codex"
+if [ -n "${CENTAUR_TRACE_ID:-}" ]; then
+    printf '%s' "$CENTAUR_TRACE_ID" > "$HOME_DIR/.trace_id"
+fi
+
+toml_escape() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+codex_laminar_endpoint="${CODEX_OTEL_LAMINAR_ENDPOINT:-}"
+if [ -z "$codex_laminar_endpoint" ]; then
+    codex_laminar_base="${CODEX_OTEL_LAMINAR_BASE_URL:-${LMNR_BASE_URL:-}}"
+    if [ -n "$codex_laminar_base" ]; then
+        codex_laminar_base="${codex_laminar_base%/}"
+        case "$codex_laminar_base" in
+            */v1/traces) codex_laminar_endpoint="$codex_laminar_base" ;;
+            *) codex_laminar_endpoint="$codex_laminar_base/v1/traces" ;;
+        esac
+    fi
+fi
+
 cat > "$HOME_DIR/.codex/config.toml" <<EOF
 sandbox_mode = "danger-full-access"
 approval_policy = "never"
@@ -69,6 +89,26 @@ model_verbosity = "low"
 [features]
 goals = true
 EOF
+
+if [ -n "$codex_laminar_endpoint" ] && [ -n "${CENTAUR_TRACE_ID:-}" ]; then
+    codex_otel_environment="${CODEX_OTEL_ENVIRONMENT:-${DEPLOY_ENV:-${ENVIRONMENT:-dev}}}"
+    codex_otel_headers="\"x-trace-id\" = \"$(toml_escape "${CENTAUR_TRACE_ID:-}")\", \"x-centaur-thread-key\" = \"$(toml_escape "${CENTAUR_THREAD_KEY:-}")\""
+    if [ -n "${LMNR_PROJECT_API_KEY:-}" ]; then
+        codex_otel_headers="$codex_otel_headers, \"authorization\" = \"Bearer $(toml_escape "$LMNR_PROJECT_API_KEY")\""
+    fi
+    cat >> "$HOME_DIR/.codex/config.toml" <<EOF
+
+[otel]
+environment = "$(toml_escape "$codex_otel_environment")"
+log_user_prompt = false
+trace_exporter = "otlp-http"
+
+[otel.exporter.otlp-http]
+endpoint = "$(toml_escape "$codex_laminar_endpoint")"
+protocol = "binary"
+headers = { $codex_otel_headers }
+EOF
+fi
 
 # ── Pi-mono settings ─────────────────────────────────────────────────────────
 mkdir -p "$HOME_DIR/.pi/agent/extensions"

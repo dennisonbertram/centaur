@@ -174,15 +174,42 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
 ) -> None:
     monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
 
-    env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
+    env = sandbox_container_env(
+        "thread-key",
+        "sandbox-id",
+        "firewall.internal",
+        trace_id="00000000-0000-0000-0000-000000000123",
+    )
     env_map = dict(item.split("=", 1) for item in env)
 
     assert "FIREWALL_HOST=firewall.internal" in env
     # iron-proxy rewrites the placeholder mid-flight.
     assert env_map["AMP_API_KEY"] == "AMP_API_KEY"
     assert env_map["OPENAI_API_KEY"] == "OPENAI_API_KEY"
+    assert env_map["CENTAUR_TRACE_ID"] == "00000000-0000-0000-0000-000000000123"
     assert env_map["NO_PROXY"] == "localhost,127.0.0.1,firewall.internal,api.internal"
     assert env_map["no_proxy"] == env_map["NO_PROXY"]
+
+
+def test_container_env_passes_laminar_otel_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "LMNR_BASE_URL",
+        "http://stg-laminar-app-server.stg-laminar.svc.cluster.local:8000",
+    )
+    monkeypatch.setenv("LMNR_PROJECT_API_KEY", "lmnr-key")
+    monkeypatch.setenv("CODEX_OTEL_ENVIRONMENT", "staging")
+
+    env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
+    env_map = dict(item.split("=", 1) for item in env)
+
+    assert (
+        env_map["LMNR_BASE_URL"]
+        == "http://stg-laminar-app-server.stg-laminar.svc.cluster.local:8000"
+    )
+    assert env_map["LMNR_PROJECT_API_KEY"] == "lmnr-key"
+    assert env_map["CODEX_OTEL_ENVIRONMENT"] == "staging"
 
 
 def test_prompt_bundle_includes_live_capability_inventory_guidance(
@@ -237,14 +264,16 @@ def test_prompt_bundle_starts_with_active_deployment_block(
 
     fake_app = types.ModuleType("api.app")
     fake_app.get_tool_manager = lambda: SimpleNamespace(
-        get_persona=lambda name: SimpleNamespace(
-            engine="amp",
-            prompt_file="INVEST.md",
-            tool_dir=persona_dir,
-            prompt_content="fallback guidance",
+        get_persona=lambda name: (
+            SimpleNamespace(
+                engine="amp",
+                prompt_file="INVEST.md",
+                tool_dir=persona_dir,
+                prompt_content="fallback guidance",
+            )
+            if name == "invest"
+            else None
         )
-        if name == "invest"
-        else None
     )
     monkeypatch.setitem(sys.modules, "api.app", fake_app)
     monkeypatch.setenv("CENTAUR_OVERLAY_DIR", str(overlay_root))
@@ -357,6 +386,7 @@ async def test_create_builds_pod_and_prompt_secret(
     backend._networking = fake_networking
 
     monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("DATABASE_URL", "postgres://user:pass@db/centaur")
     monkeypatch.setenv("FIREWALL_HOST", "firewall.internal")
     monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
     monkeypatch.setenv("REPOS_PATH", "/var/lib/centaur/repos")
@@ -375,6 +405,7 @@ async def test_create_builds_pod_and_prompt_secret(
         lambda *_args, **_kwargs: [
             "CENTAUR_API_URL=http://api.internal:8000",
             "CENTAUR_API_KEY=sandbox-token",
+            "CENTAUR_TRACE_ID=00000000-0000-0000-0000-000000000123",
             "AMP_API_KEY=AMP_API_KEY",
         ],
     )
@@ -401,6 +432,7 @@ async def test_create_builds_pod_and_prompt_secret(
         persona="eng",
         repo="paradigmxyz/centaur",
         resume_thread_id="T-123",
+        trace_id="00000000-0000-0000-0000-000000000123",
     )
 
     assert session.sandbox_id.startswith("centaur-centaur-sandbox-")
@@ -429,6 +461,7 @@ async def test_create_builds_pod_and_prompt_secret(
     assert container["tty"] is False
     assert env["CENTAUR_API_URL"] == "http://api.internal:8000"
     assert env["CENTAUR_API_KEY"] == "sandbox-token"
+    assert env["CENTAUR_TRACE_ID"] == "00000000-0000-0000-0000-000000000123"
     assert env["AMP_API_KEY"] == "AMP_API_KEY"
     assert env["CENTAUR_OVERLAY_DIR"] == "/home/agent/overlay/org"
     assert env["AGENT_PERSONA"] == "eng"
@@ -996,13 +1029,9 @@ async def test_stream_stdout_serializes_concurrent_readers() -> None:
     rt.stdout_stream = websocket
 
     backend = KubernetesExecutorBackend()
-    first = asyncio.create_task(
-        asyncio.wait_for(_collect_stdout(backend, session), 1)
-    )
+    first = asyncio.create_task(asyncio.wait_for(_collect_stdout(backend, session), 1))
     await websocket.receive_started.wait()
-    second = asyncio.create_task(
-        asyncio.wait_for(_collect_stdout(backend, session), 1)
-    )
+    second = asyncio.create_task(asyncio.wait_for(_collect_stdout(backend, session), 1))
     await asyncio.sleep(0)
 
     assert websocket.receive_calls == 1

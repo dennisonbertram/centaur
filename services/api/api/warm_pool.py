@@ -93,7 +93,9 @@ async def _spawn_warm_container() -> WarmContainer | None:
     backend = get_backend()
     if not backend.supports_warm_pool:
         return None
-    engine = POOL_HARNESS if POOL_HARNESS in {"amp", "claude-code", "codex"} else "codex"
+    engine = (
+        POOL_HARNESS if POOL_HARNESS in {"amp", "claude-code", "codex"} else "codex"
+    )
 
     placeholder_key = f"warm-{int(time.time() * 1000)}-{id(asyncio.current_task())}"
     try:
@@ -172,8 +174,9 @@ async def _inject_persona(
         await backend.exec_run(
             sandbox_id,
             [
-                "sh", "-c",
-                f'''
+                "sh",
+                "-c",
+                f"""
 REPO_PATH="/home/agent/github/{repo}"
 WORKSPACE="/home/agent/workspace"
 if git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
@@ -182,7 +185,7 @@ if git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
     BRANCH="agent-$(date +%s)-$RANDOM-$RANDOM"
     git -C "$WORKSPACE" checkout -q -b "$BRANCH" || true
 fi
-''',
+""",
             ],
             user="agent",
         )
@@ -190,8 +193,9 @@ fi
         await backend.exec_run(
             sandbox_id,
             [
-                "sh", "-c",
-                '''
+                "sh",
+                "-c",
+                """
 MOUNTED_CENTAUR_SKILLS="/home/agent/centaur-skills"
 MOUNTED_ORG_SKILLS="/home/agent/centaur-overlay-skills"
 CENTAUR_SKILLS=""
@@ -205,7 +209,7 @@ for SKILLS_SRC in "$MOUNTED_CENTAUR_SKILLS" "$CENTAUR_SKILLS" "$MOUNTED_ORG_SKIL
         cp -r "$SKILLS_SRC"/. "$WS_SKILLS"/
     fi
 done
-''',
+""",
             ],
             user="agent",
         )
@@ -213,8 +217,9 @@ done
         await backend.exec_run(
             sandbox_id,
             [
-                "sh", "-c",
-                '''
+                "sh",
+                "-c",
+                """
 if [ -f /home/agent/AGENTS_BASE.md ]; then
     cp /home/agent/AGENTS_BASE.md /home/agent/workspace/AGENTS.md
 elif [ -f /home/agent/AGENTS.md ]; then
@@ -224,7 +229,7 @@ if [ -f /home/agent/AGENTS_OVERLAY.md ] && [ -f /home/agent/workspace/AGENTS.md 
     printf '\n\n---\n\n' >> /home/agent/workspace/AGENTS.md
     cat /home/agent/AGENTS_OVERLAY.md >> /home/agent/workspace/AGENTS.md
 fi
-''',
+""",
             ],
             user="agent",
         )
@@ -243,7 +248,9 @@ fi
     )
     prompt_content = assemble_prompt(
         persona,
-        base_prompt=(_repo_root() / "services" / "sandbox" / "SYSTEM_PROMPT.md").read_text(),
+        base_prompt=(
+            _repo_root() / "services" / "sandbox" / "SYSTEM_PROMPT.md"
+        ).read_text(),
         overlay_prompt_path=overlay_prompt,
         persona_info=persona_info,
         api_overlay_dir=overlay_root,
@@ -260,7 +267,7 @@ fi
                 'mkdir -p /home/agent/workspace && printf "%s" "$_CONTENT" > /home/agent/workspace/AGENTS.md && '
                 "if [ -f /home/agent/AGENTS_OVERLAY.md ]; then "
                 'printf "\\n\\n---\\n\\n" >> /home/agent/workspace/AGENTS.md && '
-                'cat /home/agent/AGENTS_OVERLAY.md >> /home/agent/workspace/AGENTS.md; '
+                "cat /home/agent/AGENTS_OVERLAY.md >> /home/agent/workspace/AGENTS.md; "
                 "fi"
             ),
         ],
@@ -297,6 +304,7 @@ async def claim_container(
     *,
     persona: str | None = None,
     repo: str | None = None,
+    trace_id: str | None = None,
 ) -> SandboxSession | None:
     """Try to claim a warm sandbox from the pool. Returns SandboxSession or None."""
     if harness != POOL_HARNESS:
@@ -342,6 +350,17 @@ async def claim_container(
     except Exception:
         log.warning("warm_claim_token_refresh_failed", sandbox=warm.sandbox_id[:12])
 
+    if trace_id:
+        try:
+            await backend.exec_run(
+                warm.sandbox_id,
+                ["sh", "-c", 'printf "%s" "$TRACE_ID" > /home/agent/.trace_id'],
+                environment={"TRACE_ID": trace_id},
+                user="agent",
+            )
+        except Exception:
+            log.warning("warm_claim_trace_refresh_failed", sandbox=warm.sandbox_id[:12])
+
     if persona or repo:
         await _inject_persona(warm.sandbox_id, persona, repo)
 
@@ -351,6 +370,7 @@ async def claim_container(
         harness=harness,
         engine=warm.engine,
         started_at=time.time(),
+        trace_id=trace_id or "",
     )
     _get_runtime(session.sandbox_id)
 

@@ -21,7 +21,9 @@ class RuntimeState:
     stdout_stream: Any = None  # backend stream for reading stdout
     stdin_stream: Any = None  # backend stream for writing stdin
     attach_context: Any = None  # backend-specific context manager for attach sessions
-    prefetched_stdout: list[str] | None = None  # buffered lines loaded before live attach
+    prefetched_stdout: list[str] | None = (
+        None  # buffered lines loaded before live attach
+    )
     stdout_read_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_result: str | None = None
 
@@ -43,6 +45,7 @@ class SandboxSession:
     inflight_turn_input: dict | None = None
     inflight_attempts: int = 0
     last_result: str = ""
+    trace_id: str = ""
 
 
 class SandboxBackend(abc.ABC):
@@ -70,6 +73,7 @@ class SandboxBackend(abc.ABC):
         warm: bool = False,
         model: str | None = None,
         resume_thread_id: str | None = None,
+        trace_id: str | None = None,
     ) -> SandboxSession:
         """Create and start a new sandbox. Block until ready."""
 
@@ -110,7 +114,12 @@ class SandboxBackend(abc.ABC):
         await self.attach(session)
 
     async def exec_run(
-        self, sandbox_id: str, cmd: list[str], *, environment: dict | None = None, user: str = ""
+        self,
+        sandbox_id: str,
+        cmd: list[str],
+        *,
+        environment: dict | None = None,
+        user: str = "",
     ) -> tuple[int, bytes]:
         """Run a command inside a sandbox and return (exit_code, output)."""
         raise NotImplementedError

@@ -12,6 +12,10 @@ _KEY="${CENTAUR_API_KEY:-}"
 if [ -f /home/agent/.api_key ]; then
   _KEY="$(cat /home/agent/.api_key)"
 fi
+_TRACE_ID="${CENTAUR_TRACE_ID:-}"
+if [ -f /home/agent/.trace_id ]; then
+  _TRACE_ID="$(cat /home/agent/.trace_id)"
+fi
 A="Authorization: Bearer ${_KEY}"
 tool="$1"
 method="$2"
@@ -38,8 +42,11 @@ request() {
     -H "$T"
     "$url"
   )
+  if [ -n "${_TRACE_ID:-}" ]; then
+    curl_args+=(-H "X-Trace-Id: ${_TRACE_ID}")
+  fi
   if [ -n "${CENTAUR_THREAD_KEY:-}" ]; then
-    curl_args+=(-H "X-Trace-Id: ${CENTAUR_THREAD_KEY}")
+    curl_args+=(-H "X-Centaur-Thread-Key: ${CENTAUR_THREAD_KEY}")
   fi
   if [ -n "$data" ]; then
     curl_args+=(-H "$J" -d "$data")

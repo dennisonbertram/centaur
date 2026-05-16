@@ -82,12 +82,14 @@ async def test_db_insert_session_initial_state_tracks_inflight_turn(db_pool):
 
     assert inserted is True
     idle_row = await db_pool.fetchrow(
-        "SELECT state, inflight_turn_id FROM sandbox_sessions WHERE thread_key = $1",
+        "SELECT state, inflight_turn_id, trace_id FROM sandbox_sessions WHERE thread_key = $1",
         idle_thread_key,
     )
     assert idle_row is not None
     assert idle_row["state"] == "idle"
     assert idle_row["inflight_turn_id"] is None
+    assert idle_row["trace_id"] is not None
+    assert idle_session.trace_id == str(idle_row["trace_id"])
 
     running_thread_key = f"slack:C-test:{uuid.uuid4().hex}:running"
     running_session = SandboxSession(
@@ -95,6 +97,7 @@ async def test_db_insert_session_initial_state_tracks_inflight_turn(db_pool):
         thread_key=running_thread_key,
         harness="amp",
         engine="amp",
+        trace_id="00000000-0000-0000-0000-000000000123",
     )
 
     inserted = await _db_insert_session(
@@ -113,13 +116,14 @@ async def test_db_insert_session_initial_state_tracks_inflight_turn(db_pool):
 
     assert inserted is True
     running_row = await db_pool.fetchrow(
-        "SELECT state, inflight_turn_id, inflight_attempts FROM sandbox_sessions WHERE thread_key = $1",
+        "SELECT state, inflight_turn_id, inflight_attempts, trace_id FROM sandbox_sessions WHERE thread_key = $1",
         running_thread_key,
     )
     assert running_row is not None
     assert running_row["state"] == "running"
     assert running_row["inflight_turn_id"] == "turn-live"
     assert running_row["inflight_attempts"] == 1
+    assert str(running_row["trace_id"]) == "00000000-0000-0000-0000-000000000123"
 
 
 @pytest.mark.asyncio
@@ -1734,7 +1738,9 @@ async def test_cancel_execution_stops_runtime_and_clears_inflight(db_pool):
 
 
 @pytest.mark.asyncio
-async def test_steer_execution_does_not_replay_original_prompt_before_cursor_advances(db_pool):
+async def test_steer_execution_does_not_replay_original_prompt_before_cursor_advances(
+    db_pool,
+):
     from api.runtime_control import steer_execution
 
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"
@@ -1869,8 +1875,16 @@ async def test_steer_execution_persists_and_injects_explicit_message(db_pool):
         message_id,
     )
     assert message is not None
-    event_json = json.loads(message["event_json"]) if isinstance(message["event_json"], str) else message["event_json"]
-    metadata = json.loads(message["metadata"]) if isinstance(message["metadata"], str) else message["metadata"]
+    event_json = (
+        json.loads(message["event_json"])
+        if isinstance(message["event_json"], str)
+        else message["event_json"]
+    )
+    metadata = (
+        json.loads(message["metadata"])
+        if isinstance(message["metadata"], str)
+        else message["metadata"]
+    )
     assert event_json["message"]["content"] == content_blocks
     assert metadata["user_id"] == "U-test"
 
@@ -1887,7 +1901,9 @@ async def test_steer_execution_persists_and_injects_explicit_message(db_pool):
 
 
 @pytest.mark.asyncio
-async def test_steer_execution_reports_cancel_when_execution_finishes_during_inject(db_pool):
+async def test_steer_execution_reports_cancel_when_execution_finishes_during_inject(
+    db_pool,
+):
     from api.runtime_control import steer_execution
 
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"
@@ -1931,14 +1947,20 @@ async def test_steer_execution_reports_cancel_when_execution_finishes_during_inj
     backend = SimpleNamespace(attach=AsyncMock())
     with (
         patch("api.runtime_control.get_backend", return_value=backend),
-        patch("api.runtime_control.steer_stdin", AsyncMock(side_effect=_steer_then_cancel)),
+        patch(
+            "api.runtime_control.steer_stdin", AsyncMock(side_effect=_steer_then_cancel)
+        ),
     ):
         result = await steer_execution(
             db_pool,
             execution_id,
             content_blocks=content_blocks,
             message_id=message_id,
-            metadata={"platform": "slack", "user_id": "U-test", "steer_replacement": True},
+            metadata={
+                "platform": "slack",
+                "user_id": "U-test",
+                "steer_replacement": True,
+            },
         )
 
     assert result == {
@@ -1975,14 +1997,21 @@ async def test_steer_execution_reports_cancel_when_execution_finishes_during_inj
     )
     with (
         patch("api.runtime_control.get_backend", return_value=backend),
-        patch("api.runtime_control.steer_stdin", AsyncMock(return_value={"ok": True, "steered": True})),
+        patch(
+            "api.runtime_control.steer_stdin",
+            AsyncMock(return_value={"ok": True, "steered": True}),
+        ),
     ):
         result = await steer_execution(
             db_pool,
             execution_id,
             content_blocks=content_blocks,
             message_id=message_id,
-            metadata={"platform": "slack", "user_id": "U-test", "steer_replacement": True},
+            metadata={
+                "platform": "slack",
+                "user_id": "U-test",
+                "steer_replacement": True,
+            },
         )
     assert result == {
         "ok": True,
@@ -2354,7 +2383,9 @@ async def test_worker_marks_silence_deadline_exceeded_and_stops_session(db_pool)
 
 
 @pytest.mark.asyncio
-async def test_worker_terminalizes_expired_execution_before_reacquiring_runtime(db_pool):
+async def test_worker_terminalizes_expired_execution_before_reacquiring_runtime(
+    db_pool,
+):
     from api.runtime_control import _process_execution
 
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"
@@ -2396,7 +2427,8 @@ async def test_worker_terminalizes_expired_execution_before_reacquiring_runtime(
         "created_at": dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2),
         "claimed_at": dt.datetime.now(dt.timezone.utc),
         "hard_deadline_at": dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1),
-        "silence_deadline_at": dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=90),
+        "silence_deadline_at": dt.datetime.now(dt.timezone.utc)
+        - dt.timedelta(minutes=90),
     }
 
     get_or_spawn = AsyncMock()

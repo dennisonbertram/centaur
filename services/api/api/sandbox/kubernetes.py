@@ -182,7 +182,9 @@ def _proxy_iron_env(
             }
         )
     for secret, proxy_password in pg_secrets:
-        env.append({"name": f"PG_PROXY_PASSWORD_{secret.name}", "value": proxy_password})
+        env.append(
+            {"name": f"PG_PROXY_PASSWORD_{secret.name}", "value": proxy_password}
+        )
     return env
 
 
@@ -337,7 +339,9 @@ def _pod_resources() -> dict[str, Any]:
 
 
 def _prompt_bundle(persona: str | None) -> str:
-    base_prompt = (_repo_root() / "services" / "sandbox" / "SYSTEM_PROMPT.md").read_text()
+    base_prompt = (
+        _repo_root() / "services" / "sandbox" / "SYSTEM_PROMPT.md"
+    ).read_text()
     overlay_root = _overlay_root()
     overlay_prompt = (
         overlay_root / "services" / "sandbox" / "SYSTEM_PROMPT.md"
@@ -985,6 +989,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         warm: bool = False,
         model: str | None = None,
         resume_thread_id: str | None = None,
+        trace_id: str | None = None,
     ) -> SandboxSession:
         _ensure_kubernetes_env()
         await self._ensure_clients()
@@ -1014,6 +1019,7 @@ class KubernetesExecutorBackend(SandboxBackend):
             thread_key,
             pod_name,
             firewall_host,
+            trace_id=trace_id,
             resume_thread_id=resume_thread_id,
             pg_dsns=sandbox_pg_dsns,
         )
@@ -1214,6 +1220,7 @@ class KubernetesExecutorBackend(SandboxBackend):
             engine=engine,
             started_at=time.time(),
             backend_name=self.name,
+            trace_id=trace_id or "",
         )
         log.info(
             "sandbox_spawned",
@@ -1307,7 +1314,9 @@ class KubernetesExecutorBackend(SandboxBackend):
             async for line in self._stream_stdout_unlocked(session):
                 yield line
 
-    async def _stream_stdout_unlocked(self, session: SandboxSession) -> AsyncIterator[str]:
+    async def _stream_stdout_unlocked(
+        self, session: SandboxSession
+    ) -> AsyncIterator[str]:
         rt = _get_rt(session)
         if rt.stdout_stream is None:
             raise RuntimeError("not attached (stdout)")
@@ -1556,12 +1565,12 @@ class KubernetesExecutorBackend(SandboxBackend):
             )
 
         await self._apply_proxy_configmap_data(
-            _proxy_configmap_name(_API_PROXY_SANDBOX_ID), _API_PROXY_SANDBOX_ID, rendered
+            _proxy_configmap_name(_API_PROXY_SANDBOX_ID),
+            _API_PROXY_SANDBOX_ID,
+            rendered,
         )
         await self._create_proxy_service(_API_PROXY_SANDBOX_ID, pg_listen_ports)
-        await self._apply_api_proxy_deployment(
-            pg_secrets, pg_listen_ports, config_hash
-        )
+        await self._apply_api_proxy_deployment(pg_secrets, pg_listen_ports, config_hash)
         await self._wait_deployment_ready(_proxy_pod_name(_API_PROXY_SANDBOX_ID))
         log.info(
             "api_proxy_deployment_ready",

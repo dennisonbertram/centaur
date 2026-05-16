@@ -187,7 +187,7 @@ async def _db_get_session(thread_key: str) -> SandboxSession | None:
     row = await pool.fetchrow(
         "SELECT thread_key, sandbox_id, harness, engine, state, started_at, "
         "agent_thread_id, last_delivered_id, inflight_turn_id, inflight_turn_input, "
-        "inflight_attempts, last_result "
+        "inflight_attempts, last_result, trace_id "
         "FROM sandbox_sessions WHERE thread_key = $1",
         thread_key,
     )
@@ -207,6 +207,7 @@ async def _db_get_session(thread_key: str) -> SandboxSession | None:
         inflight_turn_input=_coerce_json_object(row["inflight_turn_input"]),
         inflight_attempts=int(row["inflight_attempts"] or 0),
         last_result=row["last_result"] or "",
+        trace_id=str(row["trace_id"] or ""),
     )
     rt = _get_runtime(session.sandbox_id)
     if session.inflight_turn_id and rt.turn_counter == 0:
@@ -234,14 +235,16 @@ async def _db_insert_session(
     # the container process exists. Fresh spawns with no in-flight turn should
     # enter the normal idle TTL path.
     initial_state = "running" if inflight_turn_id else "idle"
+    trace_id = session.trace_id or str(uuid.uuid4())
+    session.trace_id = trace_id
     row = await pool.fetchrow(
         "INSERT INTO sandbox_sessions ("
         "thread_key, sandbox_id, harness, engine, state, started_at, "
         "agent_thread_id, last_delivered_id, inflight_turn_id, inflight_turn_input, "
-        "inflight_started_at, inflight_attempts, last_result, last_result_at"
+        "inflight_started_at, inflight_attempts, last_result, last_result_at, trace_id"
         ") VALUES ($1, $2, $3, $4, $5, NOW(), $6, $7, $8::text, $9::jsonb, "
         "CASE WHEN $8::text IS NULL THEN NULL ELSE NOW() END, $10, $11, "
-        "CASE WHEN $11::text = '' THEN NULL ELSE NOW() END) "
+        "CASE WHEN $11::text = '' THEN NULL ELSE NOW() END, $12::uuid) "
         "ON CONFLICT (thread_key) DO NOTHING "
         "RETURNING thread_key",
         session.thread_key,
@@ -255,6 +258,7 @@ async def _db_insert_session(
         json.dumps(inflight_turn_input) if inflight_turn_input is not None else None,
         max(0, inflight_attempts),
         last_result,
+        trace_id,
     )
     return row is not None
 
@@ -590,6 +594,7 @@ async def get_or_spawn(
     old_inflight_turn_input: dict | None = None
     old_inflight_attempts: int = 0
     old_last_result: str = ""
+    old_trace_id: str = ""
     session = await _db_get_session(thread_key)
     if session:
         if session.db_state in _REUSABLE_DB_STATES:
@@ -605,6 +610,7 @@ async def get_or_spawn(
             old_inflight_turn_input = session.inflight_turn_input
             old_inflight_attempts = session.inflight_attempts
             old_last_result = session.last_result
+            old_trace_id = session.trace_id
             await _db_delete_session(thread_key)
             _drop_runtime(session.sandbox_id)
         else:
@@ -615,6 +621,7 @@ async def get_or_spawn(
             old_inflight_turn_input = session.inflight_turn_input
             old_inflight_attempts = session.inflight_attempts
             old_last_result = session.last_result
+            old_trace_id = session.trace_id
             await _db_delete_session(thread_key)
             _drop_runtime(session.sandbox_id)
 
@@ -633,7 +640,10 @@ async def get_or_spawn(
     if should_try_warm:
         from api.warm_pool import claim_container
 
-        claimed = await claim_container(thread_key, harness, persona=persona, repo=repo)
+        trace_id = old_trace_id or str(uuid.uuid4())
+        claimed = await claim_container(
+            thread_key, harness, persona=persona, repo=repo, trace_id=trace_id
+        )
         if claimed:
             if old_agent_thread_id:
                 claimed.agent_thread_id = old_agent_thread_id
@@ -658,6 +668,7 @@ async def get_or_spawn(
     )
     backend = get_backend()
     await _evict_idle_sessions_for_capacity(backend)
+    trace_id = old_trace_id or str(uuid.uuid4())
     session = await backend.create(
         thread_key,
         harness,
@@ -665,7 +676,9 @@ async def get_or_spawn(
         persona=persona,
         repo=repo,
         resume_thread_id=old_agent_thread_id or None,
+        trace_id=trace_id,
     )
+    session.trace_id = trace_id
     if old_agent_thread_id:
         session.agent_thread_id = old_agent_thread_id
     _get_runtime(session.sandbox_id)
@@ -1088,13 +1101,19 @@ async def inject_stdin(
     if flushed and inline_blocks:
         msgs = _flushed_to_messages(flushed)
         content_blocks = messages_to_content_blocks(msgs) + inline_blocks
-        turn_input = build_user_input(content_blocks)
+        turn_input = build_user_input(
+            content_blocks, thread_key=session.thread_key, trace_id=session.trace_id
+        )
     elif flushed:
         msgs = _flushed_to_messages(flushed)
         content_blocks = messages_to_content_blocks(msgs)
-        turn_input = build_user_input(content_blocks)
+        turn_input = build_user_input(
+            content_blocks, thread_key=session.thread_key, trace_id=session.trace_id
+        )
     elif inline_blocks:
-        turn_input = build_user_input(inline_blocks)
+        turn_input = build_user_input(
+            inline_blocks, thread_key=session.thread_key, trace_id=session.trace_id
+        )
     else:
         return {"ok": True, "injected": False}
 
@@ -1191,7 +1210,12 @@ async def steer_stdin(
     The steer message tells Amp to cancel the current tool call and process
     the new message instead, preserving conversation context.
     """
-    turn_input = build_user_input(content_blocks, steer=True)
+    turn_input = build_user_input(
+        content_blocks,
+        steer=True,
+        thread_key=session.thread_key,
+        trace_id=session.trace_id,
+    )
     backend = get_backend()
 
     is_amp = session.engine == "amp" or session.harness == "amp"

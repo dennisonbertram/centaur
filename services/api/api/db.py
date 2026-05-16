@@ -38,6 +38,7 @@ REQUIRED_SANDBOX_SESSION_COLUMNS = frozenset(
         "inflight_attempts",
         "last_result",
         "last_result_at",
+        "trace_id",
     }
 )
 
@@ -50,6 +51,7 @@ REQUIRED_MIGRATIONS = frozenset(
         "009",
         "010",
         "011",
+        "035",
     }
 )
 
@@ -163,7 +165,9 @@ def run_migrations(database_url: str) -> None:
             log.warning("migrations_skipped", reason="no_migration_sets_found")
             return
 
-        log.info("migrations_applied", migration_sets=[ms.name for ms in migration_sets])
+        log.info(
+            "migrations_applied", migration_sets=[ms.name for ms in migration_sets]
+        )
     except FileNotFoundError:
         log.warning(
             "dbmate_not_found", msg="dbmate binary not in PATH, skipping migrations"
