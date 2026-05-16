@@ -50,7 +50,7 @@ RUN useradd -m -s /bin/bash -u 1001 agent \
 
 # ── Global npm CLIs (root, cached) ──────────────────────────────────────────
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    npm install -g @anthropic-ai/claude-code@1.0.16 @openai/codex@0.130.0 @mariozechner/pi-coding-agent@0.67.2 agent-browser@0.26.0
+    npm install -g @anthropic-ai/claude-code@1.0.16 @openai/codex@0.131.0-alpha.4 @mariozechner/pi-coding-agent@0.67.2 agent-browser@0.26.0
 
 # ── agent-browser system deps (must run as root before USER agent) ───────────
 # Chrome for Testing doesn't provide Linux ARM64 builds; fall back to system chromium

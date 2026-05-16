@@ -12,6 +12,12 @@ import signal
 import sys
 from typing import Any
 
+from pydantic import BaseModel
+
+
+class IgnoredResponse(BaseModel):
+    pass
+
 
 def emit(payload: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
@@ -112,14 +118,6 @@ class CodexBridge:
         self.configured_otel_trace_id: str | None = None
         self.shutting_down = False
 
-    async def raw_request(self, method: str, params: dict[str, Any] | None = None) -> None:
-        assert self.codex is not None
-        await self.codex._client._call_sync(
-            self.codex._client._sync._request_raw,
-            method,
-            params or {},
-        )
-
     async def configure_laminar_otel(
         self,
         trace_id: str | None,
@@ -131,10 +129,13 @@ class CodexBridge:
         writes = laminar_otel_writes(trace_id, thread_key)
         if not writes:
             return
+        assert self.codex is not None
+
         for key_path, value in writes:
-            await self.raw_request(
+            await self.codex._client.request(
                 "config/value/write",
                 {"keyPath": key_path, "value": value, "mergeStrategy": "upsert"},
+                response_model=IgnoredResponse,
             )
         self.configured_otel_trace_id = trace_id
 
@@ -169,14 +170,6 @@ class CodexBridge:
         method = str(getattr(notification, "method", "") or "")
         params = _payload_dict(getattr(notification, "payload", {}))
 
-        if method == "thread/started":
-            thread = params.get("thread") or {}
-            tid = thread.get("id") or params.get("threadId")
-            if tid:
-                self.thread_id = str(tid)
-                emit({"type": "thread.started", "thread_id": self.thread_id})
-            return False
-
         if method in {
             "turn/started",
             "item/started",
@@ -192,7 +185,6 @@ class CodexBridge:
             "item/reasoning/textDelta",
             "turn/plan/updated",
             "thread/goal/updated",
-            "thread/goal/cleared",
         }:
             payload = {"type": method.replace("/", "."), **params}
             if (
@@ -274,9 +266,12 @@ class CodexBridge:
         text = input_text(turn_input)
         stripped = text.strip()
         if stripped.startswith("/goal") and (goal := stripped[len("/goal") :].strip()):
-            await self.raw_request(
+            assert self.codex is not None
+
+            await self.codex._client.request(
                 "thread/goal/set",
                 {"threadId": thread_id, "objective": goal},
+                response_model=IgnoredResponse,
             )
             emit(
                 {
@@ -331,6 +326,7 @@ class CodexBridge:
             config_overrides=(
                 'sandbox_mode="danger-full-access"',
                 'approval_policy="never"',
+                "features.goals=true",
             ),
             cwd=os.getcwd(),
             client_name="centaur",
@@ -341,10 +337,6 @@ class CodexBridge:
 
         async with AsyncCodex(config=config) as codex:
             self.codex = codex
-            await self.raw_request(
-                "config/value/write",
-                {"keyPath": "features.goals", "value": True, "mergeStrategy": "upsert"},
-            )
             emit({"type": "system", "subtype": "wrapper_heartbeat", "phase": "startup"})
 
             stdin_task = asyncio.create_task(read_api_stdin(self.inputs))
