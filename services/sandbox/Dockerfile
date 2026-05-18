@@ -89,13 +89,23 @@ ARG MANIM_VERSION=0.20.1
 ARG BUN_VERSION=bun-v1.3.13
 
 # ── Agent-scoped toolchains ─────────────────────────────────────────────────
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --profile minimal --component rustfmt --component clippy \
+    && rustc --version \
+    && cargo --version \
+    && rustfmt --version \
+    && clippy-driver --version
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 RUN curl -fsSL https://bun.sh/install | bash -s "${BUN_VERSION}"
-RUN uv tool install "manim==${MANIM_VERSION}" \
+RUN --mount=type=cache,target=/home/agent/.cache/uv,uid=1001,gid=1001,sharing=locked \
+    uv tool install "manim==${MANIM_VERSION}" \
     && manim --version
 RUN curl -L https://foundry.paradigm.xyz | bash \
-    && /home/agent/.foundry/bin/foundryup --install ${FOUNDRY_VERSION}
+    && /home/agent/.foundry/bin/foundryup --install ${FOUNDRY_VERSION} \
+    && for bin in forge cast anvil chisel; do \
+      rm -f "$HOME/.foundry/bin/$bin"; \
+      ln -s "$HOME/.foundry/versions/${FOUNDRY_VERSION}/$bin" "$HOME/.foundry/bin/$bin"; \
+    done
 RUN set -eux; \
     amp_platform="$(case "$(dpkg --print-architecture)" in \
       amd64) echo linux-x64 ;; \
@@ -117,7 +127,8 @@ RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
     fi
 
 # ── Agent skills + workspace setup (rarely changes) ─────────────────────────
-RUN npx -y skills add vercel-labs/agent-browser
+RUN --mount=type=cache,target=/home/agent/.npm,uid=1001,gid=1001,sharing=locked \
+    npx -y skills add vercel-labs/agent-browser
 RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace \
     && git config --global init.defaultBranch main \
     && git config --global push.autoSetupRemote true \
