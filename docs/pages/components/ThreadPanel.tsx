@@ -6,6 +6,9 @@ type Reply = {
   text: string
   time: string
   card?: TaskCardData
+  who?: string
+  glyph?: string
+  color?: string
 }
 
 type TaskCardData = {
@@ -32,80 +35,203 @@ type ThreadData = {
 
 const threadData: ThreadData[] = [
   {
-    id: 'retro-q3',
-    channel: 'ai-agent',
+    id: 'tempo-merch',
+    channel: 'builds',
     parent: {
-      who: 'Derek Cofausper',
-      glyph: 'D',
-      color: '#f59e0b',
-      time: 'Today at 10:14 AM',
-      body: ' — quick TL;DR of the Q3 retro doc? Lorem ipsum dolor sit amet, consectetur — what should I focus on first?',
+      who: 'Perry Dime',
+      glyph: 'P',
+      color: '#f97316',
+      time: 'Today at 9:02 AM',
+      body: ' build a merch store: stablecoin checkout, NFT receipt, one-time redemption for shipping details, and an admin view for fulfillment. Use Vite, Cloudflare Workers, D1, R2, Tempo Accounts, wagmi, viem, and MPP image generation.',
     },
     replies: [
       {
         from: 'bot',
-        text: 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.',
-        time: '10:15 AM',
+        text: 'I scaffolded the app, wired Tempo Accounts from the reference repo, added the redemption data model, and deployed a first preview. The flow now has product pages, stablecoin checkout, generated artwork, NFT purchase, and a seller dashboard.',
+        time: '9:18 AM',
         card: {
-          title: 'Calling tools...',
+          title: 'Building preview...',
           items: [
             {
-              command: "/bin/bash -lc \"call gsuite search '{\\\"query\\\":\\\"Q3 retro\\\",\\\"max_results\\\":5}'\"",
+              command: "gh repo create tempoxyz/merch --private --source . --push",
               output:
-                '{"files":[{"id":"1q3RetroDoc9Vx","name":"Q3 Retro","mimeType":"application/vnd.google-apps.document","webViewLink":"https://docs.google.com/document/d/1q3RetroDoc9Vx/edit","modifiedTime":"2026-05-17T07:42:11.382Z"}],"nextPageToken":null}',
+                '{"repository":"tempoxyz/merch","visibility":"private","default_branch":"main"}',
             },
             {
-              command: "/bin/bash -lc \"call gsuite read_doc '{\\\"url\\\":\\\"https://docs.google.com/document/d/q3-retro\\\"}'\"",
+              command: "rg \"createConfig|tempo\" ../tip.bot src",
               output:
-                '{"documentId":"1q3RetroDoc9Vx","title":"Q3 Retro","revisionId":"ANk3x9b2","body":{"content_length":18426,"headings":[{"level":1,"text":"Goals"},{"level":1,"text":"Misses"},{"level":1,"text":"Follow-ups"}]}}',
+                'src/lib/accounts.ts:import { tempo } from "viem/chains"\nsrc/lib/accounts.ts:export const wagmiConfig = createConfig({...})',
             },
             {
-              command: "/bin/bash -lc \"call slack search_messages '{\\\"query\\\":\\\"Q3 retro #ai-agent\\\",\\\"max_results\\\":10}'\"",
+              command: "npm run build && npx wrangler deploy",
               output:
-                '[{"channel":"ai-agent","channel_id":"C0A87C21805","user":"derek","user_id":"U03DEREK","timestamp":"1778921132.119000","thread_ts":"1778921132.119000","reply_count":7,"text":"follow-up owners for Q3 retro"}]',
+                'vite built in 2.8s\nUploaded merch-preview worker\nhttps://merch.tempo-dev.workers.dev',
             },
           ],
         },
       },
       {
         from: 'user',
-        text: 'Nice. What were the three biggest misses?',
-        time: '10:16 AM',
+        text: 'Update wagmi and accounts to the latest compatible versions.',
+        time: '9:24 AM',
+        who: 'Derek Cofausper',
+        glyph: 'D',
+        color: '#0f766e',
       },
       {
         from: 'bot',
-        text: 'Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore. Three notable items: excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium.',
-        time: '10:16 AM',
+        text: 'Opened a dependency PR that moves wagmi, viem, Accounts, and mppx forward together. I used package-manager overrides for the prerelease wagmi packages so CI resolves the same build locally and on GitHub Actions.',
+        time: '9:26 AM',
+        card: {
+          title: 'Updating dependencies...',
+          items: [
+            {
+              command: "pnpm up wagmi viem @tempo-xyz/accounts mppx",
+              output:
+                '@tempo-xyz/accounts 0.10.3 -> 0.10.6\nwagmi 3.6.12 -> pkg.pr.new/wagmi@838a05e\nviem already current\nmppx already current',
+            },
+            {
+              command: "pnpm install --lockfile-only && pnpm install --frozen-lockfile",
+              output: 'Lockfile is up to date\nDone in 4.1s',
+            },
+          ],
+        },
       },
       {
         from: 'user',
-        text: 'Got it. Who owned the rollback on day two?',
-        time: '10:17 AM',
+        text: 'Checkout is throwing: TypeError: Do not know how to serialize a BigInt.',
+        time: '9:32 AM',
+        who: 'Derek Cofausper',
+        glyph: 'D',
+        color: '#0f766e',
       },
       {
         from: 'bot',
-        text: 'Totam rem aperiam — eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.',
-        time: '10:18 AM',
+        text: 'Fixed the purchase payload by serializing BigInt values before JSON.stringify and sending product.price as a string. That matches the /api/purchases handler, which stores the value in D1 without numeric coercion.',
+        time: '9:34 AM',
+        card: {
+          title: 'Fixing purchase JSON...',
+          items: [
+            {
+              command: "rg \"JSON.stringify|price\" src/routes src/api",
+              output:
+                'src/routes/shop.$productId.tsx: JSON.stringify(body, bigintReplacer)\nsrc/api/purchases.ts: price: string',
+            },
+            {
+              command: "npm run typecheck && npm test",
+              output: 'typecheck passed\npurchase payload tests passed',
+            },
+          ],
+        },
       },
       {
         from: 'user',
-        text: 'Can you draft a follow-up message I can drop in #ai-agent?',
-        time: '10:19 AM',
+        text: 'The wallet says eth_signRawTransaction does not exist. Is that the app or the relay?',
+        time: '10:05 AM',
+        who: 'Perry Dime',
+        glyph: 'P',
+        color: '#f97316',
       },
       {
         from: 'bot',
-        text: "Sure — here's a draft: Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor sit amet, consectetur, adipisci velit. Want me to tighten it or add specific names?",
-        time: '10:20 AM',
+        text: 'It is relay configuration. The checkout batches an ERC20 transfer and NFT purchase, so the wallet asks the relay to sponsor and sign the raw transaction. I opened one PR to set the fee-payer secret during deploy and another in Accounts to return a clear fee-payer error instead of a generic method-not-found response.',
+        time: '10:09 AM',
+        card: {
+          title: 'Tracing relay behavior...',
+          items: [
+            {
+              command: "rg \"feePayer|eth_signRawTransaction|Handler.relay\" src packages",
+              output:
+                'worker/api/relay.ts: Handler.relay({ feePayer, transports })\npackages/accounts/src/relay.ts: eth_signRawTransaction requires configured sponsorship',
+            },
+            {
+              command: "pnpm test relay",
+              output:
+                'passes eth_sendRawTransaction through\nreturns a fee-payer setup error for eth_signRawTransaction when sponsorship is missing',
+            },
+          ],
+        },
       },
       {
         from: 'user',
-        text: 'Perfect, ship it. Anything else worth flagging?',
-        time: '10:21 AM',
+        text: 'Now Review Transaction reports: too many connections from this IP.',
+        time: '11:12 AM',
+        who: 'Perry Dime',
+        glyph: 'P',
+        color: '#f97316',
       },
       {
         from: 'bot',
-        text: 'At vero eos et accusamus et iusto odio dignissimos ducimus qui blanditiis praesentium. Et harum quidem rerum facilis est et expedita distinctio — let me know if you want me to set a reminder.',
-        time: '10:21 AM',
+        text: 'That response is coming from the upstream Tempo RPC, not the merch app. The Worker is proxying eth_fillTransaction, and the RPC is rate-limiting the shared Cloudflare egress IP. The clean fix is to configure the relay with a dedicated RPC transport for Tempo mainnet.',
+        time: '11:15 AM',
+        card: {
+          title: 'Checking RPC path...',
+          items: [
+            {
+              command: "call logs query '{\"service\":\"merch-worker\",\"contains\":\"too many connections\"}'",
+              output:
+                '{"method":"eth_fillTransaction","upstream":"https://rpc.tempo.xyz","error":"too many connections from this IP"}',
+            },
+            {
+              command: "rg \"transports\" node_modules/@tempo-xyz/accounts src",
+              output:
+                'Handler.relay({ transports: { [tempo.id]: http(env.TEMPO_RPC_URL) } })',
+            },
+          ],
+        },
+      },
+      {
+        from: 'user',
+        text: 'Add the custom RPC as an env var and use it in the relay.',
+        time: '11:18 AM',
+        who: 'Derek Cofausper',
+        glyph: 'D',
+        color: '#0f766e',
+      },
+      {
+        from: 'bot',
+        text: 'Added TEMPO_RPC_URL to the Worker environment and wired the relay transport to use it for Tempo mainnet fill and sponsorship calls.',
+        time: '11:22 AM',
+        card: {
+          title: 'Wiring private RPC...',
+          items: [
+            {
+              command: "npx wrangler secret put TEMPO_RPC_URL",
+              output: 'Secret TEMPO_RPC_URL uploaded to merch-preview',
+            },
+            {
+              command: "npm run typecheck && npm run build",
+              output: 'typecheck passed\nvite built in 2.6s',
+            },
+          ],
+        },
+      },
+      {
+        from: 'user',
+        text: 'Secret added. Deploy and dogfood the checkout flow.',
+        time: '11:25 AM',
+        who: 'Perry Dime',
+        glyph: 'P',
+        color: '#f97316',
+      },
+      {
+        from: 'bot',
+        text: 'No issues found. I deployed the Worker, opened the preview, completed account connection, generated artwork, ran checkout, confirmed the NFT purchase, and verified the redemption data appears in the admin view. Deployment: https://merch.tempo-dev.workers.dev',
+        time: '11:31 AM',
+        card: {
+          title: 'Deploying and dogfooding...',
+          items: [
+            {
+              command: "npx wrangler deploy",
+              output: 'Uploaded merch-preview worker\nhttps://merch.tempo-dev.workers.dev',
+            },
+            {
+              command: "npm run dogfood -- --url https://merch.tempo-dev.workers.dev",
+              output:
+                'account connect passed\nartwork generation passed\ncheckout passed\nredemption form passed\nadmin fulfillment view passed\n0 issues found',
+            },
+          ],
+        },
       },
     ],
   },
@@ -565,8 +691,11 @@ function ThreadDetail({
             {reply.from === 'bot' ? (
               <BotAvatar glyph={botGlyph} accent={accent} />
             ) : (
-              <div className="thread-panel-avatar thread-panel-avatar-user">
-                {thread.parent.glyph}
+              <div
+                className="thread-panel-avatar thread-panel-avatar-user"
+                style={reply.color ? { background: reply.color } : undefined}
+              >
+                {reply.glyph ?? thread.parent.glyph}
               </div>
             )}
             <div>
@@ -574,7 +703,7 @@ function ThreadDetail({
                 <span
                   className={reply.from === 'bot' ? 'thread-panel-name-bot' : 'thread-panel-name'}
                 >
-                  {reply.from === 'bot' ? botName : thread.parent.who}
+                  {reply.from === 'bot' ? botName : (reply.who ?? thread.parent.who)}
                 </span>
                 {reply.from === 'bot' && <span className="thread-panel-badge">App</span>}
                 <span className="thread-panel-time">
