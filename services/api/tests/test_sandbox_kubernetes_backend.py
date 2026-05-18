@@ -31,6 +31,7 @@ class FakeCoreApi:
         self.patched_configmaps: list[tuple[str, str, dict]] = []
         self.pods_to_read: list[SimpleNamespace] = []
         self.pod_list_items: list[SimpleNamespace] = []
+        self.list_pod_calls: list[tuple[str, str]] = []
 
     async def delete_namespaced_secret(self, name: str, namespace: str) -> None:
         self.deleted_secrets.append((namespace, name))
@@ -73,10 +74,24 @@ class FakeCoreApi:
 
     async def list_namespaced_pod(
         self,
-        namespace: str,  # noqa: ARG002
-        label_selector: str = "",  # noqa: ARG002
+        namespace: str,
+        label_selector: str = "",
     ) -> SimpleNamespace:
-        return SimpleNamespace(items=list(self.pod_list_items))
+        self.list_pod_calls.append((namespace, label_selector))
+        if self.pod_list_items:
+            return SimpleNamespace(items=list(self.pod_list_items))
+        selector = dict(
+            item.split("=", 1) for item in label_selector.split(",") if "=" in item
+        )
+        items = []
+        for _, body in self.created_pods:
+            metadata = body.get("metadata", {})
+            labels = metadata.get("labels", {})
+            if all(labels.get(key) == value for key, value in selector.items()):
+                items.append(
+                    SimpleNamespace(metadata=SimpleNamespace(name=metadata["name"]))
+                )
+        return SimpleNamespace(items=items)
 
 
 class FakeWebSocket:
@@ -648,6 +663,10 @@ async def test_create_builds_per_sandbox_proxy_resources(
 
     replacement = await backend.create("slack:C123:123.456", "amp", "amp")
     assert replacement.sandbox_id != session.sandbox_id
+    assert (
+        fake_core.created_pods[2][1]["metadata"]["name"]
+        != proxy_pod["metadata"]["name"]
+    )
 
 
 @pytest.mark.asyncio
@@ -732,6 +751,9 @@ async def test_stop_by_id_removes_per_sandbox_proxy_resources(
     fake_networking = FakeNetworkingApi()
     backend._core = fake_core
     backend._networking = fake_networking
+    fake_core.pod_list_items = [
+        SimpleNamespace(metadata=SimpleNamespace(name="proxy-pod-unique"))
+    ]
     monkeypatch.setenv("KUBERNETES_NAMESPACE", "centaur-sandbox")
 
     async def fake_ensure_clients() -> None:
@@ -742,6 +764,13 @@ async def test_stop_by_id_removes_per_sandbox_proxy_resources(
     await backend.stop_by_id("sandbox-pod")
 
     assert ("centaur-sandbox", "sandbox-pod", 5) in fake_core.deleted_pods
+    assert ("centaur-sandbox", "proxy-pod-unique", 5) in fake_core.deleted_pods
+    assert fake_core.list_pod_calls == [
+        (
+            "centaur-sandbox",
+            "centaur.ai/iron-proxy=true,centaur.ai/sandbox-id=sandbox-pod",
+        )
+    ]
     assert any(
         name.startswith("centaur-centaur-proxy-")
         for _, name, _ in fake_core.deleted_pods

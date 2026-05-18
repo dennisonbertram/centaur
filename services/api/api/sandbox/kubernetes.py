@@ -287,6 +287,15 @@ def _proxy_pod_name(sandbox_id: str) -> str:
     return _resource_name("centaur-centaur-proxy", sandbox_id)
 
 
+def _new_proxy_pod_name(sandbox_id: str) -> str:
+    if sandbox_id == _API_PROXY_SANDBOX_ID:
+        return _API_PROXY_POD_NAME
+    return _resource_name(
+        "centaur-centaur-proxy",
+        f"{sandbox_id}:{uuid.uuid4().hex[:8]}",
+    )
+
+
 def _proxy_service_name(sandbox_id: str) -> str:
     if sandbox_id == _API_PROXY_SANDBOX_ID:
         return _API_PROXY_POD_NAME
@@ -511,10 +520,27 @@ class KubernetesExecutorBackend(SandboxBackend):
 
     async def _delete_proxy_resources(self, sandbox_id: str) -> None:
         await self._delete_pod(_proxy_pod_name(sandbox_id))
+        await self._delete_proxy_pods_for_sandbox(sandbox_id)
         await self._delete_service(_proxy_service_name(sandbox_id))
         await self._delete_configmap(_proxy_configmap_name(sandbox_id))
         await self._delete_network_policy(_sandbox_egress_policy_name(sandbox_id))
         await self._delete_network_policy(_proxy_policy_name(sandbox_id))
+
+    async def _delete_proxy_pods_for_sandbox(self, sandbox_id: str) -> None:
+        try:
+            pods = await self._core_api().list_namespaced_pod(
+                _namespace(),
+                label_selector=f"{_PROXY_LABEL}=true,centaur.ai/sandbox-id={sandbox_id}",
+            )
+        except Exception as exc:
+            if not self._is_not_found(exc):
+                raise
+            return
+        for item in getattr(pods, "items", []) or []:
+            metadata = getattr(item, "metadata", None)
+            pod_name = getattr(metadata, "name", "") if metadata is not None else ""
+            if pod_name:
+                await self._delete_pod(pod_name)
 
     def _collect_secrets(self) -> list[tuple[SecretDef, tuple[str, ...]]]:
         from api.app import get_tool_manager
@@ -853,12 +879,11 @@ class KubernetesExecutorBackend(SandboxBackend):
         sandbox_id: str,
         pg_secrets: list[tuple[PgDsnSecret, str]],
         pg_listen_ports: dict[str, int],
-    ) -> None:
-        proxy_pod_name = _proxy_pod_name(sandbox_id)
+    ) -> str:
+        proxy_pod_name = _new_proxy_pod_name(sandbox_id)
         spec = self._build_proxy_pod_spec(
             sandbox_id, pg_secrets, pg_listen_ports, restart_policy="Never"
         )
-        await self._delete_pod(proxy_pod_name)
         await self._core_api().create_namespaced_pod(
             _namespace(),
             {
@@ -874,6 +899,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                 "spec": spec,
             },
         )
+        return proxy_pod_name
 
     async def _apply_api_proxy_deployment(
         self,
@@ -1202,8 +1228,10 @@ class KubernetesExecutorBackend(SandboxBackend):
             await self._create_proxy_configmap(pod_name, secrets, pg_listen_ports)
             await self._create_proxy_service(pod_name, pg_listen_ports)
             await self._create_proxy_network_policies(pod_name, pg_listen_ports)
-            await self._create_proxy_pod(pod_name, pg_secrets, pg_listen_ports)
-            await self._wait_pod_ready(_proxy_pod_name(pod_name))
+            proxy_pod_name = await self._create_proxy_pod(
+                pod_name, pg_secrets, pg_listen_ports
+            )
+            await self._wait_pod_ready(proxy_pod_name)
             await self._core_api().create_namespaced_pod(_namespace(), pod_spec)
             await self._wait_ready(pod_name)
         except BaseException:
