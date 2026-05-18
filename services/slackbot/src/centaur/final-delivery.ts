@@ -11,7 +11,7 @@ export function startFinalDeliveryPoller(config: AppConfig, client: WebClient): 
   if (!centaurApiKey(config)) return
   const tick = async () => {
     try {
-      await pollOnce(config, client)
+      await pollFinalDeliveriesOnce(config, client)
     } catch (error) {
       logError('final_delivery_poll_failed', error)
     }
@@ -20,7 +20,7 @@ export function startFinalDeliveryPoller(config: AppConfig, client: WebClient): 
   void tick()
 }
 
-async function pollOnce(config: AppConfig, client: WebClient): Promise<void> {
+export async function pollFinalDeliveriesOnce(config: AppConfig, client: WebClient): Promise<void> {
   const claimed = await centaur(config, '/agent/final-deliveries/claim', {
     consumer_id: CONSUMER_ID,
     platform: 'slack',

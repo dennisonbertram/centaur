@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "bun --hot --watch src/index.ts",
+    "test": "bun test src/*.test.ts src/**/*.test.ts",
     "format": "oxfmt --config='oxfmt.config.ts' --write",
     "lint": "oxlint --config='oxlint.config.ts' --type-aware --type-check --fix-dangerously",
     "check": "bun format && bun lint",
