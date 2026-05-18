@@ -59,6 +59,7 @@
             "tailnetFqdnAnnotation": { "type": "string" }
           }
         },
+        "slackEtlEnabled": { "type": "boolean" },
         "slackSyncIntervalSeconds": { "type": "integer" },
         "slackSyncLookbackDays": { "type": "integer" },
         "slackSyncThreadLookbackDays": { "type": "integer" },

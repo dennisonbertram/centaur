@@ -44,7 +44,7 @@ def _nonnegative_int(value: int | str | None, default: int) -> int:
     return parsed if parsed >= 0 else default
 
 
-def _env_flag_enabled(name: str, default: bool = True) -> bool:
+def _env_flag_enabled(name: str, default: bool = False) -> bool:
     """Read a boolean feature flag where common false strings opt out."""
     value = os.getenv(name)
     if value is None:
@@ -59,7 +59,7 @@ SCHEDULE = {
         DEFAULT_SYNC_INTERVAL_SECONDS,
     ),
     "enabled": (
-        _env_flag_enabled("SLACK_ETL_ENABLED", default=True)
+        _env_flag_enabled("SLACK_ETL_ENABLED")
         and _env_flag_enabled("COMPANY_CONTEXT_DOCUMENTS_ENABLED", default=True)
     ),
     "no_delivery": True,
@@ -464,7 +464,7 @@ async def _delete_document(pool, document_id: str) -> bool:
 async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     """Project changed Slack sync rows into embeddable company context documents."""
     if not (
-        _env_flag_enabled("SLACK_ETL_ENABLED", default=True)
+        _env_flag_enabled("SLACK_ETL_ENABLED")
         and _env_flag_enabled("COMPANY_CONTEXT_DOCUMENTS_ENABLED", default=True)
     ):
         ctx.log("company_context_documents_skipped_disabled")

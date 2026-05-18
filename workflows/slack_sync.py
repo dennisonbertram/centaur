@@ -48,7 +48,7 @@ DEFAULT_SYNC_INTERVAL_SECONDS = 3_600
 EXCLUDED_CHANNELS_ENV = "SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS"
 
 
-def _env_flag_enabled(name: str, default: bool = True) -> bool:
+def _env_flag_enabled(name: str, default: bool = False) -> bool:
     """Read a boolean feature flag where common false strings opt out."""
     return env_flag_enabled(name, default=default)
 
@@ -105,7 +105,7 @@ SCHEDULE = {
         os.getenv("SLACK_SYNC_INTERVAL_SECONDS"),
         DEFAULT_SYNC_INTERVAL_SECONDS,
     ),
-    "enabled": _env_flag_enabled("SLACK_ETL_ENABLED", default=True),
+    "enabled": _env_flag_enabled("SLACK_ETL_ENABLED"),
     "no_delivery": True,
 }
 
@@ -323,7 +323,7 @@ async def _update_checkpoint_failure(
 
 async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     """Sync public Slack channels visible through the configured ETL user token."""
-    if not _env_flag_enabled("SLACK_ETL_ENABLED", default=True):
+    if not _env_flag_enabled("SLACK_ETL_ENABLED"):
         ctx.log("slack_sync_skipped_disabled")
         return {
             "status": "skipped",

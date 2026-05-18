@@ -29,7 +29,12 @@ async def _clear_company_context_tables(db_pool):
     yield
 
 
-def test_schedule_defaults_to_four_hour_interval(monkeypatch):
+@pytest.fixture(autouse=True)
+def _enable_slack_etl(monkeypatch):
+    monkeypatch.setenv("SLACK_ETL_ENABLED", "true")
+
+
+def test_schedule_defaults_disabled_with_four_hour_interval(monkeypatch):
     monkeypatch.delenv("SLACK_ETL_ENABLED", raising=False)
     monkeypatch.delenv("COMPANY_CONTEXT_DOCUMENTS_ENABLED", raising=False)
     monkeypatch.delenv("COMPANY_CONTEXT_DOCUMENTS_INTERVAL_SECONDS", raising=False)
@@ -41,7 +46,7 @@ def test_schedule_defaults_to_four_hour_interval(monkeypatch):
     assert reloaded.SCHEDULE == {
         "schedule_id": "company_context_documents",
         "interval_seconds": 14400,
-        "enabled": True,
+        "enabled": False,
         "no_delivery": True,
     }
 

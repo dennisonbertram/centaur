@@ -166,6 +166,7 @@ class FakeSlackClient:
 
 @pytest_asyncio.fixture(autouse=True)
 async def _clear_slack_sync_tables(db_pool, monkeypatch):
+    monkeypatch.setenv("SLACK_ETL_ENABLED", "true")
     monkeypatch.delenv("SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS", raising=False)
     await db_pool.execute(
         "TRUNCATE TABLE slack_sync_backfill_jobs, slack_sync_checkpoints, "
@@ -253,7 +254,7 @@ def _reply_message() -> dict[str, Any]:
     }
 
 
-def test_schedule_defaults_enabled(monkeypatch):
+def test_schedule_defaults_disabled(monkeypatch):
     monkeypatch.delenv("SLACK_ETL_ENABLED", raising=False)
     monkeypatch.delenv("SLACK_SYNC_INTERVAL_SECONDS", raising=False)
 
@@ -264,7 +265,7 @@ def test_schedule_defaults_enabled(monkeypatch):
     assert reloaded.SCHEDULE == {
         "schedule_id": "slack_sync",
         "interval_seconds": 3600,
-        "enabled": True,
+        "enabled": False,
         "no_delivery": True,
     }
 
@@ -281,7 +282,7 @@ def test_schedule_respects_env_overrides(monkeypatch):
     assert reloaded.SCHEDULE["interval_seconds"] == 900
 
 
-def test_backfill_schedule_defaults_enabled(monkeypatch):
+def test_backfill_schedule_defaults_disabled(monkeypatch):
     monkeypatch.delenv("SLACK_ETL_ENABLED", raising=False)
     monkeypatch.delenv("SLACK_BACKFILL_ENABLED", raising=False)
     monkeypatch.delenv("SLACK_BACKFILL_INTERVAL_SECONDS", raising=False)
@@ -296,7 +297,7 @@ def test_backfill_schedule_defaults_enabled(monkeypatch):
     assert reloaded.SCHEDULE == {
         "schedule_id": "slack_backfill",
         "interval_seconds": 60,
-        "enabled": True,
+        "enabled": False,
         "no_delivery": True,
     }
 
@@ -328,7 +329,7 @@ def test_repo_slack_client_paths_prefer_reorganized_tool_layout():
 
 
 @pytest.mark.asyncio
-async def test_slack_etl_disabled_noops_without_run_row(db_pool, monkeypatch):
+async def test_slack_etl_disabled_by_default_noops_without_run_row(db_pool, monkeypatch):
     from workflows import slack_sync
 
     await db_pool.execute(
@@ -337,7 +338,7 @@ async def test_slack_etl_disabled_noops_without_run_row(db_pool, monkeypatch):
     )
     fake = FakeSlackClient(channels=[_public_channel()])
     ctx = FakeCtx(db_pool)
-    monkeypatch.setenv("SLACK_ETL_ENABLED", "false")
+    monkeypatch.delenv("SLACK_ETL_ENABLED", raising=False)
 
     with patch.object(slack_sync, "_client", return_value=fake):
         result = await slack_sync.handler(slack_sync.Input(), ctx)

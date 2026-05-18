@@ -56,7 +56,7 @@ api:
   executionWorkerEnabled: false
   workflowWorkerEnabled: true
   warmPoolEnabled: false
-  slackEtlEnabled: true
+  slackEtlEnabled: false
   slackSyncIntervalSeconds: 3600
   slackBackfillIntervalSeconds: 3600
   slackBackfillChannelBatchLimit: 20

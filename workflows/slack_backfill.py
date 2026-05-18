@@ -59,7 +59,7 @@ SCHEDULE = {
         DEFAULT_SYNC_INTERVAL_SECONDS,
     ),
     "enabled": (
-        env_flag_enabled("SLACK_ETL_ENABLED", default=True)
+        env_flag_enabled("SLACK_ETL_ENABLED", default=False)
         and env_flag_enabled("SLACK_BACKFILL_ENABLED", default=True)
     ),
     "no_delivery": True,
@@ -164,7 +164,7 @@ def _thread_refresh_payload(job: dict[str, Any]) -> dict[str, Any]:
 async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     """Drain queued Slack backfill continuations in small, bounded batches."""
     if not (
-        env_flag_enabled("SLACK_ETL_ENABLED", default=True)
+        env_flag_enabled("SLACK_ETL_ENABLED", default=False)
         and env_flag_enabled("SLACK_BACKFILL_ENABLED", default=True)
     ):
         ctx.log("slack_backfill_skipped_disabled")
