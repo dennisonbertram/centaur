@@ -6,10 +6,49 @@ description: Configure Centaur to resolve tool and harness credentials from 1Pas
 # Use 1Password
 
 Use 1Password when you want tool and harness credentials to stay out of sandbox
-pods and out of the API process. Sandboxes receive placeholders. [iron-proxy](https://iron.sh)
+pods and out of the API process. Sandboxes receive placeholders. [iron-proxy](https://docs.iron.sh)
 resolves the real credential and injects it only for allowed upstream hosts.
 
-## Configure the chart
+There are two source modes:
+
+- `onepassword-connect` runs an in-cluster 1Password Connect server and has
+  iron-proxy talk to it with a Connect token. **This is the preferred mode
+  for production**, mostly because the service-account SDK is rate-limited
+  by 1Password and Connect is not. Under any non-trivial agent load you
+  will hit those limits with the SDK. Connect resolves locally against the
+  in-cluster server and stays out of the way.
+- `onepassword` uses a 1Password service-account token directly from
+  iron-proxy. Simpler to set up and fine for local development or low-volume
+  deployments, but expect throttling once real traffic shows up.
+
+## Configure the chart (Connect, preferred)
+
+```yaml
+ironProxy:
+  secretSource: onepassword-connect
+  secretTtl: 10m
+
+onepasswordConnect:
+  connect:
+    create: true
+    credentialsName: centaur-onepassword-connect-credentials
+    credentialsKey: 1password-credentials.json
+
+secretManager:
+  existingSecretName: centaur-infra-env
+  envPrefix: ""
+```
+
+The credentials Secret must contain `1password-credentials.json`; local
+bootstrap creates it when `OP_CONNECT_CREDENTIALS_FILE` points at that file.
+The infra Secret must include:
+
+```text
+OP_CONNECT_TOKEN
+OP_VAULT
+```
+
+## Configure the chart (service account)
 
 ```yaml
 ironProxy:
@@ -46,21 +85,23 @@ Those are boot-time service secrets, not tool credentials.
 For the normal tool declaration:
 
 ```toml
-[tool.ai-v2]
-hosts = ["warehouse.internal.example.com"]
-secrets = ["WAREHOUSE_API_KEY"]
+[tool.centaur]
+secrets = [
+    {type = "http", name = "WAREHOUSE_API_KEY", match_headers = ["Authorization"], hosts = ["warehouse.internal.example.com"]},
+]
 ```
 
 Create a 1Password item named `WAREHOUSE_API_KEY` in `OP_VAULT`, with the value
-stored in the `credential` field. [iron-proxy](https://iron.sh) resolves:
+stored in the `credential` field. [iron-proxy](https://docs.iron.sh) resolves:
 
 ```text
 op://$OP_VAULT/WAREHOUSE_API_KEY/credential
 ```
 
 The tool sees `WAREHOUSE_API_KEY` as a placeholder. For requests to
-`warehouse.internal.example.com`, [iron-proxy](https://iron.sh) replaces that placeholder with the
-real 1Password value.
+`warehouse.internal.example.com` whose `Authorization` header contains the
+placeholder, [iron-proxy](https://docs.iron.sh) replaces it with the real
+1Password value.
 
 ## Harness credentials
 
@@ -74,37 +115,9 @@ Store enabled harness credentials the same way:
 
 Each item should live in `OP_VAULT` with its value in `credential`.
 
-## 1Password Connect
-
-Use service-account mode (`ironProxy.secretSource: onepassword`) unless your
-cluster already standardizes on an in-cluster 1Password Connect deployment.
-Connect mode is useful when operators want all 1Password access to go through a
-Connect server and token instead of direct service-account resolution from the
-proxy.
-
-If your cluster should run 1Password Connect with this chart, use:
-
-```yaml
-ironProxy:
-  secretSource: onepassword-connect
-
-onepasswordConnect:
-  connect:
-    create: true
-    credentialsName: centaur-onepassword-connect-credentials
-    credentialsKey: 1password-credentials.json
-```
-
-This mode resolves the same `op://$OP_VAULT/<secret_ref>/credential` references,
-but through the in-cluster Connect service.
-
-The credentials Secret must contain `1password-credentials.json`; local
-bootstrap creates it when `OP_CONNECT_CREDENTIALS_FILE` points at that file. The
-infra Secret must also include `OP_CONNECT_TOKEN`.
-
 ## Verify
 
-Check that the API and [iron-proxy](https://iron.sh) received the expected source mode:
+Check that the API and [iron-proxy](https://docs.iron.sh) received the expected source mode:
 
 ```bash
 kubectl exec -n centaur-system deploy/centaur-centaur-api -- env | \
@@ -120,5 +133,5 @@ kubectl get secret -n centaur-system centaur-infra-env -o jsonpath='{.data.OP_CO
 ```
 
 Then run a tool or harness call that reaches an allowed host. If injection
-fails, check the tool's `hosts`, declared `secrets`, item name, `OP_VAULT`, and
-whether the item has a `credential` field.
+fails, check the secret entry's `hosts` and `match_*` fields, the 1Password
+item name, `OP_VAULT`, and whether the item has a `credential` field.

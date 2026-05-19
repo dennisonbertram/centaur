@@ -1,3 +1,5 @@
+'use client'
+
 import type { CSSProperties } from 'react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
@@ -23,6 +25,10 @@ type TaskCardData = {
 type ThreadData = {
   id: string
   channel: string
+  // Short, human-authored title that displays in the threads sidebar — does
+  // NOT come from the message body. Keeps the list readable when bodies are
+  // long, mention-heavy, or contain markdown-y noise.
+  title: string
   parent: {
     who: string
     glyph: string
@@ -37,10 +43,11 @@ const threadData: ThreadData[] = [
   {
     id: 'tempo-merch',
     channel: 'builds',
+    title: 'Build a Tempo merch store',
     parent: {
       who: 'Perry Dime',
       glyph: 'P',
-      color: '#f97316',
+      color: '#00E100',
       time: 'Today at 9:02 AM',
       body: ' build a merch store: stablecoin checkout, NFT receipt, one-time redemption for shipping details, and an admin view for fulfillment. Use Vite, Cloudflare Workers, D1, R2, Tempo Accounts, wagmi, viem, and MPP image generation.',
     },
@@ -130,7 +137,7 @@ const threadData: ThreadData[] = [
         time: '10:05 AM',
         who: 'Perry Dime',
         glyph: 'P',
-        color: '#f97316',
+        color: '#00E100',
       },
       {
         from: 'bot',
@@ -158,7 +165,7 @@ const threadData: ThreadData[] = [
         time: '11:12 AM',
         who: 'Perry Dime',
         glyph: 'P',
-        color: '#f97316',
+        color: '#00E100',
       },
       {
         from: 'bot',
@@ -212,7 +219,7 @@ const threadData: ThreadData[] = [
         time: '11:25 AM',
         who: 'Perry Dime',
         glyph: 'P',
-        color: '#f97316',
+        color: '#00E100',
       },
       {
         from: 'bot',
@@ -238,6 +245,7 @@ const threadData: ThreadData[] = [
   {
     id: 'prod-alert',
     channel: 'prod-alerts',
+    title: 'Investigate elevated API 5xx alert',
     parent: {
       who: 'Perry Dime',
       glyph: 'P',
@@ -316,6 +324,7 @@ const threadData: ThreadData[] = [
   {
     id: 'warehouse-tool',
     channel: 'tools',
+    title: 'Add a warehouse-lookup tool',
     parent: {
       who: 'Alex Kim',
       glyph: 'A',
@@ -375,13 +384,15 @@ const threadData: ThreadData[] = [
   },
 ]
 
-function BotAvatar({ glyph, accent }: { glyph: string; accent: string }) {
+function BotAvatar({ accent }: { glyph?: string; accent: string }) {
+  // Centaur bot avatar — uses the rounded-square Slack icon mark instead of
+  // a colored letter so it reads as the real product mark inside the demo.
   return (
     <div
       className="thread-panel-avatar thread-panel-avatar-bot"
       style={{ '--thread-accent': accent } as CSSProperties}
     >
-      {glyph}
+      <img src="/brand/slack-icon.svg" alt="Centaur" />
     </div>
   )
 }
@@ -516,12 +527,24 @@ function StreamingBubble({
   }, [onDone, speed, text, words])
 
   const shown = words.slice(0, count).join('')
+  const remaining = words.slice(count).join('')
   const isDone = count >= words.length
 
   return (
     <span className="thread-panel-stream">
       {shown}
       {!isDone && <span className="thread-panel-caret" />}
+      {/*
+        Render the un-streamed remainder invisible so the bubble reserves its
+        final height from frame one. The scroll-on-phase-change effect can
+        then settle on a scrollHeight that already accounts for the full
+        message, and the bottom edge stops clipping as words come in.
+       */}
+      {!isDone && (
+        <span className="thread-panel-stream-ghost" aria-hidden="true">
+          {remaining}
+        </span>
+      )}
     </span>
   )
 }
@@ -650,10 +673,12 @@ function ThreadDetail({
   return (
     <section className="thread-panel-detail" aria-label={`Thread in ${thread.channel}`}>
       <header className="thread-panel-head">
-        <div>
-          <div className="thread-panel-title">Thread</div>
+        <div className="thread-panel-head-titles">
+          <div className="thread-panel-title">{thread.title}</div>
           <div className="thread-panel-sub">
-            # {thread.channel} · with {botName}
+            <span>Thread</span>
+            <span className="thread-panel-head-sep" aria-hidden="true">·</span>
+            <span className="thread-panel-head-channel"># {thread.channel}</span>
           </div>
         </div>
       </header>
@@ -741,7 +766,7 @@ function ThreadDetail({
 }
 
 export default function ThreadPanel({
-  accent = '#ff9318',
+  accent = '#00E100',
   speed = 34,
   botName = 'Centaur',
   botGlyph = 'C',
@@ -773,14 +798,13 @@ export default function ThreadPanel({
                 type="button"
               >
                 <div className="thread-list-channel-row">
-                  <span className="thread-list-channel"># {thread.channel}</span>
-                  {isActive && <span className="thread-list-live-dot" />}
+                  <span className="thread-list-channel">
+                    # {thread.channel}
+                    {isActive && <span className="thread-list-live-dot" />}
+                  </span>
+                  <span className="thread-list-time">{thread.replies.at(-1)?.time}</span>
                 </div>
-                <div className="thread-list-name">{thread.parent.who}</div>
-                <div className="thread-list-meta">
-                  <span>{thread.replies.length} replies</span>
-                  <span>{thread.replies.at(-1)?.time}</span>
-                </div>
+                <div className="thread-list-name">{thread.title}</div>
               </button>
             )
           })}

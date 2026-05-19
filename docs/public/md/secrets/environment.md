@@ -5,7 +5,7 @@ description: Configure Centaur to resolve tool and harness credentials from Kube
 
 # Use Environment Variables
 
-Environment-backed secrets are the simplest secret source. [iron-proxy](https://iron.sh) reads real
+Environment-backed secrets are the simplest secret source. [iron-proxy](https://docs.iron.sh) reads real
 credential values from environment variables on the proxy container.
 
 Use this for local development, CI, or simple private deployments. For
@@ -49,39 +49,41 @@ Secret from your shell environment.
 For:
 
 ```toml
-secrets = ["WAREHOUSE_API_KEY"]
+secrets = [
+    {type = "http", name = "WAREHOUSE_API_KEY", match_headers = ["Authorization"], hosts = ["warehouse.internal.example.com"]},
+]
 ```
 
-Centaur uses:
+the sandbox sees `WAREHOUSE_API_KEY` as a placeholder. In `env` mode,
+[iron-proxy](https://docs.iron.sh) reads the real value from an environment
+variable of the same name on the proxy container and substitutes it on
+outbound requests to `warehouse.internal.example.com` whose `Authorization`
+header contains the placeholder.
 
-- secret name: `WAREHOUSE_API_KEY`
-- secret reference: `WAREHOUSE_API_KEY`
-- placeholder value seen by the tool: `WAREHOUSE_API_KEY`
+## Other secret types
 
-In `env` mode, [iron-proxy](https://iron.sh) reads the real value from the environment variable
-named by the secret reference.
-
-## Advanced secret entries
-
-Most tools should use the string form. The parser also supports explicit secret
-tables for special cases:
+`type = "http"` covers most cases. The parser also supports specialized types
+for upstreams that need more than a header swap:
 
 ```toml
-[[tool.ai-v2.secrets]]
+[[tool.centaur.secrets]]
 type = "gcp_auth"
 name = "ANALYTICS_BIGQUERY_CREDENTIAL"
 secret_ref = "ANALYTICS_BIGQUERY_CREDENTIAL"
 
-[[tool.ai-v2.secrets]]
+[[tool.centaur.secrets]]
 type = "pg_dsn"
 name = "WAREHOUSE_POSTGRES_DSN"
 secret_ref = "WAREHOUSE_POSTGRES_DSN"
 database = "analytics"
 ```
 
-Use `gcp_auth` when [iron-proxy](https://iron.sh) should mint Google OAuth tokens for Google APIs.
-Use `pg_dsn` when a sandbox needs a proxied Postgres DSN instead of a raw
-database URL.
+Use `gcp_auth` when [iron-proxy](https://docs.iron.sh) should resolve a Google
+service-account keyfile, mint Google OAuth tokens, and inject them for matching
+Google API hosts. Use `pg_dsn` when a sandbox needs a local Postgres URL that
+points at iron-proxy instead of the raw upstream DSN. Use `oauth_token` when
+iron-proxy should resolve OAuth credential fields, exchange them at a token
+endpoint, and inject a short-lived bearer token for matching API hosts.
 
 ## Verify
 
@@ -94,4 +96,4 @@ kubectl exec -n centaur-system deploy/centaur-centaur-api -- env | \
 
 Then call a tool that uses the secret and check that the upstream request works.
 If it fails, check the Kubernetes Secret key name, `ironProxy.secretSource`,
-tool `hosts`, and the declared `secrets`.
+and the secret entry's `hosts` and `match_*` fields.

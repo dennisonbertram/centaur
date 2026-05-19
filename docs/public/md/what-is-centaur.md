@@ -29,9 +29,7 @@ This creates a narrow and auditable boundary for agent capabilities. Teams decid
 
 ## Credential-Safe Automation
 
-Sandbox pods receive stub keys and scoped Centaur API tokens. Real upstream credentials stay out of the sandbox and are injected at the network boundary by the firewall/proxy path only for approved destinations.
-
-The result is a practical security model for agents that need to call high-value systems: agents can use GitHub, model providers, data tools, or internal services without raw long-lived secrets sitting in their workspace.
+Sandboxes only ever see placeholder strings for upstream credentials. Real values live on [iron-proxy](https://docs.iron.sh), bound to specific hosts and headers, and are swapped in on the fly when a request matches. Agents can call GitHub, model providers, data tools, or internal services without raw long-lived secrets sitting in their workspace.
 
 ## Durable Workflows
 
@@ -50,6 +48,11 @@ That separation matters: Slack formatting, durable execution, sandbox lifecycle,
 Deployments can layer organization-specific tools, workflows, skills, personas, prompts, and sandbox behavior over the base Centaur repo. The base platform stays generic while each team adds the behavior it needs.
 
 Overlays are ordered, so later entries can override or extend earlier ones without forcing every deployment into a long-lived fork.
+
+<figure className="architecture-figure">
+  <img src="/brand/containers.svg" alt="Centaur deployment layout — paradigmxyz/centaur kernel wrapped by an org-level userspace repo and a per-app application repo" />
+  <figcaption>Three nested repos: <code>paradigmxyz/centaur</code> is the kernel (control loop, workflow engine, sandboxing), the org's <code>centaur</code> overlay holds shared business logic, and each <code>example-centaur-app</code> sits on top with app-specific workflows wired to its Slackbot.</figcaption>
+</figure>
 
 ## Production Shape
 

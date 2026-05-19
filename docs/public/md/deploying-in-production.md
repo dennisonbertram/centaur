@@ -6,29 +6,20 @@ description: Configure secrets, Slack, harness credentials, Kubernetes sandboxes
 # Deploying in Production
 
 Production Centaur is a Kubernetes deployment with durable API state in
-Postgres, sandbox pods for agent execution, and [iron-proxy](https://iron.sh) for credential
+Postgres, sandbox pods for agent execution, and [iron-proxy](https://docs.iron.sh) for credential
 injection. The goal is a small working deployment with a clear operator before
 you add more tools, workflows, harnesses, or overlays.
 
 ## Production shape
 
 The API saves threads, runs, and events in Postgres. The Kubernetes backend
-creates sandbox pods for agent work. [iron-proxy](https://iron.sh) handles outbound requests that
+creates sandbox pods for agent work. [iron-proxy](https://docs.iron.sh) handles outbound requests that
 need credentials:
 
-```diagram
-+-------------+       +--------------------+       +--------------------+
-| Centaur API | ----> | Kubernetes backend | ----> | Sandbox Pod        |
-| Postgres    |       | create/attach/exec |       | agent CLI          |
-+-------------+       +--------------------+       +---------+----------+
-                                                            |
-                                                            | outbound HTTP
-                                                            v
-                                                   +--------------------+
-                                                   | iron-proxy         |
-                                                   | secret references  |
-                                                   +--------------------+
-```
+<figure className="architecture-figure">
+  <img src="/brand/workflow.svg" alt="Centaur production workflow — Centaur API plus Postgres hands a run to the Kubernetes backend, which attaches a sandbox pod whose outbound HTTP routes through iron-proxy" />
+  <figcaption>Slackbot and API ingress → Centaur API (Postgres-backed) → Kubernetes sandbox runtime → outbound traffic through iron-proxy.</figcaption>
+</figure>
 
 Each pod receives the prompt files, environment, proxy CA, proxy settings, and
 command it needs for one assigned thread. It should not receive raw model keys
@@ -69,13 +60,14 @@ Minimum keys:
 | Secret | Required for | Notes |
 |--------|--------------|-------|
 | `DATABASE_URL` | API | Postgres connection string. |
-| `IRON_MANAGEMENT_API_KEY` | [iron-proxy](https://iron.sh) management API | Generate with `openssl rand -hex 32`. |
+| `IRON_MANAGEMENT_API_KEY` | [iron-proxy](https://docs.iron.sh) management API | Generate with `openssl rand -hex 32`. |
 | `SANDBOX_SIGNING_KEY` | Sandbox API tokens | Generate with `openssl rand -hex 32`; keeps sandbox tokens valid across API restarts. |
 | `SLACK_BOT_TOKEN` | Slackbot | Bot User OAuth Token from the Slack app. |
 | `SLACK_SIGNING_SECRET` | Slackbot/API | Used to verify Slack webhook signatures. |
 | `SLACKBOT_API_KEY` | Slackbot to API | Static service token; API bootstraps it into Postgres on startup with `agent` scope. |
-| `OP_SERVICE_ACCOUNT_TOKEN` | [iron-proxy](https://iron.sh) 1Password source | Needed when `ironProxy.secretSource` is `onepassword`. |
-| `OP_VAULT` | [iron-proxy](https://iron.sh) 1Password source | Vault name or id used for `op://` references. |
+| `OP_CONNECT_TOKEN` | [iron-proxy](https://docs.iron.sh) 1Password Connect source (preferred) | Needed when `ironProxy.secretSource` is `onepassword-connect`. |
+| `OP_SERVICE_ACCOUNT_TOKEN` | [iron-proxy](https://docs.iron.sh) 1Password service-account source | Needed when `ironProxy.secretSource` is `onepassword`. |
+| `OP_VAULT` | [iron-proxy](https://docs.iron.sh) 1Password source | Vault name or id used for `op://` references (either mode). |
 
 `SLACKBOT_API_KEY` is not created with the admin API during initial boot, because
 the API process requires it before it can start. Generate a high-entropy value,
@@ -93,12 +85,18 @@ Store one secret per enabled harness credential:
 | pi-mono | `pi-mono` | `--pi` | `ANTHROPIC_API_KEY` | `api.anthropic.com` |
 
 In normal sandbox mode, containers receive placeholder values such as
-`OPENAI_API_KEY=OPENAI_API_KEY`. [iron-proxy](https://iron.sh) replaces those placeholders with real
-secrets only for allowlisted upstream hosts.
+`OPENAI_API_KEY=OPENAI_API_KEY`. [iron-proxy](https://docs.iron.sh) swaps the
+placeholder for the real key on outbound requests, only on the hosts and
+headers the secret is bound to.
 
-When `ironProxy.secretSource` is `onepassword`, [iron-proxy](https://iron.sh) resolves these values
+When `ironProxy.secretSource` is `onepassword`, [iron-proxy](https://docs.iron.sh) resolves these values
 from `op://$OP_VAULT/<SECRET_NAME>/credential`. For example, store the default
 Codex credential in a 1Password item named `OPENAI_API_KEY`.
+
+Whatever source you pick, the vault is shared across the whole deployment,
+so any thread can use any configured credential. Per-user and per-channel
+scoping is on the roadmap; until then, scope tool and harness access
+accordingly. See [Security](/security) for the full threat model.
 
 ## 4. Configure Slack
 
@@ -128,7 +126,7 @@ compatibility paths for `/api/slack/events`, `/api/slack/actions`,
 
 ## 5. Deploy with Helm
 
-The chart lives at `contrib/chart`. Select service images, [iron-proxy](https://iron.sh) secret
+The chart lives at `contrib/chart`. Select service images, [iron-proxy](https://docs.iron.sh) secret
 source, sandbox image, and optional runtime class in your values file:
 
 ```yaml
@@ -141,8 +139,14 @@ api:
   warmPoolEnabled: true
 
 ironProxy:
-  secretSource: onepassword
+  secretSource: onepassword-connect
   secretTtl: 10m
+
+onepasswordConnect:
+  connect:
+    create: true
+    credentialsName: centaur-onepassword-connect-credentials
+    credentialsKey: 1password-credentials.json
 
 sandbox:
   image:
