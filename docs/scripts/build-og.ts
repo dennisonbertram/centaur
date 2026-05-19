@@ -225,40 +225,46 @@ function wrapText(text: string, maxChars: number, maxLines: number): string[] {
 }
 
 // Layout constants for the left content stack inside the 1200x657 card.
-// Positions are computed so the (eyebrow + title + description) block is
-// vertically centered around CENTER_Y. The 0.78 ASCENT_RATIO converts each
-// line's visual top (its "box") into the baseline that SVG y= anchors to.
+//
+// The eyebrow is pinned at the top of the card on the same baseline as
+// the top-right `PARADIGMXYZ/CENTAUR` label so the two header rows read
+// as a single horizontal band. Title + description hang below from a
+// default first-title baseline; if the description would crowd the
+// centaur silhouette in the bottom-right we lift the whole title/desc
+// block upward until the last description baseline fits within
+// DESC_BASELINE_MAX_Y.
 const LEFT_X = 81
-const CENTER_Y = 328.5
-const EYEBROW_H = 30
+const EYEBROW_BASELINE_Y = 94.18
+const DEFAULT_TITLE_BASELINE_Y = 270
 const TITLE_LINE_H = 89
-const DESC_LINE_H = 49
-const GAP_EYEBROW_TITLE = 32
-const GAP_TITLE_DESC = 28
-const ASCENT_RATIO = 0.78
+const DESC_LINE_H = 47
+const TITLE_TO_DESC_BASELINE_GAP = 62
+const DESC_BASELINE_MAX_Y = 490
 
 function computeStackY(nTitle: number, nDesc: number) {
-  const titleBlock = nTitle * TITLE_LINE_H
-  const descBlock = nDesc > 0 ? GAP_TITLE_DESC + nDesc * DESC_LINE_H : 0
-  const totalH = EYEBROW_H + GAP_EYEBROW_TITLE + titleBlock + descBlock
-  const topY = CENTER_Y - totalH / 2
+  const titleStackHeight = Math.max(0, nTitle - 1) * TITLE_LINE_H
+  const descStackHeight =
+    nDesc > 0 ? TITLE_TO_DESC_BASELINE_GAP + Math.max(0, nDesc - 1) * DESC_LINE_H : 0
 
-  const titleTop = topY + EYEBROW_H + GAP_EYEBROW_TITLE
-  const firstTitleBaseline = titleTop + TITLE_LINE_H * ASCENT_RATIO
+  let firstTitleBaseline = DEFAULT_TITLE_BASELINE_Y
+  const projectedLastDescBaseline = firstTitleBaseline + titleStackHeight + descStackHeight
+  if (nDesc > 0 && projectedLastDescBaseline > DESC_BASELINE_MAX_Y) {
+    firstTitleBaseline -= projectedLastDescBaseline - DESC_BASELINE_MAX_Y
+  }
+
   const titleBaselines = Array.from(
     { length: nTitle },
     (_, i) => firstTitleBaseline + i * TITLE_LINE_H,
   )
-  const titleBottom = titleTop + titleBlock
+  const lastTitleBaseline =
+    titleBaselines[titleBaselines.length - 1] ?? firstTitleBaseline
+  const firstDescBaseline = lastTitleBaseline + TITLE_TO_DESC_BASELINE_GAP
+  const descBaselines = Array.from(
+    { length: nDesc },
+    (_, i) => firstDescBaseline + i * DESC_LINE_H,
+  )
 
-  const descBaselines = Array.from({ length: nDesc }, (_, i) => {
-    const descTop = titleBottom + GAP_TITLE_DESC
-    return descTop + DESC_LINE_H * ASCENT_RATIO + i * DESC_LINE_H
-  })
-
-  const eyebrowBaseline = topY + EYEBROW_H * ASCENT_RATIO
-
-  return { eyebrowBaseline, titleBaselines, descBaselines }
+  return { eyebrowBaseline: EYEBROW_BASELINE_Y, titleBaselines, descBaselines }
 }
 
 function buildSvg(
