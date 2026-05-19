@@ -202,17 +202,17 @@ function balanceLines(text: string, fontSize: number, maxWidth = 1050): string[]
   ]
 }
 
-// Wrap description text to fit `maxChars` per line, capping at `maxLines`
-// and adding an ellipsis to the final line if there's overflow.
+// Wrap description text to fit `maxChars` per line. Never truncates or
+// adds an ellipsis — overflow simply produces more lines. `maxLines` is
+// kept as a soft safety cap so a runaway description doesn't blow past
+// the centaur silhouette; in practice every page description fits within
+// it. The vertical layout (`computeStackY`) lifts the title baseline up
+// to accommodate however many lines come back here.
 function wrapText(text: string, maxChars: number, maxLines: number): string[] {
   const words = text.split(' ')
   const lines: string[] = []
   let cur = ''
   for (const w of words) {
-    if (lines.length >= maxLines - 1 && `${cur} ${w}`.length > maxChars) {
-      lines.push(`${`${cur} ${w}`.slice(0, maxChars - 1)}\u2026`)
-      return lines
-    }
     if (cur && `${cur} ${w}`.length > maxChars) {
       lines.push(cur)
       cur = w
@@ -238,8 +238,13 @@ const EYEBROW_BASELINE_Y = 94.18
 const DEFAULT_TITLE_BASELINE_Y = 270
 const TITLE_LINE_H = 89
 const DESC_LINE_H = 47
-const TITLE_TO_DESC_BASELINE_GAP = 62
-const DESC_BASELINE_MAX_Y = 470
+const TITLE_TO_DESC_BASELINE_GAP = 73
+// Description text occupies the left ~67% of the canvas (x=81..~820 after
+// 36-char wrap) while the centaur silhouette is bottom-right anchored at
+// x=868..1120, y=522..586. The two never overlap horizontally, so the
+// last description baseline is free to extend down to ~y=540 without
+// visually crashing into the logo.
+const DESC_BASELINE_MAX_Y = 540
 
 function computeStackY(nTitle: number, nDesc: number) {
   const titleStackHeight = Math.max(0, nTitle - 1) * TITLE_LINE_H
@@ -289,7 +294,7 @@ function buildSvg(
   // Wrap descriptions tighter so they don't crash into the centaur
   // silhouette in the bottom-right (~x=868). 36 chars * ~20px ≈ 720px
   // of text width leaves a comfortable 20px+ gap from the logo edge.
-  const descLines = description ? wrapText(description, 36, 3) : []
+  const descLines = description ? wrapText(description, 36, 5) : []
   const { eyebrowBaseline, titleBaselines, descBaselines } = computeStackY(
     titleLines.length,
     descLines.length,
