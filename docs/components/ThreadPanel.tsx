@@ -798,10 +798,7 @@ export default function ThreadPanel({
                 type="button"
               >
                 <div className="thread-list-channel-row">
-                  <span className="thread-list-channel">
-                    # {thread.channel}
-                    {isActive && <span className="thread-list-live-dot" />}
-                  </span>
+                  <span className="thread-list-channel"># {thread.channel}</span>
                   <span className="thread-list-time">{thread.replies.at(-1)?.time}</span>
                 </div>
                 <div className="thread-list-name">{thread.title}</div>
