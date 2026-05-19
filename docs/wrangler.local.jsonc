@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "centaur-docs-local",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-05-05",
+  "assets": {
+    "directory": "./dist/public",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "drop-trailing-slash",
+    "not_found_handling": "404-page"
+  },
+  "d1_databases": [
+    {
+      "binding": "COMMUNITY_SLACK_REQUESTS",
+      "database_name": "centaur-docs-community-slack-requests",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "preview_database_id": "centaur-community-slack-local",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

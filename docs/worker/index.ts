@@ -2,19 +2,22 @@
 
 interface Env {
   ASSETS: Fetcher
+  COMMUNITY_SLACK_REQUESTS?: D1Database
   CONTACT_SUBMISSIONS?: D1Database
   DB?: D1Database
 }
 
-const createContactSubmissionsTable = `
-  CREATE TABLE IF NOT EXISTS contact_submissions (
+const createCommunitySlackRequestsTable = `
+  CREATE TABLE IF NOT EXISTS community_slack_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
     company TEXT NOT NULL,
-    role TEXT,
-    use_case TEXT NOT NULL,
-    wants_slack_invite INTEGER NOT NULL DEFAULT 0,
+    role TEXT NOT NULL,
+    interest_reason TEXT NOT NULL,
+    invite_status TEXT NOT NULL DEFAULT 'pending',
+    source_path TEXT,
     user_agent TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -34,12 +37,53 @@ function isEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 }
 
+function textField(body: Record<string, unknown> | null, key: string) {
+  const value = body?.[key]
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+function tooLong(value: string, maxLength: number) {
+  return value.length > maxLength
+}
+
+async function readSubmissionBody(request: Request) {
+  const contentType = request.headers.get('content-type') ?? ''
+
+  if (contentType.includes('application/json')) {
+    return (await request.json().catch(() => null)) as Record<string, unknown> | null
+  }
+
+  if (
+    contentType.includes('application/x-www-form-urlencoded') ||
+    contentType.includes('multipart/form-data')
+  ) {
+    const form = await request.formData().catch(() => null)
+    if (!form) return null
+
+    return Object.fromEntries(
+      Array.from(form.entries(), ([key, value]) => [
+        key,
+        typeof value === 'string' ? value : '',
+      ]),
+    )
+  }
+
+  return null
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
+    const isContactSubmission =
+      request.method === 'POST' &&
+      (url.pathname === '/api/contact' || url.pathname === '/contact' || url.pathname === '/contact/')
 
-    if (url.pathname === '/api/contact' && request.method === 'POST') {
-      return handleContactSubmission(request, env)
+    if (isContactSubmission) {
+      const response = await handleContactSubmission(request, env)
+      if (url.pathname !== '/api/contact' && response.ok) {
+        return Response.redirect(new URL('/contact?submitted=1', url).toString(), 303)
+      }
+      return response
     }
 
     if (url.pathname.startsWith('/api/')) {
@@ -51,65 +95,76 @@ export default {
 } satisfies ExportedHandler<Env>
 
 async function handleContactSubmission(request: Request, env: Env) {
-  const db = env.CONTACT_SUBMISSIONS ?? env.DB
+  const db = env.COMMUNITY_SLACK_REQUESTS ?? env.CONTACT_SUBMISSIONS ?? env.DB
   if (!db) return json({ error: 'Contact storage is not configured' }, 500)
 
-  const body = (await request.json().catch(() => null)) as
-    | {
-        name?: unknown
-        email?: unknown
-        company?: unknown
-        role?: unknown
-        useCase?: unknown
-        wantsSlackInvite?: unknown
-      }
-    | null
+  const body = await readSubmissionBody(request)
 
-  const name = typeof body?.name === 'string' ? body.name.trim() : ''
-  const email = typeof body?.email === 'string' ? body.email.trim().toLowerCase() : ''
-  const company = typeof body?.company === 'string' ? body.company.trim() : ''
-  const role = typeof body?.role === 'string' ? body.role.trim() : ''
-  const useCase = typeof body?.useCase === 'string' ? body.useCase.trim() : ''
-  const wantsSlackInvite =
-    body?.wantsSlackInvite === true || body?.wantsSlackInvite === 'true'
+  const firstName = textField(body, 'firstName')
+  const lastName = textField(body, 'lastName')
+  const email = textField(body, 'email').toLowerCase()
+  const company = textField(body, 'company')
+  const role = textField(body, 'role')
+  const interestReason = textField(body, 'interestReason')
 
-  if (!name) return json({ error: 'Name is required' }, 400)
+  if (!firstName) return json({ error: 'First name is required' }, 400)
+  if (!lastName) return json({ error: 'Surname is required' }, 400)
   if (!isEmail(email)) return json({ error: 'Valid email is required' }, 400)
   if (!company) return json({ error: 'Company is required' }, 400)
-  if (!useCase) return json({ error: 'Please share what you want to build' }, 400)
+  if (!role) return json({ error: 'Role is required' }, 400)
+  if (!interestReason) return json({ error: 'Please share why you are interested in Centaur' }, 400)
+  if (tooLong(firstName, 120)) return json({ error: 'First name is too long' }, 400)
+  if (tooLong(lastName, 120)) return json({ error: 'Surname is too long' }, 400)
+  if (tooLong(email, 320)) return json({ error: 'Email is too long' }, 400)
+  if (tooLong(company, 180)) return json({ error: 'Company is too long' }, 400)
+  if (tooLong(role, 180)) return json({ error: 'Role is too long' }, 400)
+  if (tooLong(interestReason, 4000)) {
+    return json({ error: 'Please keep your answer under 4,000 characters' }, 400)
+  }
 
-  await db.prepare(createContactSubmissionsTable).run()
+  let sourcePath: string | null = null
+  const referer = request.headers.get('referer')
+  if (referer) {
+    try {
+      sourcePath = new URL(referer).pathname
+    } catch {}
+  }
+
+  await db.prepare(createCommunitySlackRequestsTable).run()
   await db
     .prepare(
       `
-        INSERT INTO contact_submissions (
+        INSERT INTO community_slack_requests (
           email,
-          name,
+          first_name,
+          last_name,
           company,
           role,
-          use_case,
-          wants_slack_invite,
+          interest_reason,
+          source_path,
           user_agent,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
         ON CONFLICT(email) DO UPDATE SET
-          name = excluded.name,
+          first_name = excluded.first_name,
+          last_name = excluded.last_name,
           company = excluded.company,
           role = excluded.role,
-          use_case = excluded.use_case,
-          wants_slack_invite = excluded.wants_slack_invite,
+          interest_reason = excluded.interest_reason,
+          source_path = excluded.source_path,
           user_agent = excluded.user_agent,
           updated_at = datetime('now')
       `,
     )
     .bind(
       email,
-      name,
+      firstName,
+      lastName,
       company,
-      role || null,
-      useCase,
-      wantsSlackInvite ? 1 : 0,
+      role,
+      interestReason,
+      sourcePath,
       request.headers.get('user-agent'),
     )
     .run()

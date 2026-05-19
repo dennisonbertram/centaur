@@ -7,7 +7,9 @@
     "prebuild": "bash scripts/build-md.sh && bash scripts/build-brand-zip.sh && bun run scripts/build-og.ts",
     "build": "vocs build",
     "preview": "vocs preview",
-    "cf:dev": "npm run build && wrangler dev",
+    "cf:write-config": "node scripts/write-worker-config.mjs",
+    "cf:dev": "VOCS_SITE_URL=http://127.0.0.1:8787 npm run build && wrangler dev --config wrangler.local.jsonc --local",
+    "cf:migrate:local": "wrangler d1 migrations apply centaur-docs-community-slack-requests --config wrangler.local.jsonc --local",
     "deploy": "wrangler deploy"
   },
   "dependencies": {

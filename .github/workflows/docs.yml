@@ -36,6 +36,7 @@ jobs:
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
     defaults:
       run:
         working-directory: docs
@@ -62,28 +63,32 @@ jobs:
         run: npm run build
 
       - name: Skip Cloudflare deploy
-        if: ${{ env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '' }}
-        run: echo "Cloudflare credentials are not configured; docs build completed without deployment."
+        if: ${{ env.CLOUDFLARE_ACCOUNT_ID == '' || env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_D1_DATABASE_ID == '' }}
+        run: echo "Cloudflare credentials or D1 database id are not configured; docs build completed without deployment."
+
+      - name: Write Cloudflare deploy config
+        if: ${{ env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_D1_DATABASE_ID != '' }}
+        run: npm run cf:write-config
 
       - name: Deploy
-        if: github.event_name != 'pull_request'
+        if: ${{ github.event_name != 'pull_request' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_D1_DATABASE_ID != '' }}
         uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3.15.0
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: ${{ matrix.worker.directory }}
-          command: deploy --config wrangler.ci.jsonc
+          command: deploy --config wrangler.generated.jsonc
 
       - name: Preview
         id: preview
-        if: ${{ github.event_name == 'pull_request' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != '' }}
+        if: ${{ github.event_name == 'pull_request' && env.CLOUDFLARE_ACCOUNT_ID != '' && env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_D1_DATABASE_ID != '' }}
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           PREVIEW_ALIAS: pr-${{ github.event.pull_request.number }}
         run: |
           set -o pipefail
-          npx wrangler versions upload --preview-alias "$PREVIEW_ALIAS" 2>&1 | tee "$RUNNER_TEMP/wrangler-preview.log"
+          npx wrangler versions upload --config wrangler.generated.jsonc --preview-alias "$PREVIEW_ALIAS" 2>&1 | tee "$RUNNER_TEMP/wrangler-preview.log"
           deployment_url="$(grep -Eo 'https://[^[:space:]]+workers.dev[^[:space:]]*' "$RUNNER_TEMP/wrangler-preview.log" | tail -n 1)"
           if [ -z "$deployment_url" ]; then
             echo "No Cloudflare preview URL found in Wrangler output." >&2

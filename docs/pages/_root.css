@@ -314,6 +314,12 @@ body,
   letter-spacing: 0;
 }
 
+.contact-field-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .contact-form input,
 .contact-form textarea {
   background: #0b0b0d;
@@ -327,27 +333,13 @@ body,
 }
 
 .contact-form textarea {
+  min-height: 140px;
   resize: vertical;
 }
 
 .contact-form input:focus,
 .contact-form textarea:focus {
   border-color: var(--centaur-accent);
-}
-
-.contact-form .contact-checkbox {
-  align-items: flex-start;
-  flex-direction: row;
-  gap: 10px;
-}
-
-.contact-checkbox input {
-  accent-color: var(--centaur-accent);
-  flex: 0 0 auto;
-  height: 18px;
-  min-height: 0;
-  padding: 0;
-  width: 18px;
 }
 
 .contact-form button {
@@ -375,6 +367,16 @@ body,
   letter-spacing: 0;
   margin: 0;
   min-height: 1.5em;
+}
+
+.contact-status[data-status="error"] {
+  color: #ff8f8f;
+}
+
+@media (max-width: 640px) {
+  .contact-field-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .vocs_Content th {
