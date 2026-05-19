@@ -236,6 +236,60 @@
 }
 
 @media (max-width: 1080px) {
+  [data-v-gutter-top] {
+    background-color: #050506 !important;
+    background-image: linear-gradient(
+      to bottom,
+      rgba(5, 5, 6, 1) 0%,
+      rgba(5, 5, 6, 0.9) 70%,
+      rgba(5, 5, 6, 0) 100%
+    );
+    border-bottom-color: rgba(255, 255, 255, 0.12) !important;
+    color: #f7f7f2;
+  }
+
+  [data-v-gutter-top] button,
+  [data-v-gutter-top] svg {
+    color: #f7f7f2;
+  }
+
+  [data-v-gutter-top] [data-v-logo-image][src$="lockup-black.svg"] {
+    display: none;
+  }
+
+  [data-v-gutter-top] [data-v-logo-image][src$="lockup-white.svg"] {
+    display: block !important;
+  }
+
+  [data-v-mobile-nav] {
+    background: #050506 !important;
+    border-left-color: rgba(255, 255, 255, 0.12) !important;
+    color: #f7f7f2;
+  }
+
+  [data-v-mobile-nav] button {
+    background-color: #111114;
+    border-color: rgba(255, 255, 255, 0.14);
+    color: #f7f7f2;
+  }
+
+  [data-v-mobile-nav] svg {
+    color: #f7f7f2;
+  }
+
+  [data-v-mobile-nav] a {
+    color: #dfdfd8 !important;
+  }
+
+  [data-v-mobile-nav] a:hover,
+  [data-v-mobile-nav] a[data-active="true"] {
+    color: #ffffff !important;
+  }
+
+  [data-v-mobile-nav] [class*="text-heading"] {
+    color: #f7f7f2 !important;
+  }
+
   .vocs_DocsLayout[data-layout="landing"] .vocs_MobileTopNav_logo > a {
     background-image: url('/brand/mark-white.svg');
     background-position: left center;
