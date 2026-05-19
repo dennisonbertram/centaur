@@ -134,10 +134,110 @@ export default defineConfig({
       color: {
         background: {
           light: '#ffffff',
-          dark: '#050505',
+          dark: '#050506',
+        },
+        background2: {
+          light: '#f8f8f8',
+          dark: '#0b0b0d',
+        },
+        background3: {
+          light: '#f1f1f1',
+          dark: '#111114',
+        },
+        background4: {
+          light: '#e8e8e8',
+          dark: '#19191d',
+        },
+        background5: {
+          light: '#dedede',
+          dark: '#202024',
+        },
+        backgroundDark: {
+          light: '#050506',
+          dark: '#050506',
+        },
+        backgroundDarkTint: {
+          light: '#111114',
+          dark: '#111114',
+        },
+        codeBlockBackground: {
+          light: '#0b0b0d',
+          dark: '#0b0b0d',
+        },
+        codeInlineBackground: {
+          light: '#111114',
+          dark: '#111114',
+        },
+        codeInlineBorder: {
+          light: 'rgba(255, 255, 255, 0.12)',
+          dark: 'rgba(255, 255, 255, 0.12)',
+        },
+        codeInlineText: {
+          light: '#00E100',
+          dark: '#00E100',
+        },
+        border: {
+          light: 'rgba(255, 255, 255, 0.12)',
+          dark: 'rgba(255, 255, 255, 0.12)',
+        },
+        border2: {
+          light: 'rgba(255, 255, 255, 0.2)',
+          dark: 'rgba(255, 255, 255, 0.2)',
+        },
+        heading: {
+          light: '#f7f7f2',
+          dark: '#f7f7f2',
+        },
+        hr: {
+          light: 'rgba(255, 255, 255, 0.12)',
+          dark: 'rgba(255, 255, 255, 0.12)',
+        },
+        link: {
+          light: '#00E100',
+          dark: '#00E100',
+        },
+        linkHover: {
+          light: '#35f335',
+          dark: '#35f335',
+        },
+        shadow: {
+          light: 'rgba(0, 0, 0, 0.45)',
+          dark: 'rgba(0, 0, 0, 0.45)',
+        },
+        shadow2: {
+          light: 'rgba(0, 0, 0, 0.35)',
+          dark: 'rgba(0, 0, 0, 0.35)',
         },
         text: {
-          light: '#050505',
+          light: '#f7f7f2',
+          dark: '#f7f7f2',
+        },
+        text2: {
+          light: '#dfdfd8',
+          dark: '#dfdfd8',
+        },
+        text3: {
+          light: '#a5a59d',
+          dark: '#a5a59d',
+        },
+        text4: {
+          light: '#76766f',
+          dark: '#76766f',
+        },
+        textAccent: {
+          light: '#00E100',
+          dark: '#00E100',
+        },
+        textAccentHover: {
+          light: '#35f335',
+          dark: '#35f335',
+        },
+        textHover: {
+          light: '#ffffff',
+          dark: '#ffffff',
+        },
+        title: {
+          light: '#f7f7f2',
           dark: '#f7f7f2',
         },
       },
