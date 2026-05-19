@@ -57,7 +57,7 @@ import ThreadPanel from '../components/ThreadPanel'
     <ul className="home-overview-list">
       <li>
         <strong>Open source foundation.</strong>
-        <span>Built from open infrastructure and inspectable project packages so teams can run and extend the platform themselves.</span>
+        <span>Built from open infrastructure and MIT-licensed project packages so teams can inspect, run, and extend the platform themselves.</span>
       </li>
       <li>
         <strong>Self-hosted by design.</strong>
