@@ -202,17 +202,17 @@ function balanceLines(text: string, fontSize: number, maxWidth = 1050): string[]
   ]
 }
 
-// Wrap description text to fit `maxChars` per line, capping at `maxLines`
-// and adding an ellipsis to the final line if there's overflow.
+// Wrap description text to fit `maxChars` per line. Never truncates or
+// adds an ellipsis — overflow simply produces more lines. `maxLines` is
+// kept as a soft safety cap so a runaway description doesn't blow past
+// the centaur silhouette; in practice every page description fits within
+// it. The vertical layout (`computeStackY`) lifts the title baseline up
+// to accommodate however many lines come back here.
 function wrapText(text: string, maxChars: number, maxLines: number): string[] {
   const words = text.split(' ')
   const lines: string[] = []
   let cur = ''
   for (const w of words) {
-    if (lines.length >= maxLines - 1 && `${cur} ${w}`.length > maxChars) {
-      lines.push(`${`${cur} ${w}`.slice(0, maxChars - 1)}\u2026`)
-      return lines
-    }
     if (cur && `${cur} ${w}`.length > maxChars) {
       lines.push(cur)
       cur = w
@@ -236,10 +236,23 @@ function wrapText(text: string, maxChars: number, maxLines: number): string[] {
 const LEFT_X = 81
 const EYEBROW_BASELINE_Y = 94.18
 const DEFAULT_TITLE_BASELINE_Y = 270
-const TITLE_LINE_H = 89
+// 5% tighter than the previous 89px so the 99px serif title sits more
+// confidently on its own as a 2-line block (Bodoni Moda is wide enough
+// to handle the negative leading without colliding).
+const TITLE_LINE_H = 84
 const DESC_LINE_H = 47
-const TITLE_TO_DESC_BASELINE_GAP = 62
-const DESC_BASELINE_MAX_Y = 490
+const TITLE_TO_DESC_BASELINE_GAP = 73
+// Description text occupies the left ~67% of the canvas (x=81..~820 after
+// 36-char wrap) while the centaur silhouette is bottom-right anchored at
+// x=868..1120, y=522..586. The two never overlap horizontally, so the
+// last description baseline is free to extend down to ~y=540 without
+// visually crashing into the logo.
+const DESC_BASELINE_MAX_Y = 540
+// For the worst-case 5-line description, anchor the last baseline at the
+// centaur silhouette's bottom edge (~y=586 minus ~11px descender space)
+// instead of top-packing. This pulls the whole title/desc block downward
+// so the title doesn't float lonely near the eyebrow on the densest cards.
+const DESC_BASELINE_BOTTOM_Y = 575
 
 function computeStackY(nTitle: number, nDesc: number) {
   const titleStackHeight = Math.max(0, nTitle - 1) * TITLE_LINE_H
@@ -247,9 +260,15 @@ function computeStackY(nTitle: number, nDesc: number) {
     nDesc > 0 ? TITLE_TO_DESC_BASELINE_GAP + Math.max(0, nDesc - 1) * DESC_LINE_H : 0
 
   let firstTitleBaseline = DEFAULT_TITLE_BASELINE_Y
-  const projectedLastDescBaseline = firstTitleBaseline + titleStackHeight + descStackHeight
-  if (nDesc > 0 && projectedLastDescBaseline > DESC_BASELINE_MAX_Y) {
-    firstTitleBaseline -= projectedLastDescBaseline - DESC_BASELINE_MAX_Y
+  if (nDesc === 5) {
+    // Densest case: bottom-align the last description baseline with the
+    // centaur silhouette so the title/desc group settles low on the card.
+    firstTitleBaseline = DESC_BASELINE_BOTTOM_Y - descStackHeight - titleStackHeight
+  } else {
+    const projectedLastDescBaseline = firstTitleBaseline + titleStackHeight + descStackHeight
+    if (nDesc > 0 && projectedLastDescBaseline > DESC_BASELINE_MAX_Y) {
+      firstTitleBaseline -= projectedLastDescBaseline - DESC_BASELINE_MAX_Y
+    }
   }
 
   const titleBaselines = Array.from(
@@ -275,8 +294,21 @@ function buildSvg(
 ): string {
   let svg = TEMPLATE_SVG
 
-  const titleLines = balanceLines(title, 99)
-  const descLines = description ? wrapText(description, 41, 3) : []
+  // Strip leading emojis (and any surrounding whitespace) from the title.
+  // The Bodoni/Source-Serif/Geist-Mono fonts loaded for resvg don't carry
+  // emoji glyphs, so a leading "🔐 Secrets" renders as a tofu box.
+  const cleanTitle = title
+    .replace(
+      /^[\p{Extended_Pictographic}\p{Emoji_Component}\uFE0F\u200D\s]+/u,
+      '',
+    )
+    .trim()
+
+  const titleLines = balanceLines(cleanTitle, 99)
+  // Wrap descriptions tighter so they don't crash into the centaur
+  // silhouette in the bottom-right (~x=868). 36 chars * ~20px ≈ 720px
+  // of text width leaves a comfortable 20px+ gap from the logo edge.
+  const descLines = description ? wrapText(description, 36, 5) : []
   const { eyebrowBaseline, titleBaselines, descBaselines } = computeStackY(
     titleLines.length,
     descLines.length,
@@ -320,7 +352,7 @@ function buildSvg(
       .join('')
     svg = svg.replace(
       /<text id="Description[^>]*>[\s\S]*?<\/text>/,
-      `<text opacity="0.6" fill="white" xml:space="preserve" font-family="Source Serif 4" font-weight="400" font-size="41" letter-spacing="0em">${descTspans}</text>`,
+      `<text opacity="0.6" fill="white" xml:space="preserve" font-family="Source Serif 4" font-weight="400" font-size="41" letter-spacing="-0.02em">${descTspans}</text>`,
     )
   } else {
     svg = svg.replace(/<text id="Description[^>]*>[\s\S]*?<\/text>/, '')
