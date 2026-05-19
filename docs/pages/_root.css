@@ -2,12 +2,13 @@
   --centaur-accent: #00E100;
   --centaur-accent-hover: #35f335;
   --centaur-accent-soft: rgba(0, 225, 0, 0.14);
-  --centaur-bg: #ffffff;
-  --centaur-code: #f6f6f7;
-  --centaur-line: rgba(0, 0, 0, 0.12);
-  --centaur-muted: #727278;
-  --centaur-soft: rgba(0, 0, 0, 0.035);
-  --centaur-text: #101012;
+  color-scheme: dark !important;
+  --centaur-bg: #101012;
+  --centaur-code: #0b0b0d;
+  --centaur-line: rgba(255, 255, 255, 0.12);
+  --centaur-muted: #9b9ba1;
+  --centaur-soft: rgba(255, 255, 255, 0.055);
+  --centaur-text: #ffffff;
   --centaur-sans: 'PolySans Var', system-ui, sans-serif;
   --centaur-serif: 'Iowan Old Style', 'Apple Garamond', Georgia, serif;
   --centaur-display: 'Sagittaire Display', var(--centaur-serif);
@@ -303,33 +304,33 @@ body,
 }
 
 :root {
-  --vocs-color_background: #ffffff;
-  --vocs-color_background2: #f7f7f4;
-  --vocs-color_background3: #eeeeea;
-  --vocs-color_background4: #e5e5df;
-  --vocs-color_background5: #ddddda;
+  --vocs-color_background: #050506;
+  --vocs-color_background2: #0b0b0d;
+  --vocs-color_background3: #111114;
+  --vocs-color_background4: #19191d;
+  --vocs-color_background5: #202024;
   --vocs-color_backgroundDark: #050506;
   --vocs-color_backgroundDarkTint: #111114;
-  --vocs-color_codeBlockBackground: #f6f6f7;
-  --vocs-color_codeInlineBackground: #f3f3ef;
-  --vocs-color_codeInlineBorder: rgba(0, 0, 0, 0.12);
+  --vocs-color_codeBlockBackground: #0b0b0d;
+  --vocs-color_codeInlineBackground: #111114;
+  --vocs-color_codeInlineBorder: rgba(255, 255, 255, 0.12);
   --vocs-color_codeInlineText: var(--centaur-accent);
-  --vocs-color_border: rgba(0, 0, 0, 0.12);
-  --vocs-color_border2: rgba(0, 0, 0, 0.2);
-  --vocs-color_heading: #050505;
-  --vocs-color_hr: rgba(0, 0, 0, 0.12);
+  --vocs-color_border: rgba(255, 255, 255, 0.12);
+  --vocs-color_border2: rgba(255, 255, 255, 0.2);
+  --vocs-color_heading: #f7f7f2;
+  --vocs-color_hr: rgba(255, 255, 255, 0.12);
   --vocs-color_link: var(--centaur-accent);
   --vocs-color_linkHover: var(--centaur-accent-hover);
-  --vocs-color_shadow: rgba(0, 0, 0, 0.18);
-  --vocs-color_shadow2: rgba(0, 0, 0, 0.12);
-  --vocs-color_text: #050505;
-  --vocs-color_text2: #30302d;
-  --vocs-color_text3: #66665f;
-  --vocs-color_text4: #8a8a82;
+  --vocs-color_shadow: rgba(0, 0, 0, 0.45);
+  --vocs-color_shadow2: rgba(0, 0, 0, 0.35);
+  --vocs-color_text: #f7f7f2;
+  --vocs-color_text2: #dfdfd8;
+  --vocs-color_text3: #a5a59d;
+  --vocs-color_text4: #76766f;
   --vocs-color_textAccent: var(--centaur-accent);
   --vocs-color_textAccentHover: var(--centaur-accent-hover);
-  --vocs-color_textHover: #000000;
-  --vocs-color_title: #050505;
+  --vocs-color_textHover: #ffffff;
+  --vocs-color_title: #f7f7f2;
 }
 
 :root.dark {
@@ -365,6 +366,10 @@ body,
 body,
 .vocs_DocsLayout {
   background: var(--vocs-color_background);
+}
+
+main#vocs-content[data-v-main] {
+  background-color: var(--vocs-color_background) !important;
 }
 
 .vocs_CodeBlock {
