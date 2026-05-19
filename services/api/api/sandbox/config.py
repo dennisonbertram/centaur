@@ -42,13 +42,11 @@ _CLAUDE_HARDENING_ENV = (
     ("DISABLE_UPDATES", "1"),
 )
 
-_CODEX_LOCAL_AUTH_ENV_KEYS = {
+_LOCAL_AUTH_EXTRA_ENV_KEYS = {
     "CODEX_USE_LOCAL_AUTH",
     "CODEX_AUTH_JSON",
     "CODEX_AUTH_JSON_FILE",
     "CODEX_AUTH_PAYLOAD",
-}
-_CLAUDE_LOCAL_AUTH_ENV_KEYS = {
     "CLAUDE_USE_LOCAL_AUTH",
     "CLAUDE_AUTH_JSON",
     "CLAUDE_AUTH_JSON_FILE",
@@ -106,14 +104,6 @@ def _sandbox_extra_env() -> list[tuple[str, str]]:
         value = item.get("value")
         extra.append((name, "" if value is None else str(value)))
     return extra
-
-
-def _local_auth_env_allowed(name: str, engine: str | None) -> bool:
-    if name in _CODEX_LOCAL_AUTH_ENV_KEYS:
-        return engine == "codex"
-    if name in _CLAUDE_LOCAL_AUTH_ENV_KEYS:
-        return engine == "claude-code"
-    return True
 
 
 def amp_mode() -> str:
@@ -229,7 +219,7 @@ def container_env(
             env.append(f"{name}={dsn}")
 
     for name, value in extra_env:
-        if not _local_auth_env_allowed(name, engine):
+        if name in _LOCAL_AUTH_EXTRA_ENV_KEYS:
             continue
         _set_env(env, name, value)
 

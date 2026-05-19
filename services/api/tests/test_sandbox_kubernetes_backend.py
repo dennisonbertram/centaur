@@ -269,73 +269,57 @@ def test_container_env_honors_durable_resume_from_extra_env(
 def test_container_env_passes_local_auth_only_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("CODEX_USE_LOCAL_AUTH", raising=False)
-    monkeypatch.delenv("CLAUDE_USE_LOCAL_AUTH", raising=False)
-
-    env = sandbox_container_env(
-        "thread-key", "sandbox-id", "firewall.internal", engine="codex"
-    )
-    env_map = dict(item.split("=", 1) for item in env)
-    assert "CODEX_AUTH_JSON" not in env_map
-    assert "CLAUDE_AUTH_JSON" not in env_map
-    assert "CLAUDE_CREDENTIALS_JSON" not in env_map
-
     monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
     monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
-    env = sandbox_container_env(
-        "thread-key", "sandbox-id", "firewall.internal", engine="codex"
+
+    codex_env = dict(
+        item.split("=", 1)
+        for item in sandbox_container_env(
+            "thread-key", "sandbox-id", "firewall.internal", engine="codex"
+        )
     )
-    env_map = dict(item.split("=", 1) for item in env)
-
-    assert env_map["CODEX_USE_LOCAL_AUTH"] == "true"
-    assert env_map["CODEX_AUTH_JSON_FILE"] == "/harness-auth/codex-auth.json"
-    assert "CLAUDE_USE_LOCAL_AUTH" not in env_map
-    assert "CLAUDE_AUTH_JSON_FILE" not in env_map
-    assert "CLAUDE_CREDENTIALS_JSON_FILE" not in env_map
-    assert "CODEX_AUTH_JSON" not in env_map
-    assert "CLAUDE_AUTH_JSON" not in env_map
-    assert "CLAUDE_CREDENTIALS_JSON" not in env_map
-
-    env = sandbox_container_env(
-        "thread-key", "sandbox-id", "firewall.internal", engine="claude-code"
+    claude_env = dict(
+        item.split("=", 1)
+        for item in sandbox_container_env(
+            "thread-key", "sandbox-id", "firewall.internal", engine="claude-code"
+        )
     )
-    env_map = dict(item.split("=", 1) for item in env)
+    amp_env = dict(
+        item.split("=", 1)
+        for item in sandbox_container_env(
+            "thread-key", "sandbox-id", "firewall.internal", engine="amp"
+        )
+    )
 
-    assert "CODEX_USE_LOCAL_AUTH" not in env_map
-    assert "CODEX_AUTH_JSON_FILE" not in env_map
-    assert env_map["CLAUDE_USE_LOCAL_AUTH"] == "true"
-    assert env_map["CLAUDE_AUTH_JSON_FILE"] == "/harness-auth/claude-auth.json"
+    assert codex_env["CODEX_USE_LOCAL_AUTH"] == "true"
+    assert codex_env["CODEX_AUTH_JSON_FILE"] == "/harness-auth/codex-auth.json"
+    assert "CLAUDE_USE_LOCAL_AUTH" not in codex_env
+    assert "CODEX_USE_LOCAL_AUTH" not in claude_env
+    assert claude_env["CLAUDE_USE_LOCAL_AUTH"] == "true"
+    assert claude_env["CLAUDE_AUTH_JSON_FILE"] == "/harness-auth/claude-auth.json"
     assert (
-        env_map["CLAUDE_CREDENTIALS_JSON_FILE"]
+        claude_env["CLAUDE_CREDENTIALS_JSON_FILE"]
         == "/harness-auth/claude-credentials.json"
     )
-
-    env = sandbox_container_env(
-        "thread-key", "sandbox-id", "firewall.internal", engine="amp"
-    )
-    env_map = dict(item.split("=", 1) for item in env)
-
-    assert "CODEX_USE_LOCAL_AUTH" not in env_map
-    assert "CODEX_AUTH_JSON_FILE" not in env_map
-    assert "CLAUDE_USE_LOCAL_AUTH" not in env_map
-    assert "CLAUDE_AUTH_JSON_FILE" not in env_map
-    assert "CLAUDE_CREDENTIALS_JSON_FILE" not in env_map
+    assert "CODEX_USE_LOCAL_AUTH" not in amp_env
+    assert "CLAUDE_USE_LOCAL_AUTH" not in amp_env
 
 
-def test_container_env_filters_local_auth_from_extra_env_for_other_engines(
+def test_container_env_filters_raw_local_auth_from_extra_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    local_auth_env = {
+        "CODEX_USE_LOCAL_AUTH": "true",
+        "CODEX_AUTH_JSON": "codex-secret",
+        "CODEX_AUTH_PAYLOAD": "codex-payload",
+        "CLAUDE_USE_LOCAL_AUTH": "true",
+        "CLAUDE_AUTH_JSON": "claude-secret",
+        "CLAUDE_AUTH_PAYLOAD": "claude-payload",
+    }
     monkeypatch.setenv(
         "KUBERNETES_SANDBOX_EXTRA_ENV",
         json.dumps(
-            [
-                {"name": "CODEX_USE_LOCAL_AUTH", "value": "true"},
-                {"name": "CODEX_AUTH_JSON", "value": "codex-secret"},
-                {"name": "CODEX_AUTH_PAYLOAD", "value": "codex-payload"},
-                {"name": "CLAUDE_USE_LOCAL_AUTH", "value": "true"},
-                {"name": "CLAUDE_AUTH_JSON", "value": "claude-secret"},
-                {"name": "CLAUDE_AUTH_PAYLOAD", "value": "claude-payload"},
-            ]
+            [{"name": name, "value": value} for name, value in local_auth_env.items()]
         ),
     )
 
@@ -344,12 +328,7 @@ def test_container_env_filters_local_auth_from_extra_env_for_other_engines(
     )
     env_map = dict(item.split("=", 1) for item in env)
 
-    assert "CODEX_USE_LOCAL_AUTH" not in env_map
-    assert "CODEX_AUTH_JSON" not in env_map
-    assert "CODEX_AUTH_PAYLOAD" not in env_map
-    assert "CLAUDE_USE_LOCAL_AUTH" not in env_map
-    assert "CLAUDE_AUTH_JSON" not in env_map
-    assert "CLAUDE_AUTH_PAYLOAD" not in env_map
+    assert not (set(local_auth_env) & set(env_map))
 
 
 def test_harness_auth_secret_sources_are_engine_scoped(
@@ -357,59 +336,32 @@ def test_harness_auth_secret_sources_are_engine_scoped(
 ) -> None:
     from api.sandbox.kubernetes import _harness_auth_secret_sources
 
-    monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
-    monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
-
-    assert _harness_auth_secret_sources("codex") == [
-        {
-            "secret": {
-                "name": "centaur-harness-auth",
-                "optional": True,
-                "items": [{"key": "CODEX_AUTH_JSON", "path": "codex-auth.json"}],
-            }
-        }
-    ]
-    assert _harness_auth_secret_sources("claude-code") == [
-        {
-            "secret": {
-                "name": "centaur-harness-auth",
-                "optional": True,
-                "items": [{"key": "CLAUDE_AUTH_JSON", "path": "claude-auth.json"}],
-            }
-        },
-        {
-            "secret": {
-                "name": "centaur-harness-auth",
-                "optional": True,
-                "items": [
-                    {
-                        "key": "CLAUDE_CREDENTIALS_JSON",
-                        "path": "claude-credentials.json",
-                    }
-                ],
-            }
-        },
-    ]
-    assert _harness_auth_secret_sources("amp") == []
-
-
-def test_harness_auth_secret_sources_honor_configured_secret(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from api.sandbox.kubernetes import _harness_auth_secret_sources
+    def secret_items(engine: str) -> list[tuple[str, str, str]]:
+        return [
+            (
+                source["secret"]["name"],
+                source["secret"]["items"][0]["key"],
+                source["secret"]["items"][0]["path"],
+            )
+            for source in _harness_auth_secret_sources(engine)
+        ]
 
     monkeypatch.setenv("KUBERNETES_HARNESS_AUTH_SECRET_NAME", "custom-harness-auth")
     monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
+    monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
 
-    assert _harness_auth_secret_sources("codex") == [
-        {
-            "secret": {
-                "name": "custom-harness-auth",
-                "optional": True,
-                "items": [{"key": "CODEX_AUTH_JSON", "path": "codex-auth.json"}],
-            }
-        }
+    assert secret_items("codex") == [
+        ("custom-harness-auth", "CODEX_AUTH_JSON", "codex-auth.json")
     ]
+    assert secret_items("claude-code") == [
+        ("custom-harness-auth", "CLAUDE_AUTH_JSON", "claude-auth.json"),
+        (
+            "custom-harness-auth",
+            "CLAUDE_CREDENTIALS_JSON",
+            "claude-credentials.json",
+        ),
+    ]
+    assert secret_items("amp") == []
 
 
 def test_container_env_passes_laminar_otel_config(

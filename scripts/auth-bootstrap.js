@@ -164,6 +164,6 @@ if (imported.length > 0) {
     "Enable opt-in use with CODEX_USE_LOCAL_AUTH=true or CLAUDE_USE_LOCAL_AUTH=true in the API deployment env.",
   );
   console.log(
-    "For local Kubernetes, source .env.local before running just bootstrap-secrets so the payloads reach centaur-infra-env.",
+    "For local Kubernetes, source .env.local before running just bootstrap-secrets so the payloads reach centaur-harness-auth.",
   );
 }

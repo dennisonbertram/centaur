@@ -56,7 +56,6 @@ _PROXY_LABEL = "centaur.ai/iron-proxy"
 _API_PROXY_POD_NAME = "centaur-api-proxy"
 _API_PROXY_SANDBOX_ID = "api"
 
-
 def _harness_auth_secret_name() -> str:
     value = (os.getenv("KUBERNETES_HARNESS_AUTH_SECRET_NAME") or "").strip()
     return value or "centaur-harness-auth"

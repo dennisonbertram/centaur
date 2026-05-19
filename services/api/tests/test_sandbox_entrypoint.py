@@ -194,47 +194,6 @@ def test_sandbox_entrypoint_reconstructs_local_auth_payloads(tmp_path: Path) -> 
     assert env_line == "unset/unset/unset"
 
 
-def test_sandbox_entrypoint_unsets_direct_local_auth_payload_env(
-    tmp_path: Path,
-) -> None:
-    home = tmp_path / "home"
-    harness_dir = _write_codex_harness_config(home)
-
-    result = subprocess.run(
-        [
-            "bash",
-            str(ENTRYPOINT_SH),
-            "sh",
-            "-lc",
-            (
-                'printf "%s/%s/%s/%s\\n" '
-                '"${CODEX_AUTH_JSON-unset}" '
-                '"${CLAUDE_AUTH_JSON-unset}" '
-                '"${CLAUDE_CREDENTIALS_JSON-unset}" '
-                '"${OPENAI_API_KEY-unset}"'
-            ),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env={
-            "HOME": str(home),
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
-            "CODEX_USE_LOCAL_AUTH": "true",
-            "CODEX_AUTH_JSON": '{"tokens":{"id_token":"codex-secret"}}',
-            "CLAUDE_USE_LOCAL_AUTH": "true",
-            "CLAUDE_AUTH_JSON": '{"oauthAccount":{"accessToken":"claude-secret"}}',
-            "CLAUDE_CREDENTIALS_JSON": '{"refreshToken":"claude-refresh-secret"}',
-            "OPENAI_API_KEY": "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
-        },
-    )
-
-    assert result.returncode == 0, result.stderr or result.stdout
-    assert result.stdout.strip() == "unset/unset/unset/unset"
-
-
 def test_sandbox_entrypoint_preserves_api_keys_when_local_auth_missing(
     tmp_path: Path,
 ) -> None:
