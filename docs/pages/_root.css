@@ -577,10 +577,11 @@ a.home-lockup-link {
 }
 
 /* Tempo's wordmark sits taller per em than Paradigm's — pull it down so the
- * two read at the same optical weight. */
+ * two read at the same optical weight, then trim another 7% so it
+ * doesn't visually outweigh the Paradigm lockup on the same row. */
 .home-brand-tempo img {
-  height: 32px;
-  max-width: min(30vw, 180px);
+  height: 30px;
+  max-width: min(28vw, 168px);
 }
 
 .home-thread-demo {
