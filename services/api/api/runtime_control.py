@@ -1632,6 +1632,34 @@ async def steer_execution(
     }
 
 
+def _collect_slackbot_session_ids(rows: list[Any]) -> list[str]:
+    seen: list[str] = []
+    for row in rows:
+        metadata = decode_jsonb(row["metadata"], {})
+        if not isinstance(metadata, dict):
+            continue
+        session_id = str(metadata.get("slackbot_agent_session_id") or "").strip()
+        if session_id and session_id not in seen:
+            seen.append(session_id)
+    return seen
+
+
+async def _close_slackbot_sessions_on_release(
+    *, thread_key: str, release_id: str, session_ids: list[str]
+) -> None:
+    for session_id in session_ids:
+        try:
+            await slackbot_client.session_done(session_id)
+        except Exception:
+            log.warning(
+                "slackbot_release_session_done_failed",
+                thread_key=thread_key,
+                release_id=release_id,
+                slackbot_agent_session_id=session_id,
+                exc_info=True,
+            )
+
+
 async def release_assignment(
     pool,
     *,
@@ -1649,6 +1677,7 @@ async def release_assignment(
     req_hash = request_hash(payload)
 
     response: dict[str, Any]
+    cancelled_session_ids: list[str] = []
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", thread_key)
@@ -1690,12 +1719,14 @@ async def release_assignment(
                     generation,
                 )
                 if cancel_inflight:
-                    await conn.execute(
+                    cancelled_rows = await conn.fetch(
                         "UPDATE agent_execution_requests SET status = 'cancelled', terminal_reason = 'released', "
                         "completed_at = NOW(), updated_at = NOW() "
-                        "WHERE thread_key = $1 AND status IN ('queued', 'running', 'cancel_requested', 'retry_wait')",
+                        "WHERE thread_key = $1 AND status IN ('queued', 'running', 'cancel_requested', 'retry_wait') "
+                        "RETURNING metadata",
                         thread_key,
                     )
+                    cancelled_session_ids = _collect_slackbot_session_ids(cancelled_rows)
                 response = {
                     "ok": True,
                     "thread_key": thread_key,
@@ -1712,6 +1743,12 @@ async def release_assignment(
                 req_hash,
                 canonical_json(response),
             )
+    if response.get("released") and cancelled_session_ids:
+        await _close_slackbot_sessions_on_release(
+            thread_key=thread_key,
+            release_id=release_id,
+            session_ids=cancelled_session_ids,
+        )
     if response.get("released") and stop_runtime:
         with contextlib.suppress(Exception):
             runtime_id = response.get("runtime_id")
