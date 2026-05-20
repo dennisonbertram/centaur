@@ -236,11 +236,16 @@ def test_container_env_only_passes_onepassword_token_when_enabled(
     monkeypatch.delenv("KUBERNETES_SANDBOX_ONEPASSWORD_DIRECT", raising=False)
 
     env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
+    env_map = dict(item.split("=", 1) for item in env)
     assert "OP_SERVICE_ACCOUNT_TOKEN=ops_real" not in env
+    assert "1password.com" not in env_map["NO_PROXY"]
 
     monkeypatch.setenv("KUBERNETES_SANDBOX_ONEPASSWORD_DIRECT", "1")
     env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
+    env_map = dict(item.split("=", 1) for item in env)
     assert "OP_SERVICE_ACCOUNT_TOKEN=ops_real" in env
+    assert "1password.com" in env_map["NO_PROXY"]
+    assert ".1password.com" in env_map["NO_PROXY"]
 
 
 def test_container_env_applies_kubernetes_sandbox_extra_env(

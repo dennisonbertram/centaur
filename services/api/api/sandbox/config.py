@@ -136,6 +136,11 @@ def container_env(
     api_host = urlsplit(api_url).hostname
     if api_host:
         no_proxy_hosts.append(api_host)
+    onepassword_direct = (
+        os.getenv("KUBERNETES_SANDBOX_ONEPASSWORD_DIRECT") or ""
+    ).strip() == "1"
+    if onepassword_direct:
+        no_proxy_hosts.extend(["1password.com", ".1password.com"])
     no_proxy = ",".join(dict.fromkeys(no_proxy_hosts))
     # Placeholder values for harness infra secrets. iron-proxy MITMs the
     # outbound TLS connection and rewrites these strings in auth headers
@@ -146,7 +151,7 @@ def container_env(
         value = (os.getenv(key) or "").strip()
         if value:
             env.append(f"{key}={value}")
-    if (os.getenv("KUBERNETES_SANDBOX_ONEPASSWORD_DIRECT") or "").strip() == "1":
+    if onepassword_direct:
         for key in _ONEPASSWORD_DIRECT_ENV_KEYS:
             value = (os.getenv(key) or "").strip()
             if value:
