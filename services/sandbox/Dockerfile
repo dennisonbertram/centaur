@@ -95,6 +95,10 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && cargo --version \
     && rustfmt --version \
     && clippy-driver --version
+RUN --mount=type=cache,target=/home/agent/.cargo/registry,uid=1001,gid=1001,sharing=locked \
+    --mount=type=cache,target=/home/agent/.cargo/git,uid=1001,gid=1001,sharing=locked \
+    cargo install --locked sccache \
+    && sccache --version
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 RUN curl -fsSL https://bun.sh/install | bash -s "${BUN_VERSION}"
 RUN --mount=type=cache,target=/home/agent/.cache/uv,uid=1001,gid=1001,sharing=locked \

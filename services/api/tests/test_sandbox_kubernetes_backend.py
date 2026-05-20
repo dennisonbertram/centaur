@@ -154,6 +154,7 @@ def _default_per_sandbox_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
     monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
     monkeypatch.delenv("KUBERNETES_BOOTSTRAP_SECRET_NAME", raising=False)
+    monkeypatch.delenv("KUBERNETES_SANDBOX_CACHE_HOST_PATH", raising=False)
 
 
 def test_pod_resources_uses_default_limits_when_unset(
@@ -564,6 +565,76 @@ async def test_create_builds_pod_and_prompt_secret(
         mount["name"] == "overlay-root" and mount["mountPath"] == "/home/agent/overlay"
         for mount in container["volumeMounts"]
     )
+
+
+@pytest.mark.asyncio
+async def test_create_mounts_shared_sccache_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = KubernetesExecutorBackend()
+    fake_core = FakeCoreApi()
+    fake_networking = FakeNetworkingApi()
+    backend._core = fake_core
+    backend._networking = fake_networking
+
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv("KUBERNETES_FIREWALL_CA_SECRET_NAME", "firewall-ca")
+    monkeypatch.setenv("KUBERNETES_SANDBOX_CACHE_HOST_PATH", "/var/lib/centaur/sccache")
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes._prompt_bundle", lambda persona: "prompt"
+    )
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.build_harness_cmd", lambda *_args: ["codex-app-wrapper"]
+    )
+    monkeypatch.setattr("api.sandbox.kubernetes.image", lambda: "centaur-agent:test")
+
+    async def fake_ensure_clients() -> None:
+        return None
+
+    async def fake_wait_ready(_pod_name: str) -> float:
+        return 0.01
+
+    monkeypatch.setattr(backend, "_ensure_clients", fake_ensure_clients)
+    monkeypatch.setattr(backend, "_wait_pod_ready", fake_wait_ready)
+    monkeypatch.setattr(backend, "_wait_ready", fake_wait_ready)
+
+    await backend.create("slack:C123:123.456", "codex", "codex")
+
+    sandbox_pod = fake_core.created_pods[1][1]
+    container = sandbox_pod["spec"]["containers"][0]
+
+    assert {
+        "name": "sandbox-sccache",
+        "hostPath": {
+            "path": "/var/lib/centaur/sccache",
+            "type": "DirectoryOrCreate",
+        },
+    } in sandbox_pod["spec"]["volumes"]
+    assert {
+        "name": "sandbox-sccache",
+        "mountPath": "/home/agent/.cache/sccache",
+    } in container["volumeMounts"]
+    assert {
+        "name": "sandbox-sccache-permissions",
+        "image": "centaur-agent:test",
+        "imagePullPolicy": "IfNotPresent",
+        "command": [
+            "/bin/sh",
+            "-ec",
+            "mkdir -p /cache && chown 1001:1001 /cache",
+        ],
+        "volumeMounts": [
+            {
+                "name": "sandbox-sccache",
+                "mountPath": "/cache",
+            }
+        ],
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "runAsGroup": 0,
+            "runAsUser": 0,
+        },
+    } in sandbox_pod["spec"]["initContainers"]
 
 
 @pytest.mark.asyncio

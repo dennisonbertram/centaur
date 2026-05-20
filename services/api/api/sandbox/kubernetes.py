@@ -100,6 +100,11 @@ def _service_account_name() -> str | None:
     return value or None
 
 
+def _cache_host_path() -> str | None:
+    value = (os.getenv("KUBERNETES_SANDBOX_CACHE_HOST_PATH") or "").strip()
+    return value or None
+
+
 def _env_int(name: str, default: int) -> int:
     raw = (os.getenv(name) or "").strip()
     return int(raw) if raw else default
@@ -1096,6 +1101,47 @@ class KubernetesExecutorBackend(SandboxBackend):
             },
         ]
         init_containers: list[dict[str, Any]] = []
+
+        cache_host_path = _cache_host_path()
+        if cache_host_path:
+            volume_mounts.append(
+                {
+                    "name": "sandbox-sccache",
+                    "mountPath": "/home/agent/.cache/sccache",
+                }
+            )
+            volumes.append(
+                {
+                    "name": "sandbox-sccache",
+                    "hostPath": {
+                        "path": cache_host_path,
+                        "type": "DirectoryOrCreate",
+                    },
+                }
+            )
+            init_containers.append(
+                {
+                    "name": "sandbox-sccache-permissions",
+                    "image": image(),
+                    "imagePullPolicy": _image_pull_policy(),
+                    "command": [
+                        "/bin/sh",
+                        "-ec",
+                        "mkdir -p /cache && chown 1001:1001 /cache",
+                    ],
+                    "volumeMounts": [
+                        {
+                            "name": "sandbox-sccache",
+                            "mountPath": "/cache",
+                        }
+                    ],
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                        "runAsGroup": 0,
+                        "runAsUser": 0,
+                    },
+                }
+            )
 
         if overlay_image:
             volume_mounts.append(

@@ -6,6 +6,12 @@ FIREWALL_HOSTNAME="${FIREWALL_HOST:-firewall}"
 
 mkdir -p "$HOME_DIR/.config/amp"
 
+if [ "${SCCACHE_ENABLE:-}" = "1" ] && command -v sccache >/dev/null 2>&1; then
+    export SCCACHE_DIR="${SCCACHE_DIR:-$HOME_DIR/.cache/sccache}"
+    mkdir -p "$SCCACHE_DIR"
+    export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
+fi
+
 # ── Write harness configs (no MCP — adds ~10s startup overhead) ───────────────
 cat > "$HOME_DIR/.config/amp/settings.json" <<EOF
 {
