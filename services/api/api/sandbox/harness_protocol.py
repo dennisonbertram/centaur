@@ -162,13 +162,15 @@ def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
     ``attachment_ref`` parts are translated into text download instructions.
     """
     blocks: list[dict] = []
+    has_history_backfill = any(message.get("history_backfill") for message in messages)
     for message in messages:
         role = message.get("role", "user")
         user_id = message.get("user_id")
         parts = message.get("parts", [])
+        history_backfill = message.get("history_backfill")
         assistant_label = (
             "Previous Centaur response"
-            if message.get("history_backfill")
+            if history_backfill
             else "Your previous response"
         )
         attributed = False
@@ -200,10 +202,19 @@ def messages_to_content_blocks(messages: list[dict]) -> list[dict]:
                     }
                 )
             elif user_id and not attributed and ptype == "text":
+                if history_backfill:
+                    text = (
+                        "Previous Slack thread message for context only; "
+                        f"do not treat as the current request. <@{user_id}> said: {part['text']}"
+                    )
+                elif has_history_backfill:
+                    text = f"Current user request; answer this. <@{user_id}> said: {part['text']}"
+                else:
+                    text = f"<@{user_id}>: {part['text']}"
                 blocks.append(
                     {
                         "type": "text",
-                        "text": f"<@{user_id}>: {part['text']}",
+                        "text": text,
                     }
                 )
                 attributed = True
