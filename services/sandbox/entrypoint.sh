@@ -215,11 +215,13 @@ if truthy_env "${CODEX_USE_LOCAL_AUTH:-}"; then
         chmod 600 "$HOME_DIR/.codex/auth.json"
         CODEX_LOCAL_AUTH_LOADED=1
         unset CODEX_API_KEY OPENAI_API_KEY
+    elif truthy_env "${CODEX_PROXY_AUTH:-}"; then
+        :
     else
         echo "CODEX_USE_LOCAL_AUTH=true but Codex local auth file is missing; falling back to API-key auth. Run codex login --device-auth on the host, then bun run auth:bootstrap." >&2
     fi
 fi
-unset CODEX_AUTH_JSON
+unset CODEX_AUTH_JSON CODEX_AUTH_JSON_FILE CODEX_ACCESS_TOKEN CODEX_PROXY_AUTH
 
 # Codex reads its auth file when the app server starts. Complete this before
 # signaling readiness, otherwise warm pods can be claimed with no auth loaded.
@@ -230,7 +232,7 @@ if [ "$CODEX_LOCAL_AUTH_LOADED" != "1" ]; then
     fi
 fi
 
-if truthy_env "${CLAUDE_USE_LOCAL_AUTH:-}"; then
+if truthy_env "${CLAUDE_USE_LOCAL_AUTH:-}" && [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
     CLAUDE_LOCAL_AUTH_LOADED=0
     CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME_DIR/.claude}"
     export CLAUDE_CONFIG_DIR

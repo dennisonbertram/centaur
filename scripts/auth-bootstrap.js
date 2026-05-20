@@ -48,7 +48,11 @@ function codexPayload() {
   const path = resolve(home, ".codex", "auth.json");
   const auth = readJson(path);
   if (!auth) return null;
-  return { path, value: JSON.stringify(auth) };
+  const accessToken = auth?.tokens?.access_token;
+  if (typeof accessToken !== "string" || !accessToken) {
+    throw new Error(`${path} does not include tokens.access_token`);
+  }
+  return { path, value: JSON.stringify(auth), accessToken };
 }
 
 function claudeCredentialsFromValue(path, value) {
@@ -62,7 +66,7 @@ function claudeCredentialsFromValue(path, value) {
   ) {
     throw new Error(`${path} does not look like Claude Code OAuth credentials`);
   }
-  return { path, value: JSON.stringify(credentials) };
+  return { path, value: JSON.stringify(credentials), accessToken: oauth.accessToken };
 }
 
 function claudeCredentialsFromFile(path) {
@@ -107,7 +111,9 @@ const loginCommands = [];
 const codex = codexPayload();
 if (codex) {
   updates.CODEX_AUTH_JSON = codex.value;
+  updates.CODEX_ACCESS_TOKEN = codex.accessToken;
   imported.push(["Codex", "CODEX_AUTH_JSON", codex.path]);
+  imported.push(["Codex access token", "CODEX_ACCESS_TOKEN", codex.path]);
 } else {
   loginCommands.push(["Codex", "codex", ["login", "--device-auth"]]);
   missing.push([
@@ -124,9 +130,15 @@ if (codex) {
 const claudeCredentials = claudeCredentialsPayload();
 if (claudeCredentials) {
   updates.CLAUDE_CREDENTIALS_JSON = claudeCredentials.value;
+  updates.CLAUDE_CODE_OAUTH_ACCESS_TOKEN = claudeCredentials.accessToken;
   imported.push([
     "Claude Code credentials",
     "CLAUDE_CREDENTIALS_JSON",
+    claudeCredentials.path,
+  ]);
+  imported.push([
+    "Claude Code access token",
+    "CLAUDE_CODE_OAUTH_ACCESS_TOKEN",
     claudeCredentials.path,
   ]);
 } else {
@@ -169,10 +181,16 @@ if (loginRequested && loginCommands.length > 0) {
     } else if (command === "claude" && args[0] === "auth") {
       const credentials = claudeCredentialsPayload();
       if (credentials) {
-        upsertEnvValues(envFile, { CLAUDE_CREDENTIALS_JSON: credentials.value });
+        upsertEnvValues(envFile, {
+          CLAUDE_CREDENTIALS_JSON: credentials.value,
+          CLAUDE_CODE_OAUTH_ACCESS_TOKEN: credentials.accessToken,
+        });
         console.log(`Wrote ${envFile}`);
         console.log(
           `Claude Code credentials: imported ${credentials.path} into CLAUDE_CREDENTIALS_JSON=[redacted]`,
+        );
+        console.log(
+          `Claude Code access token: imported ${credentials.path} into CLAUDE_CODE_OAUTH_ACCESS_TOKEN=[redacted]`,
         );
       } else {
         console.error("Claude: login completed but Claude Code credentials were not found.");

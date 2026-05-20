@@ -159,10 +159,15 @@ def _default_per_sandbox_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "CODEX_USE_LOCAL_AUTH",
         "CODEX_AUTH_JSON",
         "CODEX_AUTH_JSON_FILE",
+        "CODEX_ACCESS_TOKEN",
+        "CODEX_PROXY_AUTH",
         "CLAUDE_USE_LOCAL_AUTH",
         "CLAUDE_CREDENTIALS_JSON",
         "CLAUDE_CREDENTIALS_JSON_FILE",
+        "CLAUDE_CODE_OAUTH_ACCESS_TOKEN",
+        "ANTHROPIC_AUTH_TOKEN",
         "CLAUDE_CONFIG_DIR",
+        "HARNESS_LOCAL_AUTH_TRANSPORT",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -222,7 +227,7 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
     assert "CODEX_CONTINUE_THREAD_ID" not in env_map
 
 
-def test_container_env_passes_local_auth_only_when_enabled(
+def test_container_env_passes_proxy_local_auth_only_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
@@ -248,17 +253,50 @@ def test_container_env_passes_local_auth_only_when_enabled(
     )
 
     assert codex_env["CODEX_USE_LOCAL_AUTH"] == "true"
-    assert codex_env["CODEX_AUTH_JSON_FILE"] == "/harness-auth/codex-auth.json"
+    assert codex_env["CODEX_PROXY_AUTH"] == "true"
+    assert codex_env["OPENAI_API_KEY"] == "CODEX_ACCESS_TOKEN"
+    assert "CODEX_ACCESS_TOKEN" not in codex_env
+    assert "CODEX_AUTH_JSON_FILE" not in codex_env
     assert "CLAUDE_USE_LOCAL_AUTH" not in codex_env
     assert "CODEX_USE_LOCAL_AUTH" not in claude_env
+    assert claude_env["CLAUDE_USE_LOCAL_AUTH"] == "true"
+    assert claude_env["ANTHROPIC_AUTH_TOKEN"] == "ANTHROPIC_AUTH_TOKEN"
+    assert "CLAUDE_CREDENTIALS_JSON_FILE" not in claude_env
+    assert claude_env["CLAUDE_CONFIG_DIR"] == "/tmp/claude"
+    assert "CODEX_USE_LOCAL_AUTH" not in amp_env
+    assert "CLAUDE_USE_LOCAL_AUTH" not in amp_env
+
+
+def test_container_env_can_use_file_local_auth_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
+    monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
+    monkeypatch.setenv("HARNESS_LOCAL_AUTH_TRANSPORT", "file")
+
+    codex_env = dict(
+        item.split("=", 1)
+        for item in sandbox_container_env(
+            "thread-key", "sandbox-id", "firewall.internal", engine="codex"
+        )
+    )
+    claude_env = dict(
+        item.split("=", 1)
+        for item in sandbox_container_env(
+            "thread-key", "sandbox-id", "firewall.internal", engine="claude-code"
+        )
+    )
+
+    assert codex_env["CODEX_USE_LOCAL_AUTH"] == "true"
+    assert codex_env["CODEX_AUTH_JSON_FILE"] == "/harness-auth/codex-auth.json"
+    assert "CODEX_ACCESS_TOKEN" not in codex_env
     assert claude_env["CLAUDE_USE_LOCAL_AUTH"] == "true"
     assert (
         claude_env["CLAUDE_CREDENTIALS_JSON_FILE"]
         == "/harness-auth/claude-credentials.json"
     )
+    assert "ANTHROPIC_AUTH_TOKEN" not in claude_env
     assert claude_env["CLAUDE_CONFIG_DIR"] == "/tmp/claude"
-    assert "CODEX_USE_LOCAL_AUTH" not in amp_env
-    assert "CLAUDE_USE_LOCAL_AUTH" not in amp_env
 
 
 def test_container_env_filters_raw_local_auth_from_extra_env(
@@ -267,8 +305,13 @@ def test_container_env_filters_raw_local_auth_from_extra_env(
     local_auth_env = {
         "CODEX_USE_LOCAL_AUTH": "true",
         "CODEX_AUTH_JSON": "codex-secret",
+        "CODEX_ACCESS_TOKEN": "codex-token",
+        "CODEX_PROXY_AUTH": "true",
         "CLAUDE_USE_LOCAL_AUTH": "true",
         "CLAUDE_CREDENTIALS_JSON": "claude-secret",
+        "CLAUDE_CODE_OAUTH_ACCESS_TOKEN": "claude-token",
+        "ANTHROPIC_AUTH_TOKEN": "anthropic-token",
+        "HARNESS_LOCAL_AUTH_TRANSPORT": "file",
     }
     monkeypatch.setenv(
         "KUBERNETES_SANDBOX_EXTRA_ENV",
@@ -304,6 +347,12 @@ def test_harness_auth_secret_sources_are_engine_scoped(
     monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
     monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
 
+    assert secret_items("codex") == []
+    assert secret_items("claude-code") == []
+    assert secret_items("amp") == []
+
+    monkeypatch.setenv("HARNESS_LOCAL_AUTH_TRANSPORT", "file")
+
     assert secret_items("codex") == [
         ("custom-harness-auth", "CODEX_AUTH_JSON", "codex-auth.json")
     ]
@@ -315,6 +364,62 @@ def test_harness_auth_secret_sources_are_engine_scoped(
         )
     ]
     assert secret_items("amp") == []
+
+
+def test_harness_proxy_auth_secrets_are_engine_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.sandbox.kubernetes import _harness_proxy_auth_secrets
+
+    monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
+    monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
+
+    codex = _harness_proxy_auth_secrets("codex")
+    claude = _harness_proxy_auth_secrets("claude-code")
+
+    assert [(secret.name, secret.secret_ref, secret.hosts) for secret in codex] == [
+        ("CODEX_ACCESS_TOKEN", "CODEX_ACCESS_TOKEN", ("api.openai.com",))
+    ]
+    assert [(secret.name, secret.secret_ref, secret.hosts) for secret in claude] == [
+        (
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_ACCESS_TOKEN",
+            ("api.anthropic.com",),
+        )
+    ]
+    assert _harness_proxy_auth_secrets("amp") == []
+
+    monkeypatch.setenv("HARNESS_LOCAL_AUTH_TRANSPORT", "file")
+    assert _harness_proxy_auth_secrets("codex") == []
+
+
+def test_proxy_pod_spec_can_receive_harness_auth_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KUBERNETES_HARNESS_AUTH_SECRET_NAME", "custom-harness-auth")
+
+    backend = KubernetesExecutorBackend()
+    spec = backend._build_proxy_pod_spec(
+        "sandbox-id",
+        [],
+        {},
+        restart_policy="Never",
+        harness_auth_env_keys=("CODEX_ACCESS_TOKEN",),
+    )
+
+    assert spec["containers"][0]["envFrom"] == [
+        {"secretRef": {"name": "centaur-infra-env"}},
+    ]
+    assert {
+        "name": "CODEX_ACCESS_TOKEN",
+        "valueFrom": {
+            "secretKeyRef": {
+                "name": "custom-harness-auth",
+                "key": "CODEX_ACCESS_TOKEN",
+                "optional": True,
+            }
+        },
+    } in spec["containers"][0]["env"]
 
 
 def test_container_env_passes_laminar_otel_config(
