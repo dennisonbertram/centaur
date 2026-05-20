@@ -229,6 +229,20 @@ def test_container_env_passes_laminar_otel_config(
     assert env_map["CODEX_OTEL_ENVIRONMENT"] == "staging"
 
 
+def test_container_env_only_passes_onepassword_token_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "ops_real")
+    monkeypatch.delenv("KUBERNETES_SANDBOX_ONEPASSWORD_DIRECT", raising=False)
+
+    env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
+    assert "OP_SERVICE_ACCOUNT_TOKEN=ops_real" not in env
+
+    monkeypatch.setenv("KUBERNETES_SANDBOX_ONEPASSWORD_DIRECT", "1")
+    env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
+    assert "OP_SERVICE_ACCOUNT_TOKEN=ops_real" in env
+
+
 def test_container_env_applies_kubernetes_sandbox_extra_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -31,6 +31,8 @@ _SANDBOX_PASSTHROUGH_ENV_KEYS = (
     "WORKSPACE_ENV_LOCAL_B64",
 )
 
+_ONEPASSWORD_DIRECT_ENV_KEYS = ("OP_SERVICE_ACCOUNT_TOKEN",)
+
 # Keep Claude Code deterministic in the pod while still allowing Centaur-owned
 # OTel export from claude-app-wrapper.
 _CLAUDE_HARDENING_ENV = (
@@ -144,6 +146,11 @@ def container_env(
         value = (os.getenv(key) or "").strip()
         if value:
             env.append(f"{key}={value}")
+    if (os.getenv("KUBERNETES_SANDBOX_ONEPASSWORD_DIRECT") or "").strip() == "1":
+        for key in _ONEPASSWORD_DIRECT_ENV_KEYS:
+            value = (os.getenv(key) or "").strip()
+            if value:
+                env.append(f"{key}={value}")
     for key, value in _CLAUDE_HARDENING_ENV:
         env.append(f"{key}={value}")
     env.extend(
