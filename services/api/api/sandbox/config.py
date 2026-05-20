@@ -62,20 +62,13 @@ def _set_env(env: list[str], name: str, value: str) -> None:
     env.append(entry)
 
 
-def _truthy(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def sandbox_env_flag(
-    name: str, extra_env: list[tuple[str, str]] | None = None
-) -> bool:
-    """Resolve sandbox flags after applying KUBERNETES_SANDBOX_EXTRA_ENV overrides."""
+def sandbox_env_flag(name: str, extra_env: list[tuple[str, str]] | None = None) -> bool:
     if extra_env is None:
         extra_env = _sandbox_extra_env()
     for key, value in reversed(extra_env):
         if key == name:
-            return _truthy(value)
-    return _truthy(os.getenv(name))
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _sandbox_extra_env() -> list[tuple[str, str]]:
@@ -152,21 +145,8 @@ def container_env(
     visibility = amp_thread_visibility()
     if visibility:
         env.append(f"AMP_THREAD_VISIBILITY={visibility}")
-    durable_resume_enabled = sandbox_env_flag("HARNESS_DURABLE_RESUME", extra_env)
     if resume_thread_id:
-        if durable_resume_enabled:
-            if engine == "codex":
-                env.append(f"CODEX_CONTINUE_THREAD_ID={resume_thread_id}")
-            elif engine == "claude-code":
-                env.append(f"CLAUDE_CONTINUE_SESSION_ID={resume_thread_id}")
-            elif engine == "amp":
-                env.append(f"AMP_CONTINUE_THREAD_ID={resume_thread_id}")
-        else:
-            env.append(f"AMP_CONTINUE_THREAD_ID={resume_thread_id}")
-            if engine == "claude-code":
-                env.append(f"CLAUDE_CONTINUE_SESSION_ID={resume_thread_id}")
-    if durable_resume_enabled:
-        env.append("HARNESS_DURABLE_RESUME=true")
+        env.append(f"AMP_CONTINUE_THREAD_ID={resume_thread_id}")
 
     no_proxy_hosts = ["localhost", "127.0.0.1", firewall_host]
     api_host = urlsplit(api_url).hostname

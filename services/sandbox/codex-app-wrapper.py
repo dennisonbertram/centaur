@@ -78,10 +78,6 @@ def request(
     return response.get("result") or {}
 
 
-def _env_flag(name: str) -> bool:
-    return (os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
 def notify(method: str, params: dict[str, Any] | None = None) -> None:
     send_raw({"method": method, "params": params or {}})
 
@@ -321,33 +317,15 @@ def start_or_resume_thread() -> str:
     global THREAD_ID
     if THREAD_ID:
         return THREAD_ID
-    if _env_flag("HARNESS_DURABLE_RESUME"):
-        resume = (os.environ.get("CODEX_CONTINUE_THREAD_ID") or "").strip()
-    else:
-        resume = (
-            os.environ.get("CODEX_CONTINUE_THREAD_ID")
-            or os.environ.get("AMP_CONTINUE_THREAD_ID")
-            or ""
-        ).strip()
+    resume = (
+        os.environ.get("CODEX_CONTINUE_THREAD_ID")
+        or os.environ.get("AMP_CONTINUE_THREAD_ID")
+        or ""
+    ).strip()
     if resume:
-        try:
-            result = request(
-                "thread/resume", {"threadId": resume, "cwd": os.getcwd()}, timeout=60
-            )
-        except RuntimeError as exc:
-            if not _env_flag("HARNESS_DURABLE_RESUME") or "no rollout found" not in str(
-                exc
-            ).lower():
-                raise
-            emit(
-                {
-                    "type": "system",
-                    "subtype": "resume_fallback",
-                    "thread_id": resume,
-                    "message": "stale codex thread; starting a fresh thread",
-                }
-            )
-            result = request("thread/start", {"cwd": os.getcwd()}, timeout=60)
+        result = request(
+            "thread/resume", {"threadId": resume, "cwd": os.getcwd()}, timeout=60
+        )
     else:
         result = request("thread/start", {"cwd": os.getcwd()}, timeout=60)
     thread = result.get("thread") or {}

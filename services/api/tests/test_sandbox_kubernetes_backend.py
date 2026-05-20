@@ -156,7 +156,6 @@ def _default_per_sandbox_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("KUBERNETES_HARNESS_AUTH_SECRET_NAME", raising=False)
     monkeypatch.delenv("KUBERNETES_BOOTSTRAP_SECRET_NAME", raising=False)
     for key in (
-        "HARNESS_DURABLE_RESUME",
         "CODEX_USE_LOCAL_AUTH",
         "CODEX_AUTH_JSON",
         "CODEX_AUTH_JSON_FILE",
@@ -201,7 +200,6 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
-    monkeypatch.delenv("HARNESS_DURABLE_RESUME", raising=False)
 
     env = sandbox_container_env(
         "thread-key",
@@ -222,47 +220,6 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
     assert env_map["no_proxy"] == env_map["NO_PROXY"]
     assert env_map["AMP_CONTINUE_THREAD_ID"] == "T-legacy"
     assert "CODEX_CONTINUE_THREAD_ID" not in env_map
-
-
-def test_container_env_uses_provider_resume_when_enabled(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("HARNESS_DURABLE_RESUME", "true")
-
-    env = sandbox_container_env(
-        "thread-key",
-        "sandbox-id",
-        "firewall.internal",
-        engine="codex",
-        resume_thread_id="codex-thread",
-    )
-    env_map = dict(item.split("=", 1) for item in env)
-
-    assert env_map["HARNESS_DURABLE_RESUME"] == "true"
-    assert env_map["CODEX_CONTINUE_THREAD_ID"] == "codex-thread"
-    assert "AMP_CONTINUE_THREAD_ID" not in env_map
-
-
-def test_container_env_honors_durable_resume_from_extra_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv(
-        "KUBERNETES_SANDBOX_EXTRA_ENV",
-        json.dumps([{"name": "HARNESS_DURABLE_RESUME", "value": "true"}]),
-    )
-
-    env = sandbox_container_env(
-        "thread-key",
-        "sandbox-id",
-        "firewall.internal",
-        engine="codex",
-        resume_thread_id="codex-thread",
-    )
-    env_map = dict(item.split("=", 1) for item in env)
-
-    assert env_map["HARNESS_DURABLE_RESUME"] == "true"
-    assert env_map["CODEX_CONTINUE_THREAD_ID"] == "codex-thread"
-    assert "AMP_CONTINUE_THREAD_ID" not in env_map
 
 
 def test_container_env_passes_local_auth_only_when_enabled(

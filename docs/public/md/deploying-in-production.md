@@ -155,19 +155,6 @@ Claude Code subscription credentials contain a rotating refresh token, so they
 are best treated as a narrow opt-in path rather than fleet auth. Prefer Console
 API keys, `ANTHROPIC_AUTH_TOKEN`, or an auth helper/gateway for concurrent pods.
 
-Durable provider resume is separately opt-in:
-
-```yaml
-sandbox:
-  extraEnv:
-    HARNESS_DURABLE_RESUME: "true"
-```
-
-When enabled, Centaur uses provider-specific resume ids:
-`AMP_CONTINUE_THREAD_ID`, `CODEX_CONTINUE_THREAD_ID`, and
-`CLAUDE_CONTINUE_SESSION_ID`. When disabled, the legacy resume behavior is left
-unchanged.
-
 ## 4. Configure Slack
 
 Create the Slackbot app at [api.slack.com/apps](https://api.slack.com/apps).
