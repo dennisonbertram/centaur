@@ -320,6 +320,52 @@ def _progress_silence_timeout_s(
     return float(EXECUTION_SILENCE_TIMEOUT_S)
 
 
+def _terminal_failure_result_text(
+    *,
+    terminal_reason: str,
+    error_text: str | None,
+    observations: ExecutionObservationAccumulator,
+    latest_command_event: dict[str, Any] | None = None,
+) -> str:
+    reason = terminal_reason.replace("_", " ")
+    lines = [f"I could not complete the turn because {reason}."]
+    details: list[str] = []
+    if observations.assistant_text_events:
+        details.append(
+            f"drafted {observations.assistant_text_events} assistant update(s)"
+        )
+    if observations.assistant_tool_use_events:
+        tool_names = ", ".join(
+            name for name, _count in observations.tools.most_common(3)
+        )
+        if tool_names:
+            details.append(
+                f"used {observations.assistant_tool_use_events} tool call(s): {tool_names}"
+            )
+        else:
+            details.append(
+                f"used {observations.assistant_tool_use_events} tool call(s)"
+            )
+    if observations.command_events:
+        details.append(f"observed {observations.command_events} command update(s)")
+    if observations.file_change_events:
+        details.append(f"observed {observations.file_change_events} file change event(s)")
+    if details:
+        lines.append("Progress before failure: " + "; ".join(details) + ".")
+    if latest_command_event:
+        command = str(latest_command_event.get("command") or "").strip()
+        status = str(latest_command_event.get("status") or "").strip()
+        if command:
+            command = command.replace("\n", " ")[:160]
+            suffix = f" ({status})" if status else ""
+            lines.append(f"Last command observed: `{command}`{suffix}.")
+    if error_text:
+        clipped_error = " ".join(str(error_text).strip().split())[:240]
+        if clipped_error:
+            lines.append(f"Error: {clipped_error}")
+    return "\n".join(lines)
+
+
 def _extract_repo_context(source: Any) -> dict[str, str]:
     payload = source if isinstance(source, dict) else {}
     repo_context: dict[str, str] = {}
@@ -2494,6 +2540,14 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
         result_text: str,
         error_text: str | None,
     ) -> None:
+        nonlocal latest_command_event
+        if status != "completed" and not result_text.strip():
+            result_text = _terminal_failure_result_text(
+                terminal_reason=terminal_reason,
+                error_text=error_text,
+                observations=observations,
+                latest_command_event=latest_command_event,
+            )
         current_status = await pool.fetchval(
             "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
             execution_id,
@@ -2609,6 +2663,7 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
 
     turn_done_event: dict[str, Any] | None = None
     latest_terminal_result_text = ""
+    latest_command_event: dict[str, Any] | None = None
     slackbot_streamed_answer_chars = 0
     pending_event: asyncio.Task | None = None
     stream = _stream_stdout(
@@ -2691,6 +2746,9 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
             if payload.get("session_id"):
                 harness_thread_id = str(payload.get("session_id") or "")
             canonical_events = normalize_harness_event(engine, payload)
+            for canonical_event in canonical_events:
+                if canonical_event.get("type") == "command_execution":
+                    latest_command_event = canonical_event
             for canonical_event in canonical_events:
                 if canonical_event.get("type") != "result":
                     continue

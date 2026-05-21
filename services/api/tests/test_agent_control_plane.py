@@ -1164,6 +1164,127 @@ async def test_worker_marks_turn_done_error_as_failed_and_updates_runtime(db_poo
 
 
 @pytest.mark.asyncio
+async def test_worker_synthesizes_failure_result_from_observed_progress(db_pool):
+    from api.runtime_control import _process_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'codex', 'codex', NULL, 'harness:codex', 'sha', 'active')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, hard_deadline_at"
+        ") VALUES ($1, $2, 1, 'exec-progress-error', 'hash-progress-error', "
+        "'running', '{}'::jsonb, '{}'::jsonb, NOW() + INTERVAL '10 minutes')",
+        execution_id,
+        thread_key,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
+        "VALUES ($1, $2, '{}'::jsonb, 'awaiting_terminal')",
+        execution_id,
+        thread_key,
+    )
+    row = {
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "assignment_generation": 1,
+        "delivery": {},
+        "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
+    }
+    session = SandboxSession(
+        sandbox_id=runtime_id,
+        thread_key=thread_key,
+        harness="codex",
+        engine="codex",
+    )
+
+    async def _progress_then_error_stream(*_args, **_kwargs):
+        yield {
+            "data": json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {
+                        "id": "cmd-1",
+                        "type": "command_execution",
+                        "command": "gh run watch 123",
+                    },
+                }
+            )
+        }
+        yield {
+            "data": json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {
+                        "id": "cmd-1",
+                        "type": "command_execution",
+                        "command": "gh run watch 123",
+                        "aggregated_output": "still waiting for CI",
+                        "status": "running",
+                    },
+                }
+            )
+        }
+        yield {
+            "data": json.dumps(
+                {
+                    "type": "turn.failed",
+                    "error": "command timed out waiting for CI",
+                }
+            )
+        }
+
+    backend = SimpleNamespace(attach=AsyncMock(), close_streams=AsyncMock())
+    with (
+        patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
+        patch(
+            "api.runtime_control.inject_stdin",
+            new=AsyncMock(
+                return_value={"ok": True, "injected": True, "durable_turn_id": "turn-1"}
+            ),
+        ),
+        patch("api.runtime_control.get_backend", return_value=backend),
+        patch(
+            "api.runtime_control._get_runtime",
+            return_value=SimpleNamespace(turn_counter=1),
+        ),
+        patch("api.runtime_control._stream_stdout", _progress_then_error_stream),
+    ):
+        await _process_execution(db_pool, row)
+
+    execution = await db_pool.fetchrow(
+        "SELECT status, terminal_reason, result_text, error_text "
+        "FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution is not None
+    assert execution["status"] == "failed_permanent"
+    assert execution["terminal_reason"] == "harness_error"
+    assert "could not complete the turn" in execution["result_text"]
+    assert "observed 1 command update" in execution["result_text"]
+    assert "gh run watch 123" in execution["result_text"]
+    assert "command timed out waiting for CI" in execution["error_text"]
+
+    outbox = await db_pool.fetchrow(
+        "SELECT final_payload FROM agent_final_delivery_outbox WHERE execution_id = $1",
+        execution_id,
+    )
+    assert outbox is not None
+    payload = json.loads(outbox["final_payload"])
+    assert payload["result_text"] == execution["result_text"]
+
+
+@pytest.mark.asyncio
 async def test_worker_requeues_raw_harness_auth_error_once_on_fresh_runtime(db_pool):
     from api.runtime_control import _claim_next_execution, _process_execution
 
