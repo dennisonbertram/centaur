@@ -95,10 +95,22 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     && cargo --version \
     && rustfmt --version \
     && clippy-driver --version
-RUN --mount=type=cache,target=/home/agent/.cargo/registry,uid=1001,gid=1001,sharing=locked \
-    --mount=type=cache,target=/home/agent/.cargo/git,uid=1001,gid=1001,sharing=locked \
-    cargo install --locked sccache \
-    && sccache --version
+ARG SCCACHE_VERSION=0.15.0
+RUN set -eux; \
+    sccache_arch="$(case "$(dpkg --print-architecture)" in \
+      amd64) echo x86_64 ;; \
+      arm64) echo aarch64 ;; \
+      *) echo unsupported-architecture >&2; exit 1 ;; \
+    esac)"; \
+    sccache_pkg="sccache-v${SCCACHE_VERSION}-${sccache_arch}-unknown-linux-musl"; \
+    sccache_base="https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/${sccache_pkg}.tar.gz"; \
+    curl -fsSL "$sccache_base" -o /tmp/sccache.tar.gz; \
+    curl -fsSL "${sccache_base}.sha256" -o /tmp/sccache.sha256; \
+    echo "$(cat /tmp/sccache.sha256)  /tmp/sccache.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/sccache.tar.gz -C /tmp; \
+    install -m 0755 "/tmp/${sccache_pkg}/sccache" "$HOME/.cargo/bin/sccache"; \
+    rm -rf /tmp/sccache.tar.gz /tmp/sccache.sha256 "/tmp/${sccache_pkg}"; \
+    sccache --version
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 RUN curl -fsSL https://bun.sh/install | bash -s "${BUN_VERSION}"
 RUN --mount=type=cache,target=/home/agent/.cache/uv,uid=1001,gid=1001,sharing=locked \
