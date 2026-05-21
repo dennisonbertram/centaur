@@ -1319,7 +1319,13 @@ async def test_worker_sends_final_result_when_live_slack_only_streamed_placehold
         execution_id,
     )
     assert outbox is not None
-    assert outbox["state"] == "delivered"
+    assert outbox["state"] == "pending"
+    final_payload = (
+        json.loads(outbox["final_payload"])
+        if isinstance(outbox["final_payload"], str)
+        else outbox["final_payload"]
+    )
+    assert final_payload["result_text"] == final_text
 
 
 @pytest.mark.asyncio

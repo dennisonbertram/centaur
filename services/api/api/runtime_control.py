@@ -1808,7 +1808,6 @@ async def _mark_execution_terminal(
     repo_context: dict[str, str] = {}
     slackbot_streamed_answer_chars = 0
     suppress_final_delivery = False
-    suppress_legacy_delivery = False
     raw_agent_thread_id = await pool.fetchval(
         "SELECT agent_thread_id FROM sandbox_sessions WHERE thread_key = $1",
         thread_key,
@@ -1830,10 +1829,6 @@ async def _mark_execution_terminal(
             )
             slackbot_live_delivery_failed = bool(
                 metadata.get("slackbot_live_delivery_failed")
-            )
-            suppress_legacy_delivery = (
-                _has_slackbot_live_delivery(metadata)
-                and not slackbot_live_delivery_failed
             )
             raw_streamed_answer_chars = metadata.get("slackbot_streamed_answer_chars")
             if (
@@ -1899,18 +1894,14 @@ async def _mark_execution_terminal(
     delivery_platform = _delivery_platform(
         decode_jsonb(row["delivery"], {}) if row else {}
     )
-    if delivery_platform == "dev" or suppress_legacy_delivery:
+    if delivery_platform == "dev":
         log.info(
-            "final_delivery_skipped"
-            if suppress_legacy_delivery
-            else "final_delivery_skipped_dev",
+            "final_delivery_skipped_dev",
             execution_id=execution_id,
             thread_key=thread_key,
             status=status,
             terminal_reason=terminal_reason,
-            reason="slackbot_live_delivery"
-            if suppress_legacy_delivery
-            else "dev_delivery",
+            reason="dev_delivery",
         )
         try:
             from api.workflow_engine import notify_execution_terminal
