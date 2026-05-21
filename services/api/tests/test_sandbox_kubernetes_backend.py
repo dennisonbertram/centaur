@@ -208,6 +208,26 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
     assert env_map["no_proxy"] == env_map["NO_PROXY"]
 
 
+def test_container_env_adds_extra_no_proxy_hosts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_API_URL", "http://api.internal:8000")
+    monkeypatch.setenv(
+        "KUBERNETES_SANDBOX_NO_PROXY_EXTRA",
+        "livermore-dev-meilisearch.centaur.svc.cluster.local, api.internal, ",
+    )
+
+    env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
+    env_map = dict(item.split("=", 1) for item in env)
+
+    assert (
+        env_map["NO_PROXY"]
+        == "localhost,127.0.0.1,firewall.internal,api.internal,"
+        "livermore-dev-meilisearch.centaur.svc.cluster.local"
+    )
+    assert env_map["no_proxy"] == env_map["NO_PROXY"]
+
+
 def test_container_env_passes_laminar_otel_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

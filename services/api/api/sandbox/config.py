@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 from urllib.parse import urlsplit
 
 from api.deps import mint_sandbox_token
@@ -78,6 +78,19 @@ def _sandbox_extra_env() -> list[tuple[str, str]]:
     return extra
 
 
+def _sandbox_no_proxy_extra_hosts() -> list[str]:
+    raw = (os.getenv("KUBERNETES_SANDBOX_NO_PROXY_EXTRA") or "").strip()
+    if not raw:
+        return []
+
+    hosts: list[str] = []
+    for value in raw.split(","):
+        host = value.strip()
+        if host:
+            hosts.append(host)
+    return hosts
+
+
 def amp_mode() -> str:
     return (os.getenv("AMP_MODE") or "deep").strip() or "deep"
 
@@ -134,6 +147,7 @@ def container_env(
     api_host = urlsplit(api_url).hostname
     if api_host:
         no_proxy_hosts.append(api_host)
+    no_proxy_hosts.extend(_sandbox_no_proxy_extra_hosts())
     no_proxy = ",".join(dict.fromkeys(no_proxy_hosts))
     # Placeholder values for harness infra secrets. iron-proxy MITMs the
     # outbound TLS connection and rewrites these strings in auth headers
