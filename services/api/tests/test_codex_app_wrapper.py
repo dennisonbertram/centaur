@@ -227,3 +227,44 @@ def test_main_lazy_starts_app_server_after_input(monkeypatch) -> None:
     )
     assert {"type": "thread.started", "thread_id": "thread-123"} in emitted
     assert {"type": "turn.completed"} in emitted
+
+
+def test_handle_input_sets_codex_sandbox_policy(monkeypatch) -> None:
+    wrapper = _load_wrapper()
+    requests: list[tuple[str, dict]] = []
+
+    def fake_request(method: str, params: dict, timeout: float = 30.0) -> dict:
+        requests.append((method, params))
+        if method == "turn/start":
+            return {"turn": {"id": "turn-123"}}
+        return {}
+
+    monkeypatch.setattr(
+        wrapper, "configure_laminar_otel_for_startup", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(wrapper, "start_app_server", lambda: None)
+    monkeypatch.setattr(wrapper, "start_or_resume_thread", lambda: "thread-123")
+    monkeypatch.setattr(wrapper, "request", fake_request)
+
+    wrapper.ACTIVE_TURN_ID = None
+    while not wrapper.EVENTS.empty():
+        wrapper.EVENTS.get_nowait()
+    wrapper.EVENTS.put({"method": "turn/completed", "params": {}})
+
+    wrapper.handle_input(
+        {
+            "type": "user",
+            "message": {"content": [{"type": "text", "text": "hello"}]},
+        }
+    )
+
+    assert requests == [
+        (
+            "turn/start",
+            {
+                "threadId": "thread-123",
+                "input": [{"type": "text", "text": "hello"}],
+                "sandboxPolicy": {"type": "dangerFullAccess"},
+            },
+        )
+    ]

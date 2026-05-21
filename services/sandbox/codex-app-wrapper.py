@@ -33,6 +33,7 @@ SHUTTING_DOWN = False
 CONFIGURED_OTEL_TRACE_ID: str | None = None
 APP_INITIALIZED = False
 CURRENT_TRACEPARENT: str | None = None
+CODEX_SANDBOX_POLICY = {"type": "dangerFullAccess"}
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -464,7 +465,11 @@ def handle_input(turn_input: dict[str, Any]) -> None:
         emit({"type": "turn.completed"})
         return
 
-    params = {"threadId": thread_id, "input": items}
+    params = {
+        "threadId": thread_id,
+        "input": items,
+        "sandboxPolicy": CODEX_SANDBOX_POLICY,
+    }
     if ACTIVE_TURN_ID or turn_input.get("steer"):
         try:
             steer_params = {**params, "expectedTurnId": ACTIVE_TURN_ID or ""}
