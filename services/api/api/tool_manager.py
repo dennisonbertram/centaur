@@ -42,6 +42,12 @@ def _disabled_tool_names() -> set[str]:
     return {name.strip() for name in raw.split(",") if name.strip()}
 
 
+def _enabled_tool_names() -> set[str] | None:
+    raw = os.getenv("CENTAUR_ENABLED_TOOLS", "")
+    names = {name.strip() for name in raw.split(",") if name.strip()}
+    return names or None
+
+
 # Headers the legacy raw-string shim lets iron-proxy scan for ``secrets``-transform
 # placeholders. Literal strings match a single header name; ``/.../`` is a regex.
 # Typed secret entries must instead name the exact headers they touch via
@@ -1369,6 +1375,7 @@ class ToolManager:
         """
         seen: dict[str, int] = {}
         tools: list[tuple[Path, dict]] = []
+        enabled_tools = _enabled_tool_names()
         disabled_tools = _disabled_tool_names()
         for dir_idx, base_dir in enumerate(self.tools_dirs):
             if not base_dir.exists():
@@ -1398,6 +1405,9 @@ class ToolManager:
                 tool_conf = pyproject.get("tool", {}).get("centaur", {})
 
                 name = tool_dir.name
+                if enabled_tools is not None and name not in enabled_tools:
+                    log.info("tool_not_enabled", tool=name)
+                    continue
                 if name in disabled_tools:
                     log.info("tool_disabled", tool=name)
                     continue
