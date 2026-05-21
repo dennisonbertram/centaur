@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import { pollFinalDeliveriesOnce } from "./final-delivery";
+import {
+  pollFinalDeliveriesOnce,
+  shouldAlertFinalDeliveryPollFailure,
+} from "./final-delivery";
 import type { AppConfig } from "../config";
 
 const config: AppConfig = {
@@ -23,6 +26,26 @@ afterEach(() => {
 });
 
 describe("final delivery polling", () => {
+  it("does not alert for brief final delivery poll failures during deploys", () => {
+    expect(
+      shouldAlertFinalDeliveryPollFailure({
+        consecutiveFailures: 3,
+        firstFailureAt: 1_000,
+        lastAlertAt: 0,
+        now: 6_000,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldAlertFinalDeliveryPollFailure({
+        consecutiveFailures: 30,
+        firstFailureAt: 1_000,
+        lastAlertAt: 0,
+        now: 61_000,
+      }),
+    ).toBe(true);
+  });
+
   it("posts a claimed delivery once and marks it delivered before the next poll", async () => {
     const originalFetch = globalThis.fetch;
     const fetchCalls: Array<{ path: string; body: unknown }> = [];

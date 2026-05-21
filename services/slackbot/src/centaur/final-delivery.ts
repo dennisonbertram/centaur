@@ -9,6 +9,7 @@ const CONSUMER_ID = `slackbot-${process.pid}`
 const FINAL_DELIVERY_CHUNK_CHARS = slackReplyLimits.text.maxFallbackChars
 const FINAL_DELIVERY_CHUNK_EVENT = 'centaur_final_delivery_chunk'
 const FINAL_DELIVERY_POLL_ALERT_FAILURES = 3
+const FINAL_DELIVERY_POLL_ALERT_FAILURE_MS = 60_000
 const FINAL_DELIVERY_POLL_ALERT_INTERVAL_MS = 5 * 60 * 1000
 const NON_RETRYABLE_SLACK_ERRORS = new Set([
   'msg_too_long',
@@ -26,18 +27,25 @@ const NON_RETRYABLE_SLACK_ERRORS = new Set([
 export function startFinalDeliveryPoller(config: AppConfig, client: WebClient): void {
   if (!centaurApiKey(config)) return
   let consecutiveFailures = 0
+  let firstFailureAt = 0
   let lastAlertAt = 0
   const tick = async () => {
     try {
       await pollFinalDeliveriesOnce(config, client)
       consecutiveFailures = 0
+      firstFailureAt = 0
     } catch (error) {
       consecutiveFailures += 1
       logError('final_delivery_poll_failed', error)
       const now = Date.now()
+      if (!firstFailureAt) firstFailureAt = now
       if (
-        consecutiveFailures >= FINAL_DELIVERY_POLL_ALERT_FAILURES &&
-        now - lastAlertAt >= FINAL_DELIVERY_POLL_ALERT_INTERVAL_MS
+        shouldAlertFinalDeliveryPollFailure({
+          consecutiveFailures,
+          firstFailureAt,
+          lastAlertAt,
+          now
+        })
       ) {
         lastAlertAt = now
         await postRuntimeAlert(config, client, {
@@ -50,6 +58,24 @@ export function startFinalDeliveryPoller(config: AppConfig, client: WebClient): 
   }
   setInterval(tick, 2_000).unref?.()
   void tick()
+}
+
+export function shouldAlertFinalDeliveryPollFailure({
+  consecutiveFailures,
+  firstFailureAt,
+  lastAlertAt,
+  now
+}: {
+  consecutiveFailures: number
+  firstFailureAt: number
+  lastAlertAt: number
+  now: number
+}): boolean {
+  return (
+    consecutiveFailures >= FINAL_DELIVERY_POLL_ALERT_FAILURES &&
+    now - firstFailureAt >= FINAL_DELIVERY_POLL_ALERT_FAILURE_MS &&
+    (!lastAlertAt || now - lastAlertAt >= FINAL_DELIVERY_POLL_ALERT_INTERVAL_MS)
+  )
 }
 
 export async function pollFinalDeliveriesOnce(config: AppConfig, client: WebClient): Promise<void> {
