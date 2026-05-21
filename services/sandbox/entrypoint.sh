@@ -154,6 +154,10 @@ if [ -n "${AGENT_REPO:-}" ]; then
         git clone --quiet "$REPO_PATH" "$WORKSPACE_DIR"
     fi
 
+    case "$AGENT_REPO" in
+        */*) git -C "$WORKSPACE_DIR" remote set-url origin "https://github.com/${AGENT_REPO}.git" ;;
+    esac
+
     BRANCH="agent-$(date +%s)-${RANDOM}-${RANDOM}"
     git -C "$WORKSPACE_DIR" checkout -q -b "$BRANCH" || true
 else

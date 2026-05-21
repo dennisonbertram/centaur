@@ -236,3 +236,55 @@ def test_sandbox_entrypoint_writes_real_github_token(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert result.stdout == "https://x-access-token:github_pat_fake@github.com\n"
+
+
+def test_sandbox_entrypoint_sets_github_origin_for_cached_repo(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+    repo = home / "github" / "leanxyz" / "livermore"
+    repo.mkdir(parents=True)
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True, text=True)
+    (repo / "README.md").write_text("cached repo\n")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "initial",
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "sh",
+            "-lc",
+            'git remote get-url origin && git rev-parse --abbrev-ref HEAD',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "AGENT_REPO": "leanxyz/livermore",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    remote_url, branch = result.stdout.strip().split("\n")
+    assert remote_url == "https://github.com/leanxyz/livermore.git"
+    assert branch.startswith("agent-")
