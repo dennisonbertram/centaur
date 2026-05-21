@@ -99,3 +99,27 @@ async def test_post_returns_none_after_exhausting_retries():
 
     assert result is None
     assert len(fake.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_session_text_reports_failed_post(monkeypatch):
+    from api import slackbot_client
+
+    async def fake_post(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(slackbot_client, "post", fake_post)
+
+    assert await slackbot_client.session_text("sess", "hello") is False
+
+
+@pytest.mark.asyncio
+async def test_session_done_reports_failed_post(monkeypatch):
+    from api import slackbot_client
+
+    async def fake_post(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(slackbot_client, "post", fake_post)
+
+    assert await slackbot_client.session_done("sess") is False

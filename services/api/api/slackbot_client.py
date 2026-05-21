@@ -148,11 +148,15 @@ async def open_agent_session(
     return session_id or None
 
 
-async def session_text(session_id: str | None, markdown: str) -> None:
+async def session_text(session_id: str | None, markdown: str) -> bool:
     sanitized = sanitize_for_slack(markdown)
     if not session_id or not sanitized.strip():
-        return
-    await post(f"/api/slack/agent-sessions/{session_id}/text", {"markdown": sanitized})
+        return True
+    result = await post(
+        f"/api/slack/agent-sessions/{session_id}/text",
+        {"markdown": sanitized},
+    )
+    return result is not None
 
 
 async def session_step(
@@ -178,13 +182,14 @@ async def session_step(
     await post(f"/api/slack/agent-sessions/{session_id}/step", body)
 
 
-async def session_done(session_id: str | None, thread_id: str | None = None) -> None:
+async def session_done(session_id: str | None, thread_id: str | None = None) -> bool:
     if not session_id:
-        return
+        return True
     body: dict[str, Any] = {}
     if thread_id:
         body["thread_id"] = thread_id
-    await post(f"/api/slack/agent-sessions/{session_id}/done", body)
+    result = await post(f"/api/slack/agent-sessions/{session_id}/done", body)
+    return result is not None
 
 
 async def harness_event(

@@ -2502,6 +2502,7 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
     slackbot_forward_live = not replay_recovered_logs
     slackbot_text_sent = False
     slackbot_done = False
+    slackbot_live_finalize_failed = False
     harness_thread_id = ""
     # Tolerate up to 5 consecutive harness_event failures before falling back
     # to the outbox path; the streak resets on the next success.
@@ -2567,19 +2568,43 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
         if user_id:
             record_execution_by_user(user_id, harness, status)
         nonlocal slackbot_session_id, slackbot_text_sent, slackbot_done
+        nonlocal slackbot_live_finalize_failed
         finalize_session_id = slackbot_session_id or str(
             execution_metadata.get("slackbot_agent_session_id") or ""
         )
         if finalize_session_id and not slackbot_done and slackbot_forward_live:
             try:
+                live_finalize_ok = True
                 if result_text.strip() and not slackbot_text_sent:
-                    await slackbot_client.session_text(finalize_session_id, result_text)
-                    slackbot_text_sent = True
-                await slackbot_client.session_done(
-                    finalize_session_id, harness_thread_id or None
-                )
-                slackbot_done = True
+                    live_finalize_ok = await slackbot_client.session_text(
+                        finalize_session_id,
+                        result_text,
+                    )
+                    slackbot_text_sent = slackbot_text_sent or live_finalize_ok
+                if live_finalize_ok:
+                    live_finalize_ok = await slackbot_client.session_done(
+                        finalize_session_id,
+                        harness_thread_id or None,
+                    )
+                if live_finalize_ok:
+                    slackbot_done = True
+                else:
+                    slackbot_live_finalize_failed = True
+                    log.warning(
+                        "slackbot_live_delivery_finalize_failed",
+                        execution_id=execution_id,
+                        thread_key=thread_key,
+                        reason="slackbot_session_call_failed",
+                    )
+                    await _mark_slackbot_live_delivery_failed(
+                        pool,
+                        execution_id,
+                        "finalize_failed",
+                        streamed_answer_chars=slackbot_streamed_answer_chars,
+                    )
+                    slackbot_session_id = ""
             except Exception:
+                slackbot_live_finalize_failed = True
                 log.warning(
                     "slackbot_live_delivery_finalize_failed",
                     execution_id=execution_id,
@@ -2590,6 +2615,7 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
                     pool,
                     execution_id,
                     "finalize_failed",
+                    streamed_answer_chars=slackbot_streamed_answer_chars,
                 )
                 slackbot_session_id = ""
         await _mark_execution_terminal(
@@ -2601,7 +2627,9 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
             result_text=result_text,
             error_text=error_text,
             slackbot_live_answer_delivered=bool(
-                slackbot_text_sent or slackbot_streamed_answer_chars > 0
+                slackbot_done
+                and not slackbot_live_finalize_failed
+                and (slackbot_text_sent or slackbot_streamed_answer_chars > 0)
             ),
         )
 
