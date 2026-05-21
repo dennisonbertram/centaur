@@ -1,9 +1,11 @@
 """Unit tests for pure functions in api.tool_manager."""
 
+import json
 import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional, Union
 
 import httpx
@@ -355,6 +357,30 @@ class _NullBackend:
         return None
 
 
+class _RecordingPool:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def fetchval(self, query: str, *args: object) -> str:
+        self.calls.append((query, args))
+        return "exe-tool-audit"
+
+    async def execute(self, query: str, *args: object) -> None:
+        self.calls.append((query, args))
+
+
+def _sandbox_request(pool: _RecordingPool):
+    return SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db_pool=pool)),
+        state=SimpleNamespace(
+            sandbox_claims={
+                "thread_key": "slack:T:C:123.456",
+                "container_id": "sandbox-1",
+            }
+        ),
+    )
+
+
 def _write_tool(
     tools_dir: Path,
     name: str,
@@ -574,6 +600,45 @@ async def test_call_tool_invokes_sync_and_async_methods_with_secret_placeholders
         "required": "REQ_TOKEN",
         "optional": "OPT_TOKEN",
     }
+
+
+@pytest.mark.asyncio
+async def test_call_tool_persists_sanitized_audit_event_for_sandbox_calls(
+    tmp_path: Path,
+):
+    tools_dir = tmp_path / "tools"
+    _write_tool(tools_dir, "alpha", FAKE_TOOL_CLIENT)
+    manager = ToolManager(tools_dir)
+    manager.discover()
+    pool = _RecordingPool()
+
+    assert await manager.call_tool(
+        "alpha",
+        "sync_echo",
+        {"text": "hello"},
+        request=_sandbox_request(pool),
+    ) == {"mode": "sync", "text": "hello", "source": "base"}
+
+    assert any("SELECT execution_id" in query for query, _ in pool.calls)
+    insert = next(
+        (args for query, args in pool.calls if "INSERT INTO agent_execution_events" in query),
+        None,
+    )
+    assert insert is not None
+    assert insert[0] == "slack:T:C:123.456"
+    assert insert[1] == "exe-tool-audit"
+    payload = json.loads(str(insert[2]))
+    assert payload == {
+        "type": "tool_call.completed",
+        "tool_name": "alpha",
+        "tool_method": "sync_echo",
+        "arg_keys": ["text"],
+        "duration_ms": payload["duration_ms"],
+        "success": True,
+        "captured": False,
+        "result_size_bytes": payload["result_size_bytes"],
+    }
+    assert "hello" not in str(insert[2])
 
 
 @pytest.mark.asyncio

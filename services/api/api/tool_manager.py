@@ -963,6 +963,68 @@ async def _capture_live_slack_send(
     }
 
 
+async def _record_tool_call_event(
+    *,
+    request: Request | None,
+    sandbox_claims: dict[str, Any] | None,
+    tool_name: str,
+    method_name: str,
+    arg_keys: list[str],
+    duration_ms: int,
+    success: bool,
+    result_size_bytes: int | None = None,
+    error: str | None = None,
+    error_type: str | None = None,
+    captured: bool = False,
+) -> None:
+    if request is None or not sandbox_claims:
+        return
+    thread_key = str(sandbox_claims.get("thread_key") or "").strip()
+    if not thread_key:
+        return
+    pool = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        return
+    try:
+        execution_id = await pool.fetchval(
+            "SELECT execution_id FROM agent_execution_requests "
+            "WHERE thread_key = $1 AND status = 'running' "
+            "ORDER BY started_at DESC NULLS LAST, created_at DESC LIMIT 1",
+            thread_key,
+        )
+        payload = {
+            "type": "tool_call.completed",
+            "tool_name": tool_name,
+            "tool_method": method_name,
+            "arg_keys": arg_keys,
+            "duration_ms": duration_ms,
+            "success": success,
+            "captured": captured,
+            **(
+                {"result_size_bytes": result_size_bytes}
+                if result_size_bytes is not None
+                else {}
+            ),
+            **({"error": error[:500]} if error else {}),
+            **({"error_type": error_type} if error_type else {}),
+        }
+        await pool.execute(
+            "INSERT INTO agent_execution_events (thread_key, execution_id, event_kind, event_json) "
+            "VALUES ($1, $2, 'tool_call_completed', $3::jsonb)",
+            thread_key,
+            execution_id,
+            json.dumps(payload, ensure_ascii=False),
+        )
+    except Exception:
+        log.warning(
+            "tool_call_event_persist_failed",
+            tool_name=tool_name,
+            tool_method=method_name,
+            thread_key=thread_key,
+            exc_info=True,
+        )
+
+
 async def _extract_tool_attachment(
     result: dict[str, Any],
     *,
@@ -1861,13 +1923,25 @@ class ToolManager:
         )
         if captured_slack_send is not None:
             duration_ms = round((time.monotonic() - t0) * 1000)
+            result_size_bytes = _payload_size_bytes(captured_slack_send)
             log.info(
                 "tool_call_completed",
                 duration_ms=duration_ms,
                 success=True,
-                result_size_bytes=_payload_size_bytes(captured_slack_send),
+                result_size_bytes=result_size_bytes,
                 captured=True,
                 **call_fields,
+            )
+            await _record_tool_call_event(
+                request=request,
+                sandbox_claims=sandbox_claims,
+                tool_name=tool_name,
+                method_name=method_name,
+                arg_keys=call_fields["arg_keys"],
+                duration_ms=duration_ms,
+                success=True,
+                result_size_bytes=result_size_bytes,
+                captured=True,
             )
             return captured_slack_send
         validation_error = _tool_arg_validation_error(method, args)
@@ -1876,6 +1950,17 @@ class ToolManager:
                 "tool_argument_validation_failed",
                 error=validation_error["message"],
                 **call_fields,
+            )
+            await _record_tool_call_event(
+                request=request,
+                sandbox_claims=sandbox_claims,
+                tool_name=tool_name,
+                method_name=method_name,
+                arg_keys=call_fields["arg_keys"],
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                success=False,
+                error=validation_error["message"],
+                error_type="ValidationError",
             )
             return validation_error
 
@@ -1943,12 +2028,23 @@ class ToolManager:
                     coro = asyncio.to_thread(method.fn, **args)
                 result = await asyncio.wait_for(coro, timeout=lt.timeout_s)
             duration_ms = round((time.monotonic() - t0) * 1000)
+            result_size_bytes = _payload_size_bytes(result)
             log.info(
                 "tool_call_completed",
                 duration_ms=duration_ms,
                 success=True,
-                result_size_bytes=_payload_size_bytes(result),
+                result_size_bytes=result_size_bytes,
                 **call_fields,
+            )
+            await _record_tool_call_event(
+                request=request,
+                sandbox_claims=sandbox_claims,
+                tool_name=tool_name,
+                method_name=method_name,
+                arg_keys=call_fields["arg_keys"],
+                duration_ms=duration_ms,
+                success=True,
+                result_size_bytes=result_size_bytes,
             )
             return result
         except (SystemExit, Exception) as e:
@@ -1966,6 +2062,17 @@ class ToolManager:
                 error=error_msg,
                 error_type=type(e).__name__,
                 **call_fields,
+            )
+            await _record_tool_call_event(
+                request=request,
+                sandbox_claims=sandbox_claims,
+                tool_name=tool_name,
+                method_name=method_name,
+                arg_keys=call_fields["arg_keys"],
+                duration_ms=duration_ms,
+                success=False,
+                error=error_msg,
+                error_type=type(e).__name__,
             )
             return {"error": error_msg, "tool": tool_name, "method": method_name}
         finally:
@@ -2030,15 +2137,27 @@ class ToolManager:
         )
         if captured_slack_send is not None:
             duration_ms = round((time.monotonic() - t0) * 1000)
+            result_size_bytes = _payload_size_bytes(captured_slack_send)
             log.info(
                 "tool_call_completed",
                 duration_ms=duration_ms,
                 success=True,
-                result_size_bytes=_payload_size_bytes(captured_slack_send),
+                result_size_bytes=result_size_bytes,
                 captured=True,
                 **call_fields,
             )
             record_tool_call(tool_name, method_name, True, duration_ms / 1000)
+            await _record_tool_call_event(
+                request=request,
+                sandbox_claims=sandbox_claims,
+                tool_name=tool_name,
+                method_name=method_name,
+                arg_keys=call_fields["arg_keys"],
+                duration_ms=duration_ms,
+                success=True,
+                result_size_bytes=result_size_bytes,
+                captured=True,
+            )
             if format == "toon":
                 return _to_toon(captured_slack_send)
             return _normalize_for_serialization(captured_slack_send)
@@ -2048,6 +2167,17 @@ class ToolManager:
                 "tool_argument_validation_failed",
                 error=validation_error["message"],
                 **call_fields,
+            )
+            await _record_tool_call_event(
+                request=request,
+                sandbox_claims=sandbox_claims,
+                tool_name=tool_name,
+                method_name=method_name,
+                arg_keys=call_fields["arg_keys"],
+                duration_ms=round((time.monotonic() - t0) * 1000),
+                success=False,
+                error=validation_error["message"],
+                error_type="ValidationError",
             )
             return json.dumps(validation_error)
 
@@ -2125,14 +2255,25 @@ class ToolManager:
                     coro = asyncio.to_thread(method.fn, **args)
                 result = await asyncio.wait_for(coro, timeout=lt.timeout_s)
             duration_ms = round((time.monotonic() - t0) * 1000)
+            result_size_bytes = _payload_size_bytes(result)
             log.info(
                 "tool_call_completed",
                 duration_ms=duration_ms,
                 success=True,
-                result_size_bytes=_payload_size_bytes(result),
+                result_size_bytes=result_size_bytes,
                 **call_fields,
             )
             record_tool_call(tool_name, method_name, True, duration_ms / 1000)
+            await _record_tool_call_event(
+                request=request,
+                sandbox_claims=sandbox_claims,
+                tool_name=tool_name,
+                method_name=method_name,
+                arg_keys=call_fields["arg_keys"],
+                duration_ms=duration_ms,
+                success=True,
+                result_size_bytes=result_size_bytes,
+            )
             if isinstance(result, dict):
                 thread_key = (
                     sandbox_claims.get("thread_key") if sandbox_claims else None
@@ -2163,6 +2304,17 @@ class ToolManager:
                 **call_fields,
             )
             record_tool_call(tool_name, method_name, False, duration_ms / 1000)
+            await _record_tool_call_event(
+                request=request,
+                sandbox_claims=sandbox_claims,
+                tool_name=tool_name,
+                method_name=method_name,
+                arg_keys=call_fields["arg_keys"],
+                duration_ms=duration_ms,
+                success=False,
+                error=error_msg,
+                error_type=type(e).__name__,
+            )
             return json.dumps(
                 {"error": error_msg, "tool": tool_name, "method": method_name}
             )
