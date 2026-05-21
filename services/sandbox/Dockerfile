@@ -150,8 +150,9 @@ RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace 
     && git config --global init.defaultBranch main \
     && git config --global push.autoSetupRemote true \
     && git config --global --add safe.directory '*' \
-    && git config --global user.name "Centaur AI" \
-    && git config --global user.email "ai@centaur.local"
+    && git config --global user.name "pseudolabel" \
+    && git config --global user.email "sudolabel@safeon.de" \
+    && git config --global core.hooksPath /home/agent/.config/git/hooks
 
 # ==============================================================================
 # Final thin stage: only frequently-changing local files below.
@@ -172,6 +173,7 @@ COPY --link --chmod=755 services/sandbox/claude-app-wrapper.py /usr/local/bin/cl
 COPY --link --chmod=755 services/sandbox/harness_adapter.py /usr/local/bin/harness-adapter
 COPY --link --chmod=755 services/sandbox/git-branch.sh /usr/local/bin/git-branch
 COPY --link --chmod=755 services/sandbox/entrypoint.sh /entrypoint.sh
+COPY --link --chown=1001:1001 --chmod=755 services/sandbox/git-hooks/ /home/agent/.config/git/hooks/
 
 USER agent
 WORKDIR /home/agent
