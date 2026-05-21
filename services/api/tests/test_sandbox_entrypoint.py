@@ -183,3 +183,56 @@ def test_sandbox_entrypoint_appends_codex_laminar_otel_config(tmp_path: Path) ->
     assert '"x-centaur-thread-key" = "slack:C123:1700000000.000100"' in result.stdout
     assert '"authorization" = "Bearer lmnr-key"' in result.stdout
     assert 'environment = "staging"' in result.stdout
+
+
+def test_sandbox_entrypoint_ignores_github_placeholder_token(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "sh",
+            "-lc",
+            'sleep 0.2; test ! -f "$HOME/.git-credentials"',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "GITHUB_TOKEN": "GITHUB_TOKEN",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_sandbox_entrypoint_writes_real_github_token(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    harness_dir = _write_codex_harness_config(home)
+
+    result = subprocess.run(
+        [
+            "bash",
+            str(ENTRYPOINT_SH),
+            "sh",
+            "-lc",
+            'sleep 0.2; cat "$HOME/.git-credentials"',
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "HOME": str(home),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
+            "GH_TOKEN": "github_pat_fake",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert result.stdout == "https://x-access-token:github_pat_fake@github.com\n"

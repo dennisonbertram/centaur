@@ -203,9 +203,36 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
     # iron-proxy rewrites the placeholder mid-flight.
     assert env_map["AMP_API_KEY"] == "AMP_API_KEY"
     assert env_map["OPENAI_API_KEY"] == "OPENAI_API_KEY"
+    assert env_map["GITHUB_TOKEN"] == "GITHUB_TOKEN"
     assert env_map["CENTAUR_TRACE_ID"] == "00000000-0000-0000-0000-000000000123"
     assert env_map["NO_PROXY"] == "localhost,127.0.0.1,firewall.internal,api.internal"
     assert env_map["no_proxy"] == env_map["NO_PROXY"]
+
+
+def test_container_env_can_pass_direct_github_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("KUBERNETES_SANDBOX_GITHUB_TOKEN_DIRECT", "1")
+    monkeypatch.setenv("GITHUB_TOKEN", "github_pat_fake")
+
+    env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
+    env_map = dict(item.split("=", 1) for item in env)
+
+    assert env_map["GITHUB_TOKEN"] == "github_pat_fake"
+    assert env_map["GH_TOKEN"] == "github_pat_fake"
+    assert len([item for item in env if item.startswith("GITHUB_TOKEN=")]) == 1
+
+
+def test_container_env_keeps_github_placeholder_without_direct_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "github_pat_fake")
+
+    env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
+    env_map = dict(item.split("=", 1) for item in env)
+
+    assert env_map["GITHUB_TOKEN"] == "GITHUB_TOKEN"
+    assert "GH_TOKEN" not in env_map
 
 
 def test_container_env_adds_extra_no_proxy_hosts(

@@ -75,6 +75,17 @@ toml_escape() {
     printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
+is_placeholder_secret() {
+    case "${1:-}" in
+        "" | "GITHUB_TOKEN" | "GH_TOKEN" | "GITHUB_PAT")
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 HARNESS_CONFIG_DIR="${CENTAUR_HARNESS_CONFIG_DIR:-$HOME_DIR/harness}"
 if [ -f "$HARNESS_CONFIG_DIR/codex/config.toml" ]; then
     cp "$HARNESS_CONFIG_DIR/codex/config.toml" "$HOME_DIR/.codex/config.toml"
@@ -250,10 +261,11 @@ touch "$HOME_DIR/.ready"
 
 # ── Background: slow auth tasks ─────────────────────────────────────────────
 {
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
+    GIT_AUTH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+    if ! is_placeholder_secret "$GIT_AUTH_TOKEN"; then
         git config --global credential.helper store
-        printf 'https://oauth2:%s@github.com\n' "$GITHUB_TOKEN" > "$HOME_DIR/.git-credentials"
-        echo "${GITHUB_TOKEN}" | gh auth login --with-token 2>/dev/null || true
+        printf 'https://x-access-token:%s@github.com\n' "$GIT_AUTH_TOKEN" > "$HOME_DIR/.git-credentials"
+        printf '%s\n' "$GIT_AUTH_TOKEN" | gh auth login --with-token 2>/dev/null || true
         gh auth setup-git 2>/dev/null || true
     fi
 } &

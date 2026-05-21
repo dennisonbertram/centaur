@@ -55,6 +55,21 @@ def _set_env(env: list[str], name: str, value: str) -> None:
     env.append(entry)
 
 
+def _env_flag(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _sandbox_direct_github_token() -> str | None:
+    if not _env_flag("KUBERNETES_SANDBOX_GITHUB_TOKEN_DIRECT"):
+        return None
+
+    for key in ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PAT"):
+        value = (os.getenv(key) or "").strip()
+        if value and value not in _HARNESS_STUB_KEYS and value not in {"GH_TOKEN", "GITHUB_PAT"}:
+            return value
+    return None
+
+
 def _sandbox_extra_env() -> list[tuple[str, str]]:
     raw = (os.getenv("KUBERNETES_SANDBOX_EXTRA_ENV") or "").strip()
     if not raw:
@@ -154,6 +169,10 @@ def container_env(
     # before they reach the real upstream.
     for key in _HARNESS_STUB_KEYS:
         env.append(f"{key}={key}")
+    direct_github_token = _sandbox_direct_github_token()
+    if direct_github_token:
+        _set_env(env, "GITHUB_TOKEN", direct_github_token)
+        _set_env(env, "GH_TOKEN", direct_github_token)
     for key in _SANDBOX_PASSTHROUGH_ENV_KEYS:
         value = (os.getenv(key) or "").strip()
         if value:
