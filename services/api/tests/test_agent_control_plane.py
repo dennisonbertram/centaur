@@ -35,6 +35,65 @@ def test_live_delivery_answer_text_detection_ignores_turn_done_without_text():
     assert _event_has_answer_text({"type": "result", "result": "finished"}) is True
 
 
+def test_codex_live_delivery_filters_noisy_deltas():
+    from api.runtime_control import _slackbot_live_events
+
+    assert (
+        _slackbot_live_events(
+            "codex",
+            {"type": "item.agentMessage.delta", "delta": "h"},
+            [{"type": "item.agentMessage.delta", "delta": "h"}],
+        )
+        == []
+    )
+    assert (
+        _slackbot_live_events(
+            "codex",
+            {"type": "item.commandExecution.outputDelta", "delta": "log"},
+            [{"type": "item.commandExecution.outputDelta", "delta": "log"}],
+        )
+        == []
+    )
+
+
+def test_codex_live_delivery_keeps_semantic_events():
+    from api.runtime_control import _slackbot_live_events
+
+    command_completed = {
+        "type": "item.completed",
+        "item": {
+            "type": "commandExecution",
+            "command": "bun check",
+            "status": "completed",
+        },
+    }
+    thinking_completed = {
+        "type": "item.completed",
+        "item": {
+            "type": "agentMessage",
+            "phase": "commentary",
+            "text": "I am checking the relevant files.",
+        },
+    }
+
+    assert _slackbot_live_events("codex", command_completed, [command_completed]) == [
+        command_completed
+    ]
+    assert _slackbot_live_events("codex", thinking_completed, [thinking_completed]) == [
+        thinking_completed
+    ]
+    assert _slackbot_live_events("codex", {"type": "turn.done"}, [{"type": "turn.done"}]) == [
+        {"type": "turn.done"}
+    ]
+
+
+def test_non_codex_live_delivery_keeps_existing_behavior():
+    from api.runtime_control import _slackbot_live_events
+
+    event = {"type": "tool", "content": [{"tool_use_id": "t1"}]}
+    assert _slackbot_live_events("amp", event, [event]) == [event]
+
+
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 

@@ -961,6 +961,70 @@ def _event_has_answer_text(event: dict[str, Any]) -> bool:
     return False
 
 
+def _codex_item_type(event: dict[str, Any]) -> str:
+    item = event.get("item") if isinstance(event.get("item"), dict) else {}
+    return str(item.get("type") or "")
+
+
+def _should_forward_codex_live_event(event: dict[str, Any]) -> bool:
+    event_type = str(event.get("type") or "")
+    if event_type in {
+        "assistant",
+        "error",
+        "result",
+        "reasoning",
+        "thread.started",
+        "turn.completed",
+        "turn.done",
+        "turn.failed",
+        "turn.plan.updated",
+    }:
+        return True
+
+    if event_type not in {"item.started", "item.completed"}:
+        return False
+
+    item_type = _codex_item_type(event)
+    if item_type in {
+        "agentMessage",
+        "agent_message",
+        "commandExecution",
+        "command_execution",
+        "error",
+        "fileChange",
+        "file_change",
+        "plan",
+    }:
+        return True
+
+    if item_type in {
+        "mcp_tool_call",
+        "mcpToolCalls",
+        "tool_call",
+        "toolCall",
+        "function_call",
+        "functionCall",
+        "custom_tool_call",
+        "customToolCall",
+        "dynamicToolCalls",
+        "collabToolCalls",
+    }:
+        return True
+
+    return False
+
+
+def _slackbot_live_events(
+    engine: str,
+    payload: dict[str, Any],
+    canonical_events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    events = canonical_events or [payload]
+    if (engine or "").strip().lower() != "codex":
+        return events
+    return [event for event in events if _should_forward_codex_live_event(event)]
+
+
 async def _mark_slackbot_live_delivery_failed(
     pool,
     execution_id: str,
@@ -2758,7 +2822,7 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
                 if extracted:
                     latest_terminal_result_text = extracted
             if slackbot_session_id and slackbot_forward_live:
-                slack_events = canonical_events or [payload]
+                slack_events = _slackbot_live_events(engine, payload, canonical_events)
                 for slack_event in slack_events:
                     if harness_thread_id and isinstance(slack_event, dict):
                         slack_event.setdefault("session_id", harness_thread_id)
