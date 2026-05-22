@@ -1195,6 +1195,22 @@ async def do_agent_turn(
             effective_metadata["slackbot_agent_session_id"] = slackbot_session_id
             effective_metadata["slackbot_live_delivery"] = True
 
+        if str(effective_delivery.get("platform") or "").lower() == "slack":
+            from api.agent import _insert_system_message
+
+            await _insert_system_message(
+                effective_thread_key,
+                "slack",
+                user_id=(
+                    str(
+                        effective_delivery.get("recipient_user_id")
+                        or effective_metadata.get("user_id")
+                        or "",
+                    ).strip()
+                    or None
+                ),
+            )
+
         if isinstance(effective_history, list):
             backfilled = 0
             skipped = 0

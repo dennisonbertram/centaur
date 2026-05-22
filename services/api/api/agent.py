@@ -705,13 +705,12 @@ async def _insert_system_message(
     context = _build_session_context(
         thread_key,
         platform=platform,
-        user_id=effective_user_id,
         requester_identity=requester_identity,
     )
     await pool.execute(
         "INSERT INTO chat_messages (id, thread_key, role, parts, metadata) "
         "VALUES ($1, $2, 'system', $3::jsonb, '{}'::jsonb) "
-        "ON CONFLICT (id) DO UPDATE SET parts = EXCLUDED.parts, created_at = NOW() "
+        "ON CONFLICT (id) DO UPDATE SET parts = EXCLUDED.parts "
         "WHERE $4::boolean",
         msg_id,
         thread_key,
@@ -928,7 +927,6 @@ def _build_session_context(
     thread_key: str,
     *,
     platform: str | None = None,
-    user_id: str | None = None,
     requester_identity: dict[str, str | bool] | None = None,
 ) -> str:
     """Build session context to append to the system prompt.
@@ -993,9 +991,15 @@ def _build_session_context(
                 "- NEVER put links/URLs inside code blocks (``` ```) — they won't be clickable. Use markdown tables or plain text with `[text](url)` links instead",
             ]
         )
-        if user_id:
+        requester_slack_id = (
+            str(requester_identity.get("slack_user_id") or "").strip()
+            if requester_identity
+            else ""
+        )
+        if requester_slack_id:
             lines.append(
-                f"- After completing a long task, tag the requester with their real Slack mention: <@{user_id}>"
+                "- After completing a long task, tag the requester with their real Slack "
+                f"mention: <@{requester_slack_id}>"
             )
 
     lines.extend(["", "---", ""])
