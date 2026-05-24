@@ -5,6 +5,7 @@ export type {
   MessageOptions,
   InputContentBlock,
   ThreadMessageRecord,
+  WorkflowDefinition,
   WorkflowRunOptions,
   WorkflowRunAccepted,
 } from "./client";

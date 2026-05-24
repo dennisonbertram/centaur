@@ -1553,6 +1553,11 @@ def get_workflow_handler(
     return _WORKFLOW_HANDLERS.get(workflow_name)
 
 
+def list_workflow_handlers() -> dict[str, _RegisteredHandler]:
+    """Return registered workflow handlers keyed by workflow name."""
+    return dict(_WORKFLOW_HANDLERS)
+
+
 # ── Schedule specs ────────────────────────────────────────────────────
 
 

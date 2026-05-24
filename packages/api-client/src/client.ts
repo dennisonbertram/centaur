@@ -99,6 +99,28 @@ export interface WorkflowRunAccepted {
   idempotent?: boolean;
 }
 
+export interface WorkflowDefinition {
+  workflow_name: string;
+  version: string;
+  source_path: string;
+  schedule?: Record<string, unknown> | null;
+  input_type?: string | null;
+  input_fields: Array<{
+    name: string;
+    type: string;
+    required: boolean;
+  }>;
+  webhooks: Array<{
+    slug: string;
+    path: string;
+    provider?: string | null;
+    auth: Record<string, unknown>;
+    trigger_key?: Record<string, unknown> | string | null;
+    allowed_methods: string[];
+    allowed_content_types: string[];
+  }>;
+}
+
 export interface ThreadMessageRecord {
   id: string;
   role: string;
@@ -198,6 +220,16 @@ export class CentaurClient {
   async getWorkflowRun(runId: string): Promise<WorkflowRunAccepted> {
     const { data } = await this.http.get(`/workflows/runs/${encodeURIComponent(runId)}`);
     return data as WorkflowRunAccepted;
+  }
+
+  async listWorkflows(): Promise<{ ok: boolean; items: WorkflowDefinition[] }> {
+    const { data } = await this.http.get("/workflows");
+    return data as { ok: boolean; items: WorkflowDefinition[] };
+  }
+
+  async getWorkflow(workflowName: string): Promise<{ ok: boolean; item: WorkflowDefinition }> {
+    const { data } = await this.http.get(`/workflows/${encodeURIComponent(workflowName)}`);
+    return data as { ok: boolean; item: WorkflowDefinition };
   }
 
   async listWorkflowRuns(opts?: {
