@@ -35,10 +35,8 @@ from api.proxy_config import (
 from api.sandbox.base import SandboxBackend, SandboxSession
 from api.sandbox.config import (
     build_harness_cmd,
-    codex_local_auth_uses_proxy,
     container_env,
     image,
-    local_auth_uses_proxy,
     runtime_for_session,
     sandbox_env_flag,
 )
@@ -53,7 +51,6 @@ _CONTAINER_NAME = "sandbox"
 _AGENT_UID = 1001
 _SANDBOX_OVERLAY_ROOT = "/home/agent/overlay"
 _SANDBOX_OVERLAY_DIR = f"{_SANDBOX_OVERLAY_ROOT}/org"
-_SANDBOX_HARNESS_AUTH_DIR = "/harness-auth"
 _PROXY_LABEL = "centaur.ai/iron-proxy"
 _API_PROXY_POD_NAME = "centaur-api-proxy"
 _API_PROXY_SANDBOX_ID = "api"
@@ -66,36 +63,9 @@ def _harness_auth_secret_name() -> str:
     return value or "centaur-harness-auth"
 
 
-def _harness_auth_secret_sources(engine: str) -> list[dict[str, Any]]:
-    def source(key: str, path: str) -> dict[str, Any]:
-        return {
-            "secret": {
-                "name": _harness_auth_secret_name(),
-                "optional": True,
-                "items": [{"key": key, "path": path}],
-            }
-        }
-
-    if engine == "codex" and sandbox_env_flag("CODEX_USE_LOCAL_AUTH"):
-        if codex_local_auth_uses_proxy():
-            return []
-        return [
-            source("CODEX_AUTH_JSON", "codex-auth.json"),
-        ]
-    if local_auth_uses_proxy():
-        return []
-    if engine == "claude-code" and sandbox_env_flag("CLAUDE_USE_LOCAL_AUTH"):
-        return [
-            source("CLAUDE_CREDENTIALS_JSON", "claude-credentials.json"),
-        ]
-    return []
-
-
 def _harness_uses_proxy_auth(engine: str) -> bool:
-    if not local_auth_uses_proxy():
-        return False
     if engine == "codex":
-        return sandbox_env_flag("CODEX_USE_LOCAL_AUTH") and codex_local_auth_uses_proxy()
+        return sandbox_env_flag("CODEX_USE_LOCAL_AUTH")
     if engine == "claude-code":
         return sandbox_env_flag("CLAUDE_USE_LOCAL_AUTH")
     return False
@@ -1240,22 +1210,6 @@ class KubernetesExecutorBackend(SandboxBackend):
             },
         ]
         init_containers: list[dict[str, Any]] = []
-
-        harness_auth_sources = _harness_auth_secret_sources(engine)
-        if harness_auth_sources:
-            volume_mounts.append(
-                {
-                    "name": "harness-auth",
-                    "mountPath": _SANDBOX_HARNESS_AUTH_DIR,
-                    "readOnly": True,
-                }
-            )
-            volumes.append(
-                {
-                    "name": "harness-auth",
-                    "projected": {"sources": harness_auth_sources},
-                }
-            )
 
         if overlay_image:
             volume_mounts.append(

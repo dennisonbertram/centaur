@@ -129,14 +129,8 @@ if (codex) {
 
 const claudeCredentials = claudeCredentialsPayload();
 if (claudeCredentials) {
-  updates.CLAUDE_CREDENTIALS_JSON = claudeCredentials.value;
   updates.CLAUDE_CODE_OAUTH_CLIENT_ID = CLAUDE_CODE_OAUTH_CLIENT_ID;
   updates.CLAUDE_CODE_OAUTH_REFRESH_TOKEN = claudeCredentials.refreshToken;
-  imported.push([
-    "Claude Code credentials",
-    "CLAUDE_CREDENTIALS_JSON",
-    claudeCredentials.path,
-  ]);
   imported.push([
     "Claude Code OAuth refresh token",
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
@@ -188,14 +182,10 @@ if (loginRequested && loginCommands.length > 0) {
       const credentials = claudeCredentialsPayload();
       if (credentials) {
         upsertEnvValues(envFile, {
-          CLAUDE_CREDENTIALS_JSON: credentials.value,
           CLAUDE_CODE_OAUTH_CLIENT_ID: CLAUDE_CODE_OAUTH_CLIENT_ID,
           CLAUDE_CODE_OAUTH_REFRESH_TOKEN: credentials.refreshToken,
         });
         console.log(`Wrote ${envFile}`);
-        console.log(
-          `Claude Code credentials: imported ${credentials.path} into CLAUDE_CREDENTIALS_JSON=[redacted]`,
-        );
         console.log(
           `Claude Code OAuth refresh token: imported ${credentials.path} into CLAUDE_CODE_OAUTH_REFRESH_TOKEN=[redacted]`,
         );
@@ -216,6 +206,9 @@ if (imported.length > 0) {
     "Enable opt-in use with CODEX_USE_LOCAL_AUTH=true or CLAUDE_USE_LOCAL_AUTH=true in the API deployment env.",
   );
   console.log(
-    "For local Kubernetes, source .env.local before running just bootstrap-secrets so the payloads reach centaur-harness-auth.",
+    "For local Kubernetes, source .env.local before running just bootstrap-secrets so Claude refresh-token fields reach centaur-harness-auth.",
+  );
+  console.log(
+    "For Codex proxy auth, store CODEX_AUTH_JSON in the configured 1Password field used by iron-proxy writeback.",
   );
 }

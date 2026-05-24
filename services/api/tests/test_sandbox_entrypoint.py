@@ -153,68 +153,6 @@ def test_sandbox_entrypoint_installs_codex_harness_config(tmp_path: Path) -> Non
     assert result.stdout == (harness_dir / "codex" / "config.toml").read_text()
 
 
-def test_sandbox_entrypoint_reconstructs_local_auth_payloads(tmp_path: Path) -> None:
-    home = tmp_path / "home"
-    harness_dir = _write_codex_harness_config(home)
-    codex_auth = '{"tokens":{"id_token":"codex-secret"}}'
-    claude_credentials = (
-        '{"claudeAiOauth":{"accessToken":"claude-access",'
-        '"refreshToken":"claude-refresh","expiresAt":1748658860401,'
-        '"scopes":["user:inference","user:profile"]}}'
-    )
-    auth_dir = tmp_path / "harness-auth"
-    auth_dir.mkdir()
-    (auth_dir / "codex-auth.json").write_text(codex_auth)
-    (auth_dir / "claude-credentials.json").write_text(claude_credentials)
-
-    result = subprocess.run(
-        [
-            "bash",
-            str(ENTRYPOINT_SH),
-            "sh",
-            "-lc",
-            (
-                'printf "%s/%s/%s\\n" "${OPENAI_API_KEY-unset}" '
-                '"${CODEX_API_KEY-unset}" "${ANTHROPIC_API_KEY-unset}" '
-            ),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env={
-            "HOME": str(home),
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
-            "CODEX_USE_LOCAL_AUTH": "yes",
-            "CODEX_AUTH_JSON_FILE": str(auth_dir / "codex-auth.json"),
-            "CLAUDE_USE_LOCAL_AUTH": "on",
-            "CLAUDE_CREDENTIALS_JSON_FILE": str(
-                auth_dir / "claude-credentials.json"
-            ),
-            "CLAUDE_CONFIG_DIR": str(tmp_path / "claude-config"),
-            "OPENAI_API_KEY": "OPENAI_API_KEY",
-            "CODEX_API_KEY": "CODEX_API_KEY",
-            "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
-        },
-    )
-
-    assert result.returncode == 0, result.stderr or result.stdout
-    assert json.loads((home / ".codex" / "auth.json").read_text()) == {
-        "tokens": {"id_token": "codex-secret"}
-    }
-    claude_credentials_path = tmp_path / "claude-config" / ".credentials.json"
-    assert json.loads(claude_credentials_path.read_text()) == {
-        "claudeAiOauth": {
-            "accessToken": "claude-access",
-            "refreshToken": "claude-refresh",
-            "expiresAt": 1748658860401,
-            "scopes": ["user:inference", "user:profile"],
-        }
-    }
-    assert oct(claude_credentials_path.stat().st_mode & 0o777) == "0o600"
-    assert result.stdout.splitlines()[-1] == "unset/unset/unset"
-
-
 def test_sandbox_entrypoint_writes_codex_proxy_auth_stub(tmp_path: Path) -> None:
     home = tmp_path / "home"
     harness_dir = _write_codex_harness_config(home)
@@ -225,8 +163,8 @@ def test_sandbox_entrypoint_writes_codex_proxy_auth_stub(tmp_path: Path) -> None
             str(ENTRYPOINT_SH),
             "sh",
             "-lc",
-            'printf "%s/%s/%s\\n" "${OPENAI_API_KEY-unset}" '
-            '"${CODEX_API_KEY-unset}" "${CODEX_PROXY_AUTH-unset}"',
+            'printf "%s/%s\\n" "${OPENAI_API_KEY-unset}" '
+            '"${CODEX_API_KEY-unset}"',
         ],
         check=False,
         capture_output=True,
@@ -236,7 +174,6 @@ def test_sandbox_entrypoint_writes_codex_proxy_auth_stub(tmp_path: Path) -> None
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
             "CODEX_USE_LOCAL_AUTH": "true",
-            "CODEX_PROXY_AUTH": "true",
             "OPENAI_API_KEY": "OPENAI_API_KEY",
             "CODEX_API_KEY": "CODEX_API_KEY",
         },
@@ -249,7 +186,7 @@ def test_sandbox_entrypoint_writes_codex_proxy_auth_stub(tmp_path: Path) -> None
     _assert_codex_stub_jwt(auth["tokens"]["id_token"])
     assert auth["tokens"]["refresh_token"] == "iron-proxy-codex-stub-refresh-token"
     assert auth["tokens"]["account_id"] == CODEX_STUB_ACCOUNT_ID
-    assert result.stdout.splitlines()[-1] == "unset/unset/unset"
+    assert result.stdout.splitlines()[-1] == "unset/unset"
 
 
 def test_sandbox_entrypoint_keeps_claude_api_key_without_credentials(
@@ -282,16 +219,11 @@ def test_sandbox_entrypoint_keeps_claude_api_key_without_credentials(
     assert result.stdout.strip() == "ANTHROPIC_API_KEY"
 
 
-def test_sandbox_entrypoint_preserves_api_keys_when_local_auth_missing(
+def test_sandbox_entrypoint_codex_local_auth_does_not_fallback_to_api_keys(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
     harness_dir = _write_codex_harness_config(home)
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    codex = bin_dir / "codex"
-    codex.write_text("#!/usr/bin/env sh\ncat >/dev/null\n")
-    codex.chmod(0o755)
 
     result = subprocess.run(
         [
@@ -299,17 +231,17 @@ def test_sandbox_entrypoint_preserves_api_keys_when_local_auth_missing(
             str(ENTRYPOINT_SH),
             "sh",
             "-lc",
-            'printf "%s/%s/%s\\n" "$OPENAI_API_KEY" "$CODEX_API_KEY" "$ANTHROPIC_API_KEY"',
+            'printf "%s/%s/%s\\n" "${OPENAI_API_KEY-unset}" '
+            '"${CODEX_API_KEY-unset}" "$ANTHROPIC_API_KEY"',
         ],
         check=False,
         capture_output=True,
         text=True,
         env={
             "HOME": str(home),
-            "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
             "CODEX_USE_LOCAL_AUTH": "true",
-            "CLAUDE_USE_LOCAL_AUTH": "true",
             "OPENAI_API_KEY": "OPENAI_API_KEY",
             "CODEX_API_KEY": "CODEX_API_KEY",
             "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
@@ -317,7 +249,7 @@ def test_sandbox_entrypoint_preserves_api_keys_when_local_auth_missing(
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
-    assert result.stdout.strip() == "OPENAI_API_KEY/CODEX_API_KEY/ANTHROPIC_API_KEY"
+    assert result.stdout.strip() == "unset/unset/ANTHROPIC_API_KEY"
 
 
 def test_sandbox_entrypoint_keeps_claude_proxy_local_auth_placeholder(

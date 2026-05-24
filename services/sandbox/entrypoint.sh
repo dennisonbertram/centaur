@@ -209,23 +209,13 @@ fi
 
 CODEX_LOCAL_AUTH_LOADED=0
 if truthy_env "${CODEX_USE_LOCAL_AUTH:-}"; then
-    if truthy_env "${CODEX_PROXY_AUTH:-}"; then
-        mkdir -p "$HOME_DIR/.codex"
-        cat > "$HOME_DIR/.codex/auth.json" <<'JSON'
+    mkdir -p "$HOME_DIR/.codex"
+    cat > "$HOME_DIR/.codex/auth.json" <<'JSON'
 {"auth_mode":"chatgpt","last_refresh":"1970-01-01T00:00:00Z","tokens":{"access_token":"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsImVtYWlsIjoiaXJvbi1wcm94eS1jb2RleC1zdHViQGV4YW1wbGUuaW52YWxpZCIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vcHJvZmlsZSI6eyJlbWFpbCI6Imlyb24tcHJveHktY29kZXgtc3R1YkBleGFtcGxlLmludmFsaWQifSwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7InVzZXJfaWQiOiJpcm9uLXByb3h5LWNvZGV4LXN0dWItdXNlciIsImNoYXRncHRfdXNlcl9pZCI6Imlyb24tcHJveHktY29kZXgtc3R1Yi11c2VyIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiaXJvbi1wcm94eS1jb2RleC1zdHViLWFjY291bnQiLCJjaGF0Z3B0X2FjY291bnRfaXNfZmVkcmFtcCI6ZmFsc2V9fQ.stub-signature","refresh_token":"iron-proxy-codex-stub-refresh-token","id_token":"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsImVtYWlsIjoiaXJvbi1wcm94eS1jb2RleC1zdHViQGV4YW1wbGUuaW52YWxpZCIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vcHJvZmlsZSI6eyJlbWFpbCI6Imlyb24tcHJveHktY29kZXgtc3R1YkBleGFtcGxlLmludmFsaWQifSwiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS9hdXRoIjp7InVzZXJfaWQiOiJpcm9uLXByb3h5LWNvZGV4LXN0dWItdXNlciIsImNoYXRncHRfdXNlcl9pZCI6Imlyb24tcHJveHktY29kZXgtc3R1Yi11c2VyIiwiY2hhdGdwdF9hY2NvdW50X2lkIjoiaXJvbi1wcm94eS1jb2RleC1zdHViLWFjY291bnQiLCJjaGF0Z3B0X2FjY291bnRfaXNfZmVkcmFtcCI6ZmFsc2V9fQ.stub-signature","account_id":"iron-proxy-codex-stub-account"}}
 JSON
-        chmod 600 "$HOME_DIR/.codex/auth.json"
-        CODEX_LOCAL_AUTH_LOADED=1
-        unset CODEX_API_KEY OPENAI_API_KEY
-    elif [ -n "${CODEX_AUTH_JSON_FILE:-}" ] && [ -r "$CODEX_AUTH_JSON_FILE" ]; then
-        mkdir -p "$HOME_DIR/.codex"
-        cat "$CODEX_AUTH_JSON_FILE" > "$HOME_DIR/.codex/auth.json"
-        chmod 600 "$HOME_DIR/.codex/auth.json"
-        CODEX_LOCAL_AUTH_LOADED=1
-        unset CODEX_API_KEY OPENAI_API_KEY
-    else
-        echo "CODEX_USE_LOCAL_AUTH=true but Codex local auth file is missing; falling back to API-key auth. Run codex login --device-auth on the host, then bun run auth:bootstrap." >&2
-    fi
+    chmod 600 "$HOME_DIR/.codex/auth.json"
+    CODEX_LOCAL_AUTH_LOADED=1
+    unset CODEX_API_KEY OPENAI_API_KEY
 fi
 unset CODEX_AUTH_JSON CODEX_AUTH_JSON_FILE CODEX_ACCESS_TOKEN CODEX_PROXY_AUTH
 
@@ -238,22 +228,6 @@ if [ "$CODEX_LOCAL_AUTH_LOADED" != "1" ]; then
     fi
 fi
 
-if truthy_env "${CLAUDE_USE_LOCAL_AUTH:-}" && [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
-    CLAUDE_LOCAL_AUTH_LOADED=0
-    CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME_DIR/.claude}"
-    export CLAUDE_CONFIG_DIR
-    if [ -n "${CLAUDE_CREDENTIALS_JSON_FILE:-}" ] && [ -s "$CLAUDE_CREDENTIALS_JSON_FILE" ]; then
-        mkdir -p "$CLAUDE_CONFIG_DIR"
-        cat "$CLAUDE_CREDENTIALS_JSON_FILE" > "$CLAUDE_CONFIG_DIR/.credentials.json"
-        chmod 600 "$CLAUDE_CONFIG_DIR/.credentials.json"
-        CLAUDE_LOCAL_AUTH_LOADED=1
-    fi
-    if [ "$CLAUDE_LOCAL_AUTH_LOADED" = "1" ]; then
-        unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_API_KEY
-    else
-        echo "CLAUDE_USE_LOCAL_AUTH=true but Claude Code credentials are missing; falling back to API-key auth. Run claude auth login on the host, then bun run auth:bootstrap." >&2
-    fi
-fi
 unset CLAUDE_CREDENTIALS_JSON CLAUDE_CREDENTIALS_JSON_FILE
 
 # Signal readiness

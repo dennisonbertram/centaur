@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 from urllib.parse import urlsplit
 
 from api.deps import mint_sandbox_token
@@ -45,17 +45,13 @@ _CLAUDE_HARDENING_ENV = (
 _LOCAL_AUTH_EXTRA_ENV_KEYS = {
     "CODEX_USE_LOCAL_AUTH",
     "CODEX_AUTH_JSON",
-    "CODEX_AUTH_JSON_FILE",
     "CODEX_AUTH_JSON_SECRET_REF",
     "CODEX_ACCESS_TOKEN",
-    "CODEX_PROXY_AUTH",
     "CLAUDE_USE_LOCAL_AUTH",
     "CLAUDE_CREDENTIALS_JSON",
-    "CLAUDE_CREDENTIALS_JSON_FILE",
     "CLAUDE_CODE_OAUTH_CLIENT_ID",
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
     "ANTHROPIC_AUTH_TOKEN",
-    "HARNESS_LOCAL_AUTH_TRANSPORT",
 }
 
 
@@ -76,38 +72,6 @@ def sandbox_env_flag(name: str, extra_env: list[tuple[str, str]] | None = None) 
         if key == name:
             return value.strip().lower() in {"1", "true", "yes", "on"}
     return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def local_auth_transport(extra_env: list[tuple[str, str]] | None = None) -> str:
-    if extra_env is None:
-        extra_env = _sandbox_extra_env()
-    for key, value in reversed(extra_env):
-        if key == "HARNESS_LOCAL_AUTH_TRANSPORT":
-            transport = value.strip().lower()
-            return transport if transport in {"proxy", "file"} else "proxy"
-    transport = (os.getenv("HARNESS_LOCAL_AUTH_TRANSPORT") or "proxy").strip().lower()
-    return transport if transport in {"proxy", "file"} else "proxy"
-
-
-def local_auth_uses_proxy(extra_env: list[tuple[str, str]] | None = None) -> bool:
-    return local_auth_transport(extra_env) == "proxy"
-
-
-def _local_auth_secret_source_kind() -> str:
-    return (
-        os.getenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE")
-        or os.getenv("FIREWALL_MANAGER_SECRET_SOURCE")
-        or "env"
-    ).strip().lower()
-
-
-def codex_local_auth_uses_proxy(
-    extra_env: list[tuple[str, str]] | None = None,
-) -> bool:
-    return local_auth_uses_proxy(extra_env) and _local_auth_secret_source_kind() in {
-        "onepassword",
-        "onepassword-connect",
-    }
 
 
 def _sandbox_extra_env() -> list[tuple[str, str]]:
@@ -201,27 +165,16 @@ def container_env(
         value = (os.getenv(key) or "").strip()
         if value:
             env.append(f"{key}={value}")
-    use_proxy_local_auth = local_auth_uses_proxy(extra_env)
-    use_codex_proxy_local_auth = codex_local_auth_uses_proxy(extra_env)
     if engine == "codex" and sandbox_env_flag("CODEX_USE_LOCAL_AUTH", extra_env):
         env.append("CODEX_USE_LOCAL_AUTH=true")
-        if use_codex_proxy_local_auth:
-            env.append("CODEX_PROXY_AUTH=true")
-            _set_env(env, "OPENAI_API_KEY", "")
-            _set_env(env, "CODEX_API_KEY", "")
-        else:
-            env.append("CODEX_AUTH_JSON_FILE=/harness-auth/codex-auth.json")
+        _set_env(env, "OPENAI_API_KEY", "")
+        _set_env(env, "CODEX_API_KEY", "")
     if engine == "claude-code" and sandbox_env_flag(
         "CLAUDE_USE_LOCAL_AUTH", extra_env
     ):
         env.append("CLAUDE_USE_LOCAL_AUTH=true")
-        if use_proxy_local_auth:
-            _set_env(env, "ANTHROPIC_API_KEY", "")
-            env.append("ANTHROPIC_AUTH_TOKEN=ANTHROPIC_AUTH_TOKEN")
-        else:
-            env.append(
-                "CLAUDE_CREDENTIALS_JSON_FILE=/harness-auth/claude-credentials.json"
-            )
+        _set_env(env, "ANTHROPIC_API_KEY", "")
+        env.append("ANTHROPIC_AUTH_TOKEN=ANTHROPIC_AUTH_TOKEN")
         env.append("CLAUDE_CONFIG_DIR=/tmp/claude")
     for key, value in _CLAUDE_HARDENING_ENV:
         env.append(f"{key}={value}")

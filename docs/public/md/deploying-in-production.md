@@ -132,10 +132,9 @@ harnessAuth:
 
 | Secret | Used for |
 |--------|----------|
-| `CODEX_AUTH_JSON` | Codex local auth file reconstruction for file transport; for proxy transport, store this value in the configured 1Password field for iron-proxy writeback. |
+| `CODEX_AUTH_JSON` | Store this value in the configured 1Password field for iron-proxy writeback. |
 | `CLAUDE_CODE_OAUTH_CLIENT_ID` | Claude Code public OAuth client id for iron-proxy. |
 | `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` | Claude Code OAuth refresh token for iron-proxy. |
-| `CLAUDE_CREDENTIALS_JSON` | Claude Code file-mode credentials reconstruction. |
 
 Then enable only the providers you intend to use:
 
@@ -146,12 +145,10 @@ sandbox:
     CLAUDE_USE_LOCAL_AUTH: "true"
 ```
 
-The Kubernetes sandbox backend scopes auth payloads by engine: Codex proxy auth
-stays in iron-proxy, file transport mounts only the selected provider payload,
-Claude proxy pods receive only Claude OAuth material, and Amp receives none. If
-a local auth payload is missing, the entrypoint preserves the normal API-key
-fallback path. Do not put these payloads in `centaur-infra-env`;
-the API pod imports that Secret with `envFrom`.
+The Kubernetes sandbox backend scopes auth payloads by engine: Codex auth stays
+in iron-proxy, Claude proxy pods receive only Claude OAuth material, and Amp
+receives none. Do not put these payloads in `centaur-infra-env`; the API pod
+imports that Secret with `envFrom`.
 
 Claude Code subscription credentials contain a rotating refresh token, so they
 are best treated as a narrow opt-in path rather than fleet auth. Prefer Console

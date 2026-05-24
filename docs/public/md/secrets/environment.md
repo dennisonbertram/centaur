@@ -50,7 +50,7 @@ Most harness credentials should stay in [iron-proxy](https://docs.iron.sh)'s
 secret source as API keys. Codex and Claude Code local OAuth/subscription auth
 is different: Codex proxy auth keeps the real auth file in a writable 1Password
 field owned by iron-proxy, while Claude Code can use a refresh token minted by
-iron-proxy. File transport remains available for local fallback.
+iron-proxy.
 
 Use `bun run auth:bootstrap` to import local payloads into `.env.local`, then
 `source .env.local` before `just bootstrap-secrets`. Use
@@ -61,23 +61,20 @@ Optional payload keys:
 
 | Secret | Notes |
 |--------|-------|
-| `CODEX_AUTH_JSON` | Copied from `~/.codex/auth.json`; for proxy transport, store this in the configured 1Password field for iron-proxy writeback. |
+| `CODEX_AUTH_JSON` | Copied from `~/.codex/auth.json`; store this in the configured 1Password field for iron-proxy writeback. |
 | `CLAUDE_CODE_OAUTH_CLIENT_ID` | Claude Code public OAuth client id for iron-proxy. |
 | `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` | Claude Code OAuth refresh token imported from macOS Keychain, `$CLAUDE_CONFIG_DIR/.credentials.json`, or `~/.claude/.credentials.json`. |
-| `CLAUDE_CREDENTIALS_JSON` | Optional Claude Code credentials payload for file transport. |
 
-`just bootstrap-secrets` writes those payloads to `centaur-harness-auth`, not
-`centaur-infra-env`, so the API pod does not receive raw local OAuth payloads
-through its `envFrom` import.
+`just bootstrap-secrets` writes the Claude refresh-token fields to
+`centaur-harness-auth`, not `centaur-infra-env`, so the API pod does not receive
+raw local OAuth payloads through its `envFrom` import.
 
 Enable use with sandbox flags such as `CODEX_USE_LOCAL_AUTH=true` and
-`CLAUDE_USE_LOCAL_AUTH=true`. With proxy transport, Codex and Claude auth are
-available to that sandbox's iron-proxy sidecar instead of the sandbox container
-itself.
+`CLAUDE_USE_LOCAL_AUTH=true`. Codex and Claude auth are available to that
+sandbox's iron-proxy sidecar instead of the sandbox container itself.
 
-Codex proxy transport requires `FIREWALL_MANAGER_SECRET_SOURCE=onepassword` or
-`onepassword-connect` so iron-proxy can write back rotated refresh tokens. With
-environment-backed secret sources, Centaur falls back to Codex file transport.
+Codex auth requires `FIREWALL_MANAGER_SECRET_SOURCE=onepassword` or
+`onepassword-connect` so iron-proxy can write back rotated refresh tokens.
 
 Claude Code subscription credentials contain a refresh token that can rotate.
 Use Console API keys or an auth helper/gateway for fleet-style concurrency.

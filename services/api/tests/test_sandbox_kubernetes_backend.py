@@ -159,17 +159,13 @@ def _default_per_sandbox_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in (
         "CODEX_USE_LOCAL_AUTH",
         "CODEX_AUTH_JSON",
-        "CODEX_AUTH_JSON_FILE",
         "CODEX_ACCESS_TOKEN",
-        "CODEX_PROXY_AUTH",
         "CLAUDE_USE_LOCAL_AUTH",
         "CLAUDE_CREDENTIALS_JSON",
-        "CLAUDE_CREDENTIALS_JSON_FILE",
         "CLAUDE_CODE_OAUTH_CLIENT_ID",
         "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
         "ANTHROPIC_AUTH_TOKEN",
         "CLAUDE_CONFIG_DIR",
-        "HARNESS_LOCAL_AUTH_TRANSPORT",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -232,7 +228,6 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
 def test_container_env_passes_proxy_local_auth_only_when_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
     monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
     monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
 
@@ -256,7 +251,6 @@ def test_container_env_passes_proxy_local_auth_only_when_enabled(
     )
 
     assert codex_env["CODEX_USE_LOCAL_AUTH"] == "true"
-    assert codex_env["CODEX_PROXY_AUTH"] == "true"
     assert codex_env["OPENAI_API_KEY"] == ""
     assert codex_env["CODEX_API_KEY"] == ""
     assert "CODEX_AUTH_JSON_FILE" not in codex_env
@@ -271,38 +265,6 @@ def test_container_env_passes_proxy_local_auth_only_when_enabled(
     assert "CLAUDE_USE_LOCAL_AUTH" not in amp_env
 
 
-def test_container_env_can_use_file_local_auth_transport(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
-    monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
-    monkeypatch.setenv("HARNESS_LOCAL_AUTH_TRANSPORT", "file")
-
-    codex_env = dict(
-        item.split("=", 1)
-        for item in sandbox_container_env(
-            "thread-key", "sandbox-id", "firewall.internal", engine="codex"
-        )
-    )
-    claude_env = dict(
-        item.split("=", 1)
-        for item in sandbox_container_env(
-            "thread-key", "sandbox-id", "firewall.internal", engine="claude-code"
-        )
-    )
-
-    assert codex_env["CODEX_USE_LOCAL_AUTH"] == "true"
-    assert codex_env["CODEX_AUTH_JSON_FILE"] == "/harness-auth/codex-auth.json"
-    assert "CODEX_ACCESS_TOKEN" not in codex_env
-    assert claude_env["CLAUDE_USE_LOCAL_AUTH"] == "true"
-    assert (
-        claude_env["CLAUDE_CREDENTIALS_JSON_FILE"]
-        == "/harness-auth/claude-credentials.json"
-    )
-    assert "ANTHROPIC_AUTH_TOKEN" not in claude_env
-    assert claude_env["CLAUDE_CONFIG_DIR"] == "/tmp/claude"
-
-
 def test_container_env_filters_raw_local_auth_from_extra_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -311,13 +273,11 @@ def test_container_env_filters_raw_local_auth_from_extra_env(
         "CODEX_AUTH_JSON": "codex-secret",
         "CODEX_AUTH_JSON_SECRET_REF": "op://vault/item/field",
         "CODEX_ACCESS_TOKEN": "codex-token",
-        "CODEX_PROXY_AUTH": "true",
         "CLAUDE_USE_LOCAL_AUTH": "true",
         "CLAUDE_CREDENTIALS_JSON": "claude-secret",
         "CLAUDE_CODE_OAUTH_CLIENT_ID": "claude-client-id",
         "CLAUDE_CODE_OAUTH_REFRESH_TOKEN": "claude-refresh-token",
         "ANTHROPIC_AUTH_TOKEN": "anthropic-token",
-        "HARNESS_LOCAL_AUTH_TRANSPORT": "file",
     }
     monkeypatch.setenv(
         "KUBERNETES_SANDBOX_EXTRA_ENV",
@@ -334,49 +294,6 @@ def test_container_env_filters_raw_local_auth_from_extra_env(
     assert not (set(local_auth_env) & set(env_map))
 
 
-def test_harness_auth_secret_sources_are_engine_scoped(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from api.sandbox.kubernetes import _harness_auth_secret_sources
-
-    def secret_items(engine: str) -> list[tuple[str, str, str]]:
-        return [
-            (
-                source["secret"]["name"],
-                source["secret"]["items"][0]["key"],
-                source["secret"]["items"][0]["path"],
-            )
-            for source in _harness_auth_secret_sources(engine)
-        ]
-
-    monkeypatch.setenv("KUBERNETES_HARNESS_AUTH_SECRET_NAME", "custom-harness-auth")
-    monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
-    monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
-
-    assert secret_items("codex") == [
-        ("custom-harness-auth", "CODEX_AUTH_JSON", "codex-auth.json")
-    ]
-    assert secret_items("claude-code") == []
-    assert secret_items("amp") == []
-
-    monkeypatch.setenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
-    assert secret_items("codex") == []
-
-    monkeypatch.setenv("HARNESS_LOCAL_AUTH_TRANSPORT", "file")
-
-    assert secret_items("codex") == [
-        ("custom-harness-auth", "CODEX_AUTH_JSON", "codex-auth.json")
-    ]
-    assert secret_items("claude-code") == [
-        (
-            "custom-harness-auth",
-            "CLAUDE_CREDENTIALS_JSON",
-            "claude-credentials.json",
-        )
-    ]
-    assert secret_items("amp") == []
-
-
 def test_harness_proxy_auth_secrets_are_engine_scoped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -385,7 +302,6 @@ def test_harness_proxy_auth_secrets_are_engine_scoped(
         _harness_proxy_auth_secrets,
     )
 
-    monkeypatch.setenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
     monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
     monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
 
@@ -406,10 +322,6 @@ def test_harness_proxy_auth_secrets_are_engine_scoped(
         ),
     }
     assert _harness_proxy_auth_secrets("amp") == []
-
-    monkeypatch.setenv("HARNESS_LOCAL_AUTH_TRANSPORT", "file")
-    assert _harness_proxy_auth_secrets("codex") == []
-    assert _harness_codex_auth_json_secret_ref("codex") is None
 
 
 def test_proxy_pod_spec_can_receive_harness_auth_keys(

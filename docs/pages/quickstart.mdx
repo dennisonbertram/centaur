@@ -82,15 +82,12 @@ CLI auth state explicitly:
 bun run auth:bootstrap
 ```
 
-The command writes only secret payload values to `.env.local`. For proxy local
-auth, store Codex `CODEX_AUTH_JSON` in the configured 1Password field used by
-iron-proxy. Source `.env.local` before `just bootstrap-secrets` so the Claude
-Code OAuth refresh-token fields, when present, are copied into the separate
+The command writes only secret payload values to `.env.local`. Store Codex
+`CODEX_AUTH_JSON` in the configured 1Password field used by iron-proxy. Source
+`.env.local` before `just bootstrap-secrets` so the Claude Code OAuth
+refresh-token fields, when present, are copied into the separate
 `centaur-harness-auth` Secret. They are not added to `centaur-infra-env`,
 which the API consumes with `envFrom`.
-
-If your local stack uses environment-backed iron-proxy secrets, Codex local auth
-uses the file transport instead of proxy writeback.
 
 If local auth is missing, run the command it prints, or use:
 
@@ -113,7 +110,7 @@ sandbox:
     CLAUDE_USE_LOCAL_AUTH: "true"
 ```
 
-The API scopes auth payloads to the matching engine: Codex proxy auth stays in
+The API scopes auth payloads to the matching engine: Codex auth stays in
 iron-proxy, Claude proxy pods receive Claude refresh-token material, and Amp
 pods receive neither. This is less isolated than the default [iron-proxy](https://docs.iron.sh)
 API-key path because provider CLI login state is still used instead of normal
