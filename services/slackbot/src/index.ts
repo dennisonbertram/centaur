@@ -1,5 +1,6 @@
 import { Hono, type Context, type MiddlewareHandler } from 'hono'
 import { ulid } from '@std/ulid'
+import { createSlackAdapter } from '@chat-adapter/slack'
 import { showRoutes } from 'hono/dev'
 import { timeout } from 'hono/timeout'
 import { requestId } from 'hono/request-id'
@@ -8,18 +9,21 @@ import { startFinalDeliveryPoller } from './centaur/final-delivery'
 import { CentaurHandoff } from './centaur/handoff'
 import { loadConfig } from './config'
 import { logError, logWarn, sanitizeLogValue } from './logging'
-import { AgentSessionRenderer, withAgentSessionLock } from './slack/agent-session'
+import {
+  AgentSessionRenderer,
+  configureAgentSessionChatSdk,
+  withAgentSessionLock
+} from './slack/agent-session'
 import { authorizeSlackOrg } from './slack/authorization'
 import { CodexSessionRenderer, hasActiveCodexSession } from './slack/codex-session'
 import { EventDeduper, slackDedupKey } from './slack/dedup'
 import { duplicateSlackAlertText, type DuplicateSlackEventDetails } from './slack/duplicate-alert'
 import { EnvSlackInstallationStore, SlackClientResolver } from './slack/installations'
 import { normalizeSlackEnvelope } from './slack/normalize'
-import { markdownToStreamChunks } from './slack/render'
 import { verifySlackSignature } from './slack/signature'
 import { shouldAckWithReaction } from './slack/trivial-ack'
 import type { NormalizedSlackEvent, SlackEnvelope } from './slack/types'
-import type { AnyBlock, AnyChunk } from '@slack/types'
+import type { AnyBlock } from '@slack/types'
 import type { WebClient } from '@slack/web-api'
 
 const config = loadConfig()
@@ -32,6 +36,14 @@ const resolver = new SlackClientResolver(
     slackApiUrl: config.SLACK_API_URL
   }),
   { slackApiUrl: config.SLACK_API_URL }
+)
+configureAgentSessionChatSdk(
+  createSlackAdapter({
+    botToken: config.SLACK_BOT_TOKEN,
+    signingSecret: config.SLACK_SIGNING_SECRET,
+    apiUrl: config.SLACK_API_URL,
+    userName: 'centaur'
+  })
 )
 const handoff = new CentaurHandoff(config)
 const deduper = new EventDeduper(config.SLACK_EVENT_DEDUP_TTL_MS)
@@ -218,77 +230,6 @@ app.get('/api/slack/conversations/replies', apiKeyMiddleware, async c => {
   }
 })
 
-app.post('/api/slack/streams/start', apiKeyMiddleware, async c => {
-  const body = await c.req.json<{
-    channel: string
-    thread_ts: string
-    markdown?: string
-    chunks?: AnyChunk[]
-    recipient_team_id?: string
-    recipient_user_id?: string
-    task_display_mode?: 'plan' | 'timeline'
-  }>()
-  const { client } = await resolver.resolve({})
-  try {
-    const response = await client.chat.startStream({
-      channel: body.channel,
-      thread_ts: body.thread_ts,
-      chunks: body.chunks ?? markdownToStreamChunks(body.markdown ?? ' '),
-      recipient_team_id: body.recipient_team_id,
-      recipient_user_id: body.recipient_user_id,
-      task_display_mode: body.task_display_mode
-    })
-    if (!response.ok) return c.json(response, 502)
-    return c.json({ ok: true, channel: response.channel, ts: response.ts })
-  } catch (error) {
-    return slackApiErrorResponse(c, error)
-  }
-})
-
-app.post('/api/slack/streams/append', apiKeyMiddleware, async c => {
-  const body = await c.req.json<{
-    channel: string
-    ts: string
-    markdown?: string
-    chunks?: AnyChunk[]
-  }>()
-  const { client } = await resolver.resolve({})
-  try {
-    const response = await client.chat.appendStream({
-      channel: body.channel,
-      ts: body.ts,
-      chunks: body.chunks ?? markdownToStreamChunks(body.markdown ?? ' ')
-    })
-    if (!response.ok) return c.json(response, 502)
-    return c.json({ ok: true, channel: response.channel, ts: response.ts })
-  } catch (error) {
-    return slackApiErrorResponse(c, error)
-  }
-})
-
-app.post('/api/slack/streams/stop', apiKeyMiddleware, async c => {
-  const body = await c.req.json<{
-    channel: string
-    ts: string
-    markdown?: string
-    chunks?: AnyChunk[]
-    blocks?: AnyBlock[]
-  }>()
-  const { client } = await resolver.resolve({})
-  try {
-    const response = await client.chat.stopStream({
-      channel: body.channel,
-      ts: body.ts,
-      chunks: body.chunks ?? (body.markdown ? markdownToStreamChunks(body.markdown) : undefined),
-      blocks: body.blocks
-    })
-    if (!response.ok) return c.json(response, 502)
-    return c.json({ ok: true, channel: response.channel, ts: response.ts })
-  } catch (error) {
-    return slackApiErrorResponse(c, error)
-  }
-})
-
 app.post('/api/slack/agent-sessions', apiKeyMiddleware, async c => {
   const body = await c.req.json<{
     channel: string
@@ -298,9 +239,8 @@ app.post('/api/slack/agent-sessions', apiKeyMiddleware, async c => {
     title?: string
     header?: string
   }>()
-  const { client } = await resolver.resolve({})
   try {
-    const result = await new AgentSessionRenderer(client).open({
+    const result = await new AgentSessionRenderer().open({
       channel: body.channel,
       parentTs: body.parent_ts,
       recipientTeamId: body.recipient_team_id,
@@ -316,12 +256,9 @@ app.post('/api/slack/agent-sessions', apiKeyMiddleware, async c => {
 
 app.post('/api/slack/agent-sessions/:session_id/text', apiKeyMiddleware, async c => {
   const body = await c.req.json<{ markdown: string }>()
-  const { client } = await resolver.resolve({})
   try {
     const sessionId = c.req.param('session_id')
-    await withAgentSessionLock(sessionId, () =>
-      new AgentSessionRenderer(client).text(sessionId, body.markdown)
-    )
+    await withAgentSessionLock(sessionId, () => new AgentSessionRenderer().text(sessionId, body.markdown))
     return c.json({ ok: true })
   } catch (error) {
     return slackApiErrorResponse(c, error)
@@ -336,12 +273,9 @@ app.post('/api/slack/agent-sessions/:session_id/step', apiKeyMiddleware, async c
     details?: string
     output?: string
   }>()
-  const { client } = await resolver.resolve({})
   try {
     const sessionId = c.req.param('session_id')
-    await withAgentSessionLock(sessionId, () =>
-      new AgentSessionRenderer(client).step(sessionId, body)
-    )
+    await withAgentSessionLock(sessionId, () => new AgentSessionRenderer().step(sessionId, body))
     return c.json({ ok: true })
   } catch (error) {
     return slackApiErrorResponse(c, error)
@@ -350,14 +284,13 @@ app.post('/api/slack/agent-sessions/:session_id/step', apiKeyMiddleware, async c
 
 app.post('/api/slack/agent-sessions/:session_id/done', apiKeyMiddleware, async c => {
   const body = await c.req.json<{ thread_id?: string }>()
-  const { client } = await resolver.resolve({})
   try {
     const sessionId = c.req.param('session_id')
     await withAgentSessionLock(sessionId, async () => {
       if (hasActiveCodexSession(sessionId)) {
-        await new CodexSessionRenderer(client).done(sessionId, body.thread_id)
+        await new CodexSessionRenderer().done(sessionId, body.thread_id)
       } else {
-        await new AgentSessionRenderer(client).done(sessionId)
+        await new AgentSessionRenderer().done(sessionId)
       }
     })
     return c.json({ ok: true })
@@ -368,11 +301,10 @@ app.post('/api/slack/agent-sessions/:session_id/done', apiKeyMiddleware, async c
 
 app.post('/api/slack/agent-sessions/:session_id/harness-event', apiKeyMiddleware, async c => {
   const body = await c.req.json<{ event: unknown }>()
-  const { client } = await resolver.resolve({})
   try {
     const sessionId = c.req.param('session_id')
     const result = await withAgentSessionLock(sessionId, () =>
-      new CodexSessionRenderer(client).event(sessionId, body.event)
+      new CodexSessionRenderer().event(sessionId, body.event)
     )
     return c.json({ ok: true, ...result })
   } catch (error) {
