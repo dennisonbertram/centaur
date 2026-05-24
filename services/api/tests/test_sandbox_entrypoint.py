@@ -189,7 +189,7 @@ def test_sandbox_entrypoint_writes_codex_proxy_auth_stub(tmp_path: Path) -> None
     assert result.stdout.splitlines()[-1] == "unset/unset"
 
 
-def test_sandbox_entrypoint_keeps_claude_api_key_without_credentials(
+def test_sandbox_entrypoint_claude_local_auth_does_not_fallback_to_api_key(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
@@ -216,7 +216,7 @@ def test_sandbox_entrypoint_keeps_claude_api_key_without_credentials(
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
-    assert result.stdout.strip() == "ANTHROPIC_API_KEY"
+    assert result.stdout.strip() == ""
 
 
 def test_sandbox_entrypoint_codex_local_auth_does_not_fallback_to_api_keys(
@@ -280,7 +280,7 @@ def test_sandbox_entrypoint_keeps_claude_proxy_local_auth_placeholder(
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
-    assert result.stdout.strip() == "ANTHROPIC_AUTH_TOKEN/"
+    assert result.stdout.strip() == "ANTHROPIC_AUTH_TOKEN/unset"
 
 
 def test_sandbox_entrypoint_appends_codex_laminar_otel_config(tmp_path: Path) -> None:

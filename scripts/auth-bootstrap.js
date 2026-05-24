@@ -78,7 +78,6 @@ function claudeCredentialsFromValue(path, value) {
   }
   return {
     path,
-    value: JSON.stringify(credentials),
     refreshToken: oauth.refreshToken,
     scopes: claudeOauthScopes(oauth),
   };
@@ -110,13 +109,7 @@ function claudeCredentialsPayload() {
   const localCredentials =
     claudeCredentialsFromFile(resolve(configDir, ".credentials.json")) ||
     claudeCredentialsFromKeychain();
-  if (localCredentials) return localCredentials;
-
-  const envPayload = (process.env.CLAUDE_CREDENTIALS_JSON || "").trim();
-  if (envPayload) {
-    return claudeCredentialsFromValue("CLAUDE_CREDENTIALS_JSON", envPayload);
-  }
-  return null;
+  return localCredentials;
 }
 
 const updates = {};

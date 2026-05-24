@@ -908,7 +908,6 @@ class KubernetesExecutorBackend(SandboxBackend):
                         "secretKeyRef": {
                             "name": _harness_auth_secret_name(),
                             "key": key,
-                            "optional": True,
                         }
                     },
                 }

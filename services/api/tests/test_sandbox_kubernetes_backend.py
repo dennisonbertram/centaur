@@ -411,7 +411,6 @@ def test_proxy_pod_spec_can_receive_harness_auth_keys(
             "secretKeyRef": {
                 "name": "custom-harness-auth",
                 "key": "CLAUDE_CODE_OAUTH_CLIENT_ID",
-                "optional": True,
             }
         },
     } in spec["containers"][0]["env"]
@@ -421,7 +420,6 @@ def test_proxy_pod_spec_can_receive_harness_auth_keys(
             "secretKeyRef": {
                 "name": "custom-harness-auth",
                 "key": "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
-                "optional": True,
             }
         },
     } in spec["containers"][0]["env"]

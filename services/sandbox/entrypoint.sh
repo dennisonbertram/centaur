@@ -219,6 +219,11 @@ JSON
 fi
 unset CODEX_AUTH_JSON CODEX_AUTH_JSON_FILE CODEX_ACCESS_TOKEN CODEX_PROXY_AUTH
 
+if truthy_env "${CLAUDE_USE_LOCAL_AUTH:-}"; then
+    unset ANTHROPIC_API_KEY
+fi
+unset CLAUDE_CREDENTIALS_JSON CLAUDE_CREDENTIALS_JSON_FILE
+
 # Codex reads its auth file when the app server starts. Complete this before
 # signaling readiness, otherwise warm pods can be claimed with no auth loaded.
 if [ "$CODEX_LOCAL_AUTH_LOADED" != "1" ]; then
@@ -227,8 +232,6 @@ if [ "$CODEX_LOCAL_AUTH_LOADED" != "1" ]; then
         echo "$CODEX_KEY" | codex login --with-api-key 2>/dev/null || true
     fi
 fi
-
-unset CLAUDE_CREDENTIALS_JSON CLAUDE_CREDENTIALS_JSON_FILE
 
 # Signal readiness
 touch "$HOME_DIR/.ready"
