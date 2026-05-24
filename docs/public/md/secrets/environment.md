@@ -64,10 +64,12 @@ Optional payload keys:
 | `CODEX_AUTH_JSON` | Copied from `~/.codex/auth.json`; store this in the configured 1Password field for iron-proxy writeback. |
 | `CLAUDE_CODE_OAUTH_CLIENT_ID` | Claude Code public OAuth client id for iron-proxy. |
 | `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` | Claude Code OAuth refresh token imported from macOS Keychain, `$CLAUDE_CONFIG_DIR/.credentials.json`, or `~/.claude/.credentials.json`. |
+| `CLAUDE_CODE_OAUTH_SCOPES` | Space-separated Claude Code OAuth scopes rendered into the iron-proxy token config. |
 
 `just bootstrap-secrets` writes the Claude refresh-token fields to
-`centaur-harness-auth`, not `centaur-infra-env`, so the API pod does not receive
-raw local OAuth payloads through its `envFrom` import.
+`centaur-harness-auth`; scopes are non-secret config and may be read by the API
+when rendering the proxy config. Raw local OAuth payloads are not added to
+`centaur-infra-env`.
 
 Enable use with sandbox flags such as `CODEX_USE_LOCAL_AUTH=true` and
 `CLAUDE_USE_LOCAL_AUTH=true`. Codex and Claude auth are available to that

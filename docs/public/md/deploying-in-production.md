@@ -135,6 +135,7 @@ harnessAuth:
 | `CODEX_AUTH_JSON` | Store this value in the configured 1Password field for iron-proxy writeback. |
 | `CLAUDE_CODE_OAUTH_CLIENT_ID` | Claude Code public OAuth client id for iron-proxy. |
 | `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` | Claude Code OAuth refresh token for iron-proxy. |
+| `CLAUDE_CODE_OAUTH_SCOPES` | Space-separated Claude Code OAuth scopes rendered into the iron-proxy token config. |
 
 Then enable only the providers you intend to use:
 

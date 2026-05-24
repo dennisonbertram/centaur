@@ -164,6 +164,7 @@ def _default_per_sandbox_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "CLAUDE_CREDENTIALS_JSON",
         "CLAUDE_CODE_OAUTH_CLIENT_ID",
         "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+        "CLAUDE_CODE_OAUTH_SCOPES",
         "ANTHROPIC_AUTH_TOKEN",
         "CLAUDE_CONFIG_DIR",
     ):
@@ -277,6 +278,7 @@ def test_container_env_filters_raw_local_auth_from_extra_env(
         "CLAUDE_CREDENTIALS_JSON": "claude-secret",
         "CLAUDE_CODE_OAUTH_CLIENT_ID": "claude-client-id",
         "CLAUDE_CODE_OAUTH_REFRESH_TOKEN": "claude-refresh-token",
+        "CLAUDE_CODE_OAUTH_SCOPES": "user:inference user:profile",
         "ANTHROPIC_AUTH_TOKEN": "anthropic-token",
     }
     monkeypatch.setenv(
@@ -314,6 +316,13 @@ def test_harness_proxy_auth_secrets_are_engine_scoped(
     assert secret.name == "CLAUDE_CODE_OAUTH"
     assert secret.grant == "refresh_token"
     assert secret.hosts == ("api.anthropic.com",)
+    assert secret.scopes == (
+        "user:file_upload",
+        "user:inference",
+        "user:mcp_servers",
+        "user:profile",
+        "user:sessions:claude_code",
+    )
     assert secret.token_endpoint == "https://platform.claude.com/v1/oauth/token"
     assert dict(secret.fields) == {
         "client_id": OAuthFieldSource("CLAUDE_CODE_OAUTH_CLIENT_ID", source_kind="env"),
@@ -322,6 +331,33 @@ def test_harness_proxy_auth_secrets_are_engine_scoped(
         ),
     }
     assert _harness_proxy_auth_secrets("amp") == []
+
+
+def test_harness_proxy_auth_secrets_uses_configured_claude_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.sandbox.kubernetes import _harness_proxy_auth_secrets
+
+    monkeypatch.setenv("CLAUDE_USE_LOCAL_AUTH", "true")
+    monkeypatch.setenv(
+        "KUBERNETES_SANDBOX_EXTRA_ENV",
+        json.dumps(
+            [
+                {
+                    "name": "CLAUDE_CODE_OAUTH_SCOPES",
+                    "value": "user:profile,user:inference user:sessions:claude_code",
+                }
+            ]
+        ),
+    )
+
+    secret = _harness_proxy_auth_secrets("claude-code")[0]
+
+    assert secret.scopes == (
+        "user:profile",
+        "user:inference",
+        "user:sessions:claude_code",
+    )
 
 
 def test_proxy_pod_spec_can_receive_harness_auth_keys(

@@ -21,6 +21,7 @@ set to onepassword-connect in the Helm values):
                                Claude Code public OAuth client id; added to centaur-harness-auth
   CLAUDE_CODE_OAUTH_REFRESH_TOKEN
                                Claude Code OAuth refresh token; added to centaur-harness-auth
+  CLAUDE_CODE_OAUTH_SCOPES     Claude Code OAuth scopes; added to centaur-infra-env
 EOF
 }
 
@@ -88,6 +89,7 @@ optional_secret_env_names=(
   LMNR_PROJECT_API_KEY
   LMNR_BASE_URL
   OP_CONNECT_TOKEN
+  CLAUDE_CODE_OAUTH_SCOPES
 )
 
 harness_auth_env_names=(

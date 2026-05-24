@@ -51,6 +51,7 @@ _LOCAL_AUTH_EXTRA_ENV_KEYS = {
     "CLAUDE_CREDENTIALS_JSON",
     "CLAUDE_CODE_OAUTH_CLIENT_ID",
     "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+    "CLAUDE_CODE_OAUTH_SCOPES",
     "ANTHROPIC_AUTH_TOKEN",
 }
 
@@ -65,13 +66,25 @@ def _set_env(env: list[str], name: str, value: str) -> None:
     env.append(entry)
 
 
-def sandbox_env_flag(name: str, extra_env: list[tuple[str, str]] | None = None) -> bool:
+def sandbox_env_value(
+    name: str, extra_env: list[tuple[str, str]] | None = None
+) -> str | None:
     if extra_env is None:
         extra_env = _sandbox_extra_env()
     for key, value in reversed(extra_env):
         if key == name:
-            return value.strip().lower() in {"1", "true", "yes", "on"}
-    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+            return value
+    value = os.getenv(name)
+    return value if value is not None else None
+
+
+def sandbox_env_flag(name: str, extra_env: list[tuple[str, str]] | None = None) -> bool:
+    return (sandbox_env_value(name, extra_env) or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _sandbox_extra_env() -> list[tuple[str, str]]:

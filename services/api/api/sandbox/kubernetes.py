@@ -39,6 +39,7 @@ from api.sandbox.config import (
     image,
     runtime_for_session,
     sandbox_env_flag,
+    sandbox_env_value,
 )
 from api.sandbox.prompt_assembly import assemble_prompt
 from api.tool_manager import OAuthFieldSource, OAuthTokenSecret, PgDsnSecret, SecretDef
@@ -56,6 +57,13 @@ _API_PROXY_POD_NAME = "centaur-api-proxy"
 _API_PROXY_SANDBOX_ID = "api"
 _CLAUDE_CODE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 _CLAUDE_CODE_OAUTH_TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token"
+_CLAUDE_CODE_OAUTH_DEFAULT_SCOPES = (
+    "user:file_upload",
+    "user:inference",
+    "user:mcp_servers",
+    "user:profile",
+    "user:sessions:claude_code",
+)
 
 
 def _harness_auth_secret_name() -> str:
@@ -73,6 +81,13 @@ def _harness_uses_proxy_auth(engine: str) -> bool:
 
 def _codex_auth_json_secret_ref() -> str:
     return (os.getenv("CODEX_AUTH_JSON_SECRET_REF") or "CODEX_AUTH_JSON").strip()
+
+
+def _claude_code_oauth_scopes() -> tuple[str, ...]:
+    raw = (sandbox_env_value("CLAUDE_CODE_OAUTH_SCOPES") or "").strip()
+    if not raw:
+        return _CLAUDE_CODE_OAUTH_DEFAULT_SCOPES
+    return tuple(scope for scope in re.split(r"[\s,]+", raw) if scope)
 
 
 def _harness_proxy_auth_secrets(engine: str) -> list[SecretDef]:
@@ -99,6 +114,7 @@ def _harness_proxy_auth_secrets(engine: str) -> list[SecretDef]:
                     ),
                 ),
                 token_endpoint=_CLAUDE_CODE_OAUTH_TOKEN_ENDPOINT,
+                scopes=_claude_code_oauth_scopes(),
             )
         ]
     return []
