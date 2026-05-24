@@ -126,7 +126,7 @@ the Codex `CODEX_AUTH_JSON` value in the configured 1Password field used by
 iron-proxy writeback, usually:
 
 ```text
-op://ai-agents/CODEX_AUTH_JSON/credential
+op://$OP_VAULT/CODEX_AUTH_JSON/credential
 ```
 
 If local auth is missing, `auth:bootstrap` prints the exact login command. To
@@ -165,7 +165,7 @@ sandbox:
 
 If the Codex auth JSON lives at a full 1Password ref, set
 `CODEX_AUTH_JSON_SECRET_REF` to that ref instead, for example
-`op://ai-agents/CODEX_AUTH_JSON/credential`.
+`op://$OP_VAULT/CODEX_AUTH_JSON/credential`.
 
 The Kubernetes sandbox backend scopes auth payloads by engine: Codex auth stays
 in iron-proxy, Claude proxy pods receive only Claude OAuth material, and Amp

@@ -55,7 +55,6 @@ _SANDBOX_OVERLAY_DIR = f"{_SANDBOX_OVERLAY_ROOT}/org"
 _PROXY_LABEL = "centaur.ai/iron-proxy"
 _API_PROXY_POD_NAME = "centaur-api-proxy"
 _API_PROXY_SANDBOX_ID = "api"
-_CLAUDE_CODE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 _CLAUDE_CODE_OAUTH_TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token"
 _CLAUDE_CODE_OAUTH_DEFAULT_SCOPES = (
     "user:file_upload",

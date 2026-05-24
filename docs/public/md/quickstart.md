@@ -90,7 +90,7 @@ refresh-token fields, when present, are copied into the separate
 which the API consumes with `envFrom`.
 
 For Codex, the default 1Password field is
-`op://ai-agents/CODEX_AUTH_JSON/credential`; set `CODEX_AUTH_JSON_SECRET_REF`
+`op://$OP_VAULT/CODEX_AUTH_JSON/credential`; set `CODEX_AUTH_JSON_SECRET_REF`
 in `sandbox.extraEnv` if your deployment uses a different item or field.
 
 Run bootstrap from the host shell, not inside a restricted sandbox. On macOS it
