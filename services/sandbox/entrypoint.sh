@@ -3,6 +3,17 @@ set -e
 
 HOME_DIR="$(eval echo ~)"
 FIREWALL_HOSTNAME="${FIREWALL_HOST:-firewall}"
+STATE_DIR="${CENTAUR_STATE_DIR:-$HOME_DIR/state}"
+
+if [ -d "$STATE_DIR" ] && [ -w "$STATE_DIR" ]; then
+    mkdir -p "$STATE_DIR/workspace" "$STATE_DIR/uploads" "$STATE_DIR/branches" "$STATE_DIR/codex" "$STATE_DIR/claude"
+    rm -rf "$HOME_DIR/.codex" "$HOME_DIR/.claude" "$HOME_DIR/uploads" "$HOME_DIR/branches"
+    ln -s "$STATE_DIR/codex" "$HOME_DIR/.codex"
+    ln -s "$STATE_DIR/claude" "$HOME_DIR/.claude"
+    ln -s "$STATE_DIR/uploads" "$HOME_DIR/uploads"
+    ln -s "$STATE_DIR/branches" "$HOME_DIR/branches"
+    export CENTAUR_PERSISTENT_STATE=1
+fi
 
 mkdir -p "$HOME_DIR/.config/amp"
 
@@ -122,7 +133,11 @@ cat > "$HOME_DIR/.pi/agent/settings.json" <<EOF
 EOF
 
 # ── Per-session workspace clone (no shared worktree metadata) ────────────────
-WORKSPACE_DIR="$HOME_DIR/workspace"
+if [ "${CENTAUR_PERSISTENT_STATE:-0}" = "1" ]; then
+    WORKSPACE_DIR="$STATE_DIR/workspace"
+else
+    WORKSPACE_DIR="$HOME_DIR/workspace"
+fi
 if [ -n "${AGENT_REPO:-}" ]; then
     REPO_PATH="$HOME_DIR/github/$AGENT_REPO"
     if ! git -C "$REPO_PATH" rev-parse --git-dir >/dev/null 2>&1; then
@@ -130,15 +145,17 @@ if [ -n "${AGENT_REPO:-}" ]; then
         exit 1
     fi
 
-    rm -rf "$WORKSPACE_DIR"
-    if ! git clone --quiet --shared "$REPO_PATH" "$WORKSPACE_DIR"; then
-        echo "shared clone failed for $REPO_PATH; retrying with regular clone" >&2
+    if ! git -C "$WORKSPACE_DIR" rev-parse --git-dir >/dev/null 2>&1; then
         rm -rf "$WORKSPACE_DIR"
-        git clone --quiet "$REPO_PATH" "$WORKSPACE_DIR"
-    fi
+        if ! git clone --quiet --shared "$REPO_PATH" "$WORKSPACE_DIR"; then
+            echo "shared clone failed for $REPO_PATH; retrying with regular clone" >&2
+            rm -rf "$WORKSPACE_DIR"
+            git clone --quiet "$REPO_PATH" "$WORKSPACE_DIR"
+        fi
 
-    BRANCH="agent-$(date +%s)-${RANDOM}-${RANDOM}"
-    git -C "$WORKSPACE_DIR" checkout -q -b "$BRANCH" || true
+        BRANCH="agent-$(date +%s)-${RANDOM}-${RANDOM}"
+        git -C "$WORKSPACE_DIR" checkout -q -b "$BRANCH" || true
+    fi
 else
     mkdir -p "$WORKSPACE_DIR"
 fi
@@ -175,7 +192,7 @@ fi
 # ── Assemble system prompt from bind mounts ──────────────────────────────────
 # Base prompt: mounted as AGENTS_BASE.md when present, fallback to baked-in AGENTS.md.
 # Org/persona overlays are mounted alongside the base prompt when present.
-TARGET_PROMPT="$HOME_DIR/workspace/AGENTS.md"
+TARGET_PROMPT="$WORKSPACE_DIR/AGENTS.md"
 if [ -f "$HOME_DIR/AGENTS_BASE.md" ]; then
     cp "$HOME_DIR/AGENTS_BASE.md" "$TARGET_PROMPT"
 elif [ -f "$HOME_DIR/AGENTS.md" ]; then

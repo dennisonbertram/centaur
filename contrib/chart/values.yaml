@@ -98,6 +98,7 @@ overlay:
     sourcePath: /overlay
 
 sandbox:
+  controller: pod
   image:
     repository: centaur-agent
     tag: latest
@@ -105,6 +106,10 @@ sandbox:
   runtimeClassName: ""
   reposPath: ""
   extraEnv: {}
+  stateVolume:
+    enabled: false
+    size: 10Gi
+    storageClassName: ""
   resources:
     limits: {}
     requests:
@@ -130,6 +135,18 @@ repoCache:
   tolerations: []
   affinity: {}
   resources: {}
+
+agentSandbox:
+  enabled: false
+  namespace:
+    create: true
+    name: agent-sandbox-system
+  image:
+    repository: registry.k8s.io/agent-sandbox/agent-sandbox-controller
+    tag: v0.4.6
+    pullPolicy: IfNotPresent
+  controller:
+    extensions: false
 
 slackbot:
   enabled: true

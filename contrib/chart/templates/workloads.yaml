@@ -325,6 +325,16 @@ spec:
               value: {{ .Values.ironProxy.secretSource | quote }}
             - name: KUBERNETES_API_POD_LABEL_SELECTOR
               value: {{ printf "app.kubernetes.io/name=%s,app.kubernetes.io/instance=%s,app.kubernetes.io/component=api" (include "centaur.name" .) .Release.Name | quote }}
+            - name: KUBERNETES_SANDBOX_CONTROLLER
+              value: {{ .Values.sandbox.controller | quote }}
+            - name: KUBERNETES_SANDBOX_STATE_VOLUME_ENABLED
+              value: {{ ternary "1" "0" .Values.sandbox.stateVolume.enabled | quote }}
+            - name: KUBERNETES_SANDBOX_STATE_VOLUME_SIZE
+              value: {{ .Values.sandbox.stateVolume.size | quote }}
+{{- if .Values.sandbox.stateVolume.storageClassName }}
+            - name: KUBERNETES_SANDBOX_STATE_VOLUME_STORAGE_CLASS
+              value: {{ .Values.sandbox.stateVolume.storageClassName | quote }}
+{{- end }}
 {{- with .Values.sandbox.resources.limits }}
 {{- if and .cpu (not (hasKey $apiExtraEnv "KUBERNETES_SANDBOX_CPU_LIMIT")) }}
             - name: KUBERNETES_SANDBOX_CPU_LIMIT
