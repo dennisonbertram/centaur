@@ -46,6 +46,8 @@ export async function DELETE(
   await db
     .update(apiKeys)
     .set({
+      pendingValue: null,
+      revealValue: null,
       revokedAt: new Date(),
       revocationPushedAt: null,
     })

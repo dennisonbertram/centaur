@@ -48,7 +48,13 @@ async function migrateLegacyDeploymentKey(deployment: typeof deployments.$inferS
     .where(eq(apiKeys.deploymentId, deployment.id))
     .limit(1);
 
-  if (existing.length > 0) return;
+  if (existing.length > 0) {
+    await db
+      .update(deployments)
+      .set({ apiKey: null, updatedAt: new Date() })
+      .where(eq(deployments.id, deployment.id));
+    return;
+  }
 
   await db
     .insert(apiKeys)
