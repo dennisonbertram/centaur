@@ -32,6 +32,24 @@ export const credentials = pgTable("credentials", {
   unique().on(t.deploymentId, t.name),
 ]);
 
+export const apiKeys = pgTable("api_keys", {
+  id: text("id").primaryKey(),
+  deploymentId: text("deployment_id")
+    .notNull()
+    .references(() => deployments.id, { onDelete: "cascade" }),
+  keyPrefix: text("key_prefix").notNull(),
+  keyHash: text("key_hash").notNull(),
+  name: text("name").notNull().default("Default"),
+  pendingValue: text("pending_value"),
+  revealValue: text("reveal_value"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  lastUsedAt: timestamp("last_used_at"),
+  revokedAt: timestamp("revoked_at"),
+  revocationPushedAt: timestamp("revocation_pushed_at"),
+}, (t) => [
+  unique().on(t.keyHash),
+]);
+
 export const usageEvents = pgTable("usage_events", {
   id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
   deploymentId: text("deployment_id")

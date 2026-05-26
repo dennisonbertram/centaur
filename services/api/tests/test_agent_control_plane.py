@@ -3793,6 +3793,8 @@ async def test_bootstrap_service_api_keys_includes_local_dev_key(db_pool, monkey
     local_dev_key = f"aiv2_{uuid.uuid4().hex}{uuid.uuid4().hex}"
     monkeypatch.delenv("SLACKBOT_API_KEY", raising=False)
     monkeypatch.setenv("LOCAL_DEV_API_KEY", local_dev_key)
+    monkeypatch.delenv("LOCAL_DEV_API_KEYS", raising=False)
+    monkeypatch.delenv("LOCAL_DEV_REVOKED_API_KEY_HASHES", raising=False)
 
     bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool)
 
@@ -3806,3 +3808,46 @@ async def test_bootstrap_service_api_keys_includes_local_dev_key(db_pool, monkey
     assert list(row["scopes"]) == ["admin", "agent", "threads", "tools:*"]
     assert row["revoked_at"] is None
     assert row["created_by"] == "service-bootstrap"
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_service_api_keys_includes_local_dev_key_list(db_pool, monkeypatch):
+    import api.api_keys as api_keys
+
+    first = f"centaur-demo-{uuid.uuid4().hex}"
+    second = f"centaur-demo-{uuid.uuid4().hex}"
+    monkeypatch.delenv("SLACKBOT_API_KEY", raising=False)
+    monkeypatch.delenv("LOCAL_DEV_API_KEY", raising=False)
+    monkeypatch.delenv("LOCAL_DEV_REVOKED_API_KEY_HASHES", raising=False)
+    monkeypatch.setenv("LOCAL_DEV_API_KEYS", f"{first}\n{second}")
+
+    bootstrapped = await api_keys.bootstrap_service_api_keys(db_pool)
+
+    assert [info.name for info in bootstrapped] == [
+        "service:local-dev:1",
+        "service:local-dev:2",
+    ]
+    assert (await api_keys.lookup_key(db_pool, first)) is not None
+    assert (await api_keys.lookup_key(db_pool, second)) is not None
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_service_api_keys_honors_revoked_hashes(db_pool, monkeypatch):
+    import api.api_keys as api_keys
+
+    key = f"centaur-demo-{uuid.uuid4().hex}"
+    key_hash = hashlib.sha256(key.encode()).hexdigest()
+    monkeypatch.delenv("SLACKBOT_API_KEY", raising=False)
+    monkeypatch.delenv("LOCAL_DEV_API_KEY", raising=False)
+    monkeypatch.setenv("LOCAL_DEV_API_KEYS", key)
+    monkeypatch.setenv("LOCAL_DEV_REVOKED_API_KEY_HASHES", key_hash)
+
+    await api_keys.bootstrap_service_api_keys(db_pool)
+
+    assert await api_keys.lookup_key(db_pool, key) is None
+    row = await db_pool.fetchrow(
+        "SELECT revoked_at FROM api_keys WHERE key_hash = $1",
+        key_hash,
+    )
+    assert row is not None
+    assert row["revoked_at"] is not None

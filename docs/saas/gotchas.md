@@ -36,6 +36,14 @@ the provisioner isn't running, credentials never reach the cluster.
 a placeholder from iron-proxy. If the real key isn't in `centaur-infra-env`,
 every LLM call fails with `401 Unauthorized: Incorrect API key provided: OPENAI_A**_KEY`.
 
+**Deployment API keys are reveal-once.** The dashboard stores deployment API key
+hashes in its `api_keys` table. New plaintext keys live in `pending_value` only
+until the provisioner pushes them into `centaur-infra-env` as
+`LOCAL_DEV_API_KEY` / `LOCAL_DEV_API_KEYS`; initial keys also use `reveal_value`
+so the detail page can show them once. If the provisioner is stopped, newly
+created keys appear in the dashboard but will not authenticate against the
+tenant API until the worker patches the secret and restarts the API pod.
+
 ## DNS
 
 **Namecheap wildcard host must be `*` not `*.domain.com`.** Namecheap appends
