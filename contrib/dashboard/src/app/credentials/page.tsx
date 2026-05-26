@@ -2,14 +2,6 @@
 
 import { useState } from "react";
 
-type Credential = {
-  name: string;
-  key: string;
-  description: string;
-  masked: string;
-  set: boolean;
-};
-
 const CREDENTIAL_GROUPS = [
   {
     title: "LLM Providers",
