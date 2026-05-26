@@ -1,0 +1,35 @@
+# Per-tenant Ingress for Slack webhook.
+# Applied by the provisioner into the tenant's namespace.
+#
+# Requires:
+#   - Traefik Ingress controller in kube-system
+#   - cert-manager with letsencrypt-prod ClusterIssuer
+#   - CENTAUR_DOMAIN env var (e.g. "178-104-132-172.sslip.io" or "agents.centaur.run")
+#
+# Each tenant gets: https://{TENANT_ID}.{CENTAUR_DOMAIN}/api/webhooks/slack
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: TENANT_ID-slack-ingress
+  namespace: centaur-TENANT_ID
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - TENANT_ID.CENTAUR_DOMAIN
+      secretName: TENANT_ID-tls
+  rules:
+    - host: TENANT_ID.CENTAUR_DOMAIN
+      http:
+        paths:
+          - path: /api/webhooks/slack
+            pathType: Exact
+            backend:
+              service:
+                name: TENANT_ID-centaur-slackbot
+                port:
+                  number: 3001

@@ -1,0 +1,41 @@
+# Let's Encrypt ClusterIssuer for cert-manager.
+# Apply after cert-manager is installed:
+#   kubectl apply -f tls-issuer.yaml
+#
+# Then add an Ingress with:
+#   annotations:
+#     cert-manager.io/cluster-issuer: letsencrypt-prod
+#   tls:
+#     - hosts: [centaur.customer-domain.com]
+#       secretName: centaur-tls
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    # Replace with the customer's email
+    email: ops@centaur.run
+    privateKeySecretRef:
+      name: letsencrypt-prod-key
+    solvers:
+      - http01:
+          ingress:
+            class: nginx
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: ops@centaur.run
+    privateKeySecretRef:
+      name: letsencrypt-staging-key
+    solvers:
+      - http01:
+          ingress:
+            class: nginx

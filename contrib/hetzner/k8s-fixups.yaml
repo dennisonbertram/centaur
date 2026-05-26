@@ -1,0 +1,54 @@
+# NetworkPolicy fixups for Centaur on k3s.
+#
+# Centaur's Helm chart creates per-sandbox NetworkPolicies that assume these
+# global policies exist. Apply after Helm install:
+#   kubectl apply -f k8s-fixups.yaml
+---
+# Allow all pods to reach CoreDNS (required by per-sandbox iron-proxy pods
+# which don't include DNS egress in their dynamic NetworkPolicies).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: centaur-allow-dns
+  namespace: centaur
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Allow the API pod to reach the K8s API server (10.43.0.1:443 on k3s).
+# The Helm chart's API NetworkPolicy allows egress to port 443 but aiohttp
+# doesn't respect NO_PROXY for IP addresses, and the iron-proxy MITM breaks
+# the K8s client's TLS. This policy provides a direct path.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: centaur-api-k8s-access
+  namespace: centaur
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.43.0.1/32
+      ports:
+        - port: 443
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP

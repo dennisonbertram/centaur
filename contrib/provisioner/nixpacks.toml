@@ -1,0 +1,19 @@
+[phases.setup]
+nixPkgs = ["nodejs_24", "openssh", "openssl", "jq", "git", "curl"]
+
+[phases.install]
+cmds = [
+  "npm install -g pnpm@10",
+  "pnpm install",
+  "curl -fsSL https://dl.k8s.io/release/v1.33.0/bin/linux/amd64/kubectl -o /usr/local/bin/kubectl && chmod +x /usr/local/bin/kubectl && kubectl version --client",
+  "curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash && helm version",
+]
+
+[phases.build]
+cmds = [
+  "pnpm build",
+  "git clone --depth 1 https://github.com/paradigmxyz/centaur.git /tmp/centaur-repo && cp -r /tmp/centaur-repo/contrib/chart /app/chart && cp -r /tmp/centaur-repo/contrib/hetzner /app/hetzner && rm -rf /tmp/centaur-repo",
+]
+
+[start]
+cmd = "node dist/worker.js"
