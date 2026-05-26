@@ -1,0 +1,54 @@
+#!/bin/bash
+set -euo pipefail
+
+# Detect the private network interface (Hetzner uses enp7s0 or ens10)
+PRIV_IFACE=""
+for iface in enp7s0 ens10 eth1; do
+  if ip link show "$iface" >/dev/null 2>&1; then
+    PRIV_IFACE="$iface"
+    break
+  fi
+done
+
+if [ -z "$PRIV_IFACE" ]; then
+  echo "FATAL: no private network interface found" >&2
+  exit 1
+fi
+
+NODE_IP=$(ip -4 addr show "$PRIV_IFACE" | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+PUBLIC_IP=$(ip -4 addr show eth0 | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || hostname -I | awk '{print $1}')
+
+%{ if mode == "init" ~}
+curl -sfL https://get.k3s.io | K3S_TOKEN="${k3s_token}" \
+  INSTALL_K3S_EXEC="server \
+    --cluster-init \
+    --disable traefik \
+    --disable servicelb \
+    --flannel-iface $PRIV_IFACE \
+    --node-ip $NODE_IP \
+    --tls-san $PUBLIC_IP \
+    --tls-san $NODE_IP \
+    --write-kubeconfig-mode 644" \
+  sh -
+
+until kubectl get nodes >/dev/null 2>&1; do sleep 2; done
+
+curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Install cert-manager for Let's Encrypt TLS
+helm repo add jetstack https://charts.jetstack.io --force-update
+helm install cert-manager jetstack/cert-manager \
+  --namespace cert-manager --create-namespace \
+  --set crds.enabled=true \
+  --wait --timeout 120s 2>/dev/null || true
+%{ else ~}
+# Wait for init node API
+until curl -sk ${join_url}/healthz >/dev/null 2>&1; do sleep 5; done
+
+curl -sfL https://get.k3s.io | K3S_TOKEN="${k3s_token}" \
+  K3S_URL="${join_url}" \
+  INSTALL_K3S_EXEC="server \
+    --flannel-iface $PRIV_IFACE \
+    --node-ip $NODE_IP" \
+  sh -
+%{ endif ~}

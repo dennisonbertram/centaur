@@ -1,0 +1,33 @@
+# Remote state backend — copy to backend.tf and configure.
+#
+# Option A: Hetzner Object Storage (cheapest, EU-only)
+terraform {
+  backend "s3" {
+    bucket   = "centaur-terraform-state"
+    key      = "deployments/${var.customer_id}/terraform.tfstate"
+    region   = "eu-central-1"
+    endpoint = "https://fsn1.your-objectstorage.com"
+
+    skip_credentials_validation = true
+    skip_metadata_api_check     = true
+    skip_region_validation      = true
+    force_path_style            = true
+  }
+}
+
+# Option B: AWS S3
+# terraform {
+#   backend "s3" {
+#     bucket = "centaur-terraform-state"
+#     key    = "deployments/terraform.tfstate"
+#     region = "us-east-1"
+#   }
+# }
+
+# Option C: Terraform Cloud
+# terraform {
+#   cloud {
+#     organization = "your-org"
+#     workspaces { name = "centaur-deployments" }
+#   }
+# }
