@@ -13,13 +13,11 @@ export function SetupWizard({
   deploymentId,
   ip,
   webhookUrl,
-  apiKey,
   credentials: creds,
 }: {
   deploymentId: string;
   ip: string | null;
   webhookUrl: string | null;
-  apiKey: string | null;
   credentials: Record<string, Cred>;
 }) {
   const hasOpenAI = creds.OPENAI_API_KEY?.isSet;
@@ -88,17 +86,6 @@ export function SetupWizard({
             integrate programmatically.
           </CardDescription>
         </CardHeader>
-        {currentStep >= 2 && apiKey && (
-          <CardContent>
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div>
-                <p className="text-xs text-muted-foreground">API Key</p>
-                <p className="text-sm font-mono">{apiKey.slice(0, 24)}...</p>
-              </div>
-              <CopyButton text={apiKey} />
-            </div>
-          </CardContent>
-        )}
       </Card>
 
       {/* Step 3: Slack */}
@@ -287,46 +274,6 @@ function SlackInstructions({ webhookUrl }: { webhookUrl: string | null }) {
         </li>
       </ol>
     </div>
-  );
-}
-
-function CodeBlock({ children }: { children: string }) {
-  const [copied, setCopied] = useState(false);
-
-  return (
-    <div className="relative">
-      <pre className="rounded-lg bg-zinc-950 p-4 text-xs text-zinc-100 overflow-x-auto">
-        <code>{children}</code>
-      </pre>
-      <button
-        onClick={() => {
-          navigator.clipboard.writeText(children);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        }}
-        className="absolute top-2 right-2 rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-[10px] text-zinc-400 hover:text-zinc-200 transition-colors"
-      >
-        {copied ? "Copied!" : "Copy"}
-      </button>
-    </div>
-  );
-}
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => {
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }}
-    >
-      {copied ? "Copied!" : "Copy"}
-    </Button>
   );
 }
 

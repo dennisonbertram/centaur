@@ -52,6 +52,15 @@ _SERVICE_API_KEYS: tuple[ServiceAPIKeySpec, ...] = (
 )
 
 
+def _split_env_list(value: str) -> list[str]:
+    parts = []
+    for raw in value.replace(",", "\n").splitlines():
+        cleaned = raw.strip()
+        if cleaned:
+            parts.append(cleaned)
+    return parts
+
+
 def generate_key() -> tuple[str, str, str]:
     """Generate a new API key. Returns (plaintext_key, key_prefix, key_hash)."""
     raw = secrets.token_urlsafe(_KEY_BYTES)
@@ -227,10 +236,12 @@ async def ensure_static_key(
 async def bootstrap_service_api_keys(pool: asyncpg.Pool) -> list[APIKeyInfo]:
     """Seed long-lived service keys from env vars into Postgres."""
     bootstrapped: list[APIKeyInfo] = []
+    seen_tokens: set[str] = set()
     for spec in _SERVICE_API_KEYS:
         token = os.environ.get(spec.env_var, "").strip()
         if not token:
             continue
+        seen_tokens.add(token)
         info = await ensure_static_key(
             pool,
             token,
@@ -239,6 +250,35 @@ async def bootstrap_service_api_keys(pool: asyncpg.Pool) -> list[APIKeyInfo]:
             created_by="service-bootstrap",
         )
         bootstrapped.append(info)
+
+    local_dev_tokens = _split_env_list(os.environ.get("LOCAL_DEV_API_KEYS", ""))
+    for index, token in enumerate(local_dev_tokens, start=1):
+        if token in seen_tokens:
+            continue
+        seen_tokens.add(token)
+        info = await ensure_static_key(
+            pool,
+            token,
+            f"service:local-dev:{index}",
+            ("admin", "agent", "threads", "tools:*"),
+            created_by="service-bootstrap",
+        )
+        bootstrapped.append(info)
+
+    revoked_hashes = _split_env_list(os.environ.get("LOCAL_DEV_REVOKED_API_KEY_HASHES", ""))
+    if revoked_hashes:
+        result = await pool.execute(
+            "UPDATE api_keys SET revoked_at = NOW() "
+            "WHERE key_hash = ANY($1::text[]) AND revoked_at IS NULL",
+            revoked_hashes,
+        )
+        with _cache.lock:
+            _cache.expires_at = 0.0
+        log.info(
+            "service_api_keys_revoked_from_env",
+            count=len(revoked_hashes),
+            result=result,
+        )
 
     if bootstrapped:
         log.info(

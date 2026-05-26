@@ -1,14 +1,17 @@
 import { auth } from "@clerk/nextjs/server";
 import { redirect, notFound } from "next/navigation";
+import { randomUUID } from "crypto";
 import { db } from "@/lib/db";
-import { deployments, credentials } from "@/lib/schema";
-import { and, eq } from "drizzle-orm";
+import { apiKeys, deployments, credentials } from "@/lib/schema";
+import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { SetupWizard } from "./setup-wizard";
 import { DeleteButton } from "./delete-button";
+import { KeyManagement } from "./key-management";
+import { DEFAULT_API_KEY_NAME, hashApiKey, keyPrefix } from "@/lib/api-keys";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   running: "default",
@@ -36,10 +39,68 @@ export default async function DeploymentDetailPage({
 
   if (!deployment) notFound();
 
+  if (deployment.apiKey) {
+    const existingKeys = await db
+      .select({ id: apiKeys.id })
+      .from(apiKeys)
+      .where(eq(apiKeys.deploymentId, id))
+      .limit(1);
+
+    if (existingKeys.length === 0) {
+      await db
+        .insert(apiKeys)
+        .values({
+          id: randomUUID(),
+          deploymentId: id,
+          keyPrefix: keyPrefix(deployment.apiKey),
+          keyHash: hashApiKey(deployment.apiKey),
+          name: DEFAULT_API_KEY_NAME,
+        })
+        .onConflictDoNothing();
+    }
+
+    await db
+      .update(deployments)
+      .set({ apiKey: null, updatedAt: new Date() })
+      .where(eq(deployments.id, id));
+  }
+
   const creds = await db
     .select()
     .from(credentials)
     .where(eq(credentials.deploymentId, id));
+
+  const activeKeys = await db
+    .select({
+      id: apiKeys.id,
+      keyPrefix: apiKeys.keyPrefix,
+      name: apiKeys.name,
+      createdAt: apiKeys.createdAt,
+      lastUsedAt: apiKeys.lastUsedAt,
+    })
+    .from(apiKeys)
+    .where(and(eq(apiKeys.deploymentId, id), isNull(apiKeys.revokedAt)));
+
+  const revealRows = await db
+    .select({
+      id: apiKeys.id,
+      keyPrefix: apiKeys.keyPrefix,
+      name: apiKeys.name,
+      revealValue: apiKeys.revealValue,
+    })
+    .from(apiKeys)
+    .where(and(
+      eq(apiKeys.deploymentId, id),
+      isNull(apiKeys.revokedAt),
+      isNotNull(apiKeys.revealValue)
+    ));
+
+  if (revealRows.length > 0) {
+    await db
+      .update(apiKeys)
+      .set({ revealValue: null })
+      .where(inArray(apiKeys.id, revealRows.map((key) => key.id)));
+  }
 
   const credMap: Record<string, { masked: string; isSet: boolean }> = {};
   for (const c of creds) {
@@ -128,8 +189,26 @@ export default async function DeploymentDetailPage({
             deploymentId={deployment.id}
             ip={deployment.ip}
             webhookUrl={deployment.loadBalancerIp}
-            apiKey={deployment.apiKey}
             credentials={credMap}
+          />
+        )}
+
+        {deployment.status === "running" && (
+          <KeyManagement
+            deploymentId={deployment.id}
+            initialKeys={activeKeys.map((key) => ({
+              ...key,
+              createdAt: key.createdAt.toISOString(),
+              lastUsedAt: key.lastUsedAt?.toISOString() ?? null,
+            }))}
+            initialRevealedKeys={revealRows
+              .filter((key) => key.revealValue)
+              .map((key) => ({
+                id: key.id,
+                key: key.revealValue as string,
+                name: key.name,
+                keyPrefix: key.keyPrefix,
+              }))}
           />
         )}
 
@@ -160,17 +239,6 @@ export default async function DeploymentDetailPage({
                         </dt>
                         <dd className="font-mono text-xs text-right max-w-[50%] break-all">
                           {deployment.loadBalancerIp}
-                        </dd>
-                      </div>
-                      <Separator />
-                    </>
-                  )}
-                  {deployment.apiKey && (
-                    <>
-                      <div className="flex items-center justify-between py-1">
-                        <dt className="text-muted-foreground">API Key</dt>
-                        <dd className="font-mono text-xs">
-                          {deployment.apiKey.slice(0, 20)}...
                         </dd>
                       </div>
                       <Separator />
