@@ -22,3 +22,9 @@ export const TIER_PRICES: Record<string, { priceId: string; amount: number }> = 
     amount: 13600,
   },
 };
+
+export const CREDIT_PACKS: Record<string, { label: string; amountCents: number }> = {
+  starter: { label: "$25 inference credits", amountCents: 2500 },
+  growth: { label: "$100 inference credits", amountCents: 10000 },
+  scale: { label: "$500 inference credits", amountCents: 50000 },
+};

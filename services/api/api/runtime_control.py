@@ -24,6 +24,7 @@ from api.agent import (
     stop_session,
 )
 from api import slackbot_client
+from api.billing_usage import report_inference_usage
 from api.observability import (
     ExecutionObservationAccumulator,
     extract_usage_metrics,
@@ -2851,7 +2852,7 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
                     prompt_sha=prompt_sha,
                 )
                 for event_kind, observation_payload in projected:
-                    await append_execution_event(
+                    observation_event_id = await append_execution_event(
                         pool,
                         thread_key=thread_key,
                         execution_id=execution_id,
@@ -2906,6 +2907,11 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
                                 "cache_read_input_tokens"
                             ],
                             cost_usd=usage_metrics["cost_usd"],
+                        )
+                        await report_inference_usage(
+                            execution_id=execution_id,
+                            event_id=observation_event_id,
+                            usage_metrics=usage_metrics,
                         )
             silence_deadline = await _touch_execution_progress(
                 pool,

@@ -18,6 +18,7 @@ export const deployments = pgTable("deployments", {
   kubeconfigPath: text("kubeconfig_path"),
   apiKey: text("api_key"),
   monthlyCost: text("monthly_cost"),
+  inferenceMode: text("inference_mode").notNull().default("byok"),
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -31,6 +32,20 @@ export const credentials = pgTable("credentials", {
   pendingValue: text("pending_value"),
   isSet: integer("is_set").notNull().default(0),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const apiKeys = pgTable("api_keys", {
+  id: text("id").primaryKey(),
+  deploymentId: text("deployment_id").notNull(),
+  keyPrefix: text("key_prefix").notNull(),
+  keyHash: text("key_hash").notNull(),
+  name: text("name").notNull().default("Default"),
+  pendingValue: text("pending_value"),
+  revealValue: text("reveal_value"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  lastUsedAt: timestamp("last_used_at"),
+  revokedAt: timestamp("revoked_at"),
+  revocationPushedAt: timestamp("revocation_pushed_at"),
 });
 
 export const usageEvents = pgTable("usage_events", {

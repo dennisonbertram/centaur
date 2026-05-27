@@ -55,6 +55,7 @@ skills-lock.json
 # Output artifacts
 dogfood-output/
 tool-qa-output/
+.agent-browser/
 
 # OS
 .DS_Store

@@ -15,6 +15,7 @@ def image() -> str:
 
 
 _HARNESS_STUB_KEYS = (
+    "AI_GATEWAY_API_KEY",
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
     "AMP_API_KEY",
@@ -133,11 +134,24 @@ def container_env(
     if api_host:
         no_proxy_hosts.append(api_host)
     no_proxy = ",".join(dict.fromkeys(no_proxy_hosts))
-    # Placeholder values for harness infra secrets. iron-proxy MITMs the
-    # outbound TLS connection and rewrites these strings in auth headers
-    # before they reach the real upstream.
+    managed_inference = (os.getenv("CENTAUR_MANAGED_INFERENCE") or "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    # Placeholder values for harness infra secrets. In BYOK mode, iron-proxy
+    # rewrites these placeholders before they reach provider upstreams. In
+    # managed mode, provider SDKs call the in-cluster API gateway proxy and use
+    # the sandbox token they already have instead of the real AI Gateway key.
     for key in _HARNESS_STUB_KEYS:
-        env.append(f"{key}={key}")
+        if managed_inference and key in {
+            "AI_GATEWAY_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+        }:
+            env.append(f"{key}={api_key}")
+        else:
+            env.append(f"{key}={key}")
     for key in _SANDBOX_PASSTHROUGH_ENV_KEYS:
         value = (os.getenv(key) or "").strip()
         if value:

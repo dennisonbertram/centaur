@@ -40,6 +40,7 @@ export default function NewDeploymentPage() {
   const [name, setName] = useState("");
   const [tier, setTier] = useState("dev");
   const [location, setLocation] = useState("nbg1");
+  const [inferenceMode, setInferenceMode] = useState<"byok" | "managed">("byok");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,11 +53,23 @@ export default function NewDeploymentPage() {
       const res = await fetch("/api/deployments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, tier, location }),
+        body: JSON.stringify({ name, tier, location, inferenceMode, checkout: true }),
       });
 
       if (res.ok) {
         const data = await res.json().catch(() => ({ id: name }));
+        if (data.checkoutRequired && data.id) {
+          const checkoutRes = await fetch("/api/billing/checkout", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: "subscription", deploymentId: data.id }),
+          });
+          const checkoutData = await checkoutRes.json().catch(() => ({}));
+          if (checkoutRes.ok && checkoutData.url) {
+            window.location.href = checkoutData.url;
+            return;
+          }
+        }
         router.push(`/deployments/${data.id || name}`);
       } else {
         const data = await res.json().catch(() => ({}));
@@ -157,6 +170,54 @@ export default function NewDeploymentPage() {
                 </div>
               </label>
             ))}
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend className="text-sm font-medium text-gray-700">
+            Inference billing
+          </legend>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label
+              className={`cursor-pointer rounded-lg border p-4 transition-all ${
+                inferenceMode === "byok"
+                  ? "border-gray-900 bg-gray-50 ring-1 ring-gray-900"
+                  : "border-gray-200 hover:border-gray-300"
+              }`}
+            >
+              <input
+                type="radio"
+                name="inferenceMode"
+                value="byok"
+                checked={inferenceMode === "byok"}
+                onChange={() => setInferenceMode("byok")}
+                className="sr-only"
+              />
+              <span className="text-sm font-semibold">Bring your own key</span>
+              <p className="mt-1 text-sm text-gray-600">
+                Add provider keys after provisioning and pay providers directly.
+              </p>
+            </label>
+            <label
+              className={`cursor-pointer rounded-lg border p-4 transition-all ${
+                inferenceMode === "managed"
+                  ? "border-gray-900 bg-gray-50 ring-1 ring-gray-900"
+                  : "border-gray-200 hover:border-gray-300"
+              }`}
+            >
+              <input
+                type="radio"
+                name="inferenceMode"
+                value="managed"
+                checked={inferenceMode === "managed"}
+                onChange={() => setInferenceMode("managed")}
+                className="sr-only"
+              />
+              <span className="text-sm font-semibold">Managed credits</span>
+              <p className="mt-1 text-sm text-gray-600">
+                Route inference through Centaur and bill usage from credits.
+              </p>
+            </label>
           </div>
         </fieldset>
 

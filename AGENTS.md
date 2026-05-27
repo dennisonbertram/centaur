@@ -39,6 +39,34 @@ just up
 
 `./scripts/dbmate` creates the next numbered SQL file in `services/api/db/migrations` by default, or in `services/api/db/migrations` inside the mounted overlay when you pass `--set overlay`. `up`, `migrate`, and `status` run against both the core and overlay migration sets unless you pin a specific set. Each set has its own dbmate migrations table so overlay repos can extend the shared Postgres database without version collisions. If `DATABASE_URL` is not set in your shell, the wrapper reuses the API deployment's configured value through `kubectl exec`.
 
+### Dashboard local migrations and QA
+
+The SaaS dashboard in `contrib/dashboard` uses its own Postgres schema files
+under `contrib/dashboard/drizzle/`. Do not assume `pnpm exec drizzle-kit
+migrate` has applied hand-written SQL files unless the Drizzle journal metadata
+exists for them. If authenticated dashboard pages crash with missing columns or
+tables after pulling dashboard changes, verify and apply the dashboard SQL files
+against the dashboard `DATABASE_URL` before browser QA.
+
+For authenticated dashboard smoke tests with `agent-browser`, remember that
+`agent-browser` is headless by default. When a human needs to complete Clerk
+login, launch it headed and preserve the session:
+
+```bash
+AGENT_BROWSER_SESSION_NAME=centaur-dashboard agent-browser --headed open \
+  'http://localhost:3058/sign-in?redirect_url=http%3A%2F%2Flocalhost%3A3058%2Fdeployments%2Fnew'
+
+AGENT_BROWSER_SESSION_NAME=centaur-dashboard agent-browser open http://localhost:3058/deployments/new
+AGENT_BROWSER_SESSION_NAME=centaur-dashboard agent-browser snapshot -i
+mkdir -p .agent-browser
+AGENT_BROWSER_SESSION_NAME=centaur-dashboard agent-browser state save .agent-browser/centaur-dashboard-auth.json
+```
+
+Saved browser state contains Clerk session tokens. Keep `.agent-browser/`
+ignored and do not commit it. Checkout paths also require Stripe env; without
+Stripe configured, credit purchase and managed deployment subscription handoffs
+return `503` and cannot be fully smoke-tested.
+
 ### 3. Test
 
 From inside the API deployment (localhost bypass — no key needed):

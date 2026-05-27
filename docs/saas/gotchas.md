@@ -26,6 +26,43 @@ dashboard, it goes to the Postgres DB with a `pendingValue`. The provisioner
 worker polls for pending credentials and pushes them to the K8s secret. If
 the provisioner isn't running, credentials never reach the cluster.
 
+## Agent Browser QA
+
+**`agent-browser` is headless by default.** If you ask a human to complete a
+Clerk login, they will not see the window unless you launch with `--headed`:
+
+```bash
+AGENT_BROWSER_SESSION_NAME=centaur-dashboard agent-browser --headed open \
+  'http://localhost:3058/sign-in?redirect_url=http%3A%2F%2Flocalhost%3A3058%2Fdeployments%2Fnew'
+```
+
+After login, verify the protected route and save the state:
+
+```bash
+AGENT_BROWSER_SESSION_NAME=centaur-dashboard agent-browser open http://localhost:3058/deployments/new
+AGENT_BROWSER_SESSION_NAME=centaur-dashboard agent-browser snapshot -i
+mkdir -p .agent-browser
+AGENT_BROWSER_SESSION_NAME=centaur-dashboard agent-browser state save .agent-browser/centaur-dashboard-auth.json
+```
+
+The saved state contains Clerk session tokens. Keep `.agent-browser/` ignored,
+and prefer `AGENT_BROWSER_SESSION_NAME=centaur-dashboard` or
+`agent-browser --state .agent-browser/centaur-dashboard-auth.json ...` for
+repeatable authenticated dashboard smoke tests.
+
+**Dashboard SQL migrations are not guaranteed to run through Drizzle Kit.**
+The dashboard has hand-written SQL files in `contrib/dashboard/drizzle/`. If
+the folder has no Drizzle journal metadata for a file, `pnpm exec drizzle-kit
+migrate` may not apply it. Missing dashboard migrations show up as protected
+page crashes such as `column "inference_mode" does not exist` on `/deployments`
+or `relation "api_keys" does not exist` on deployment detail pages. Verify the
+target database schema before browser QA and apply the SQL directly if needed.
+
+**Stripe-backed checkout requires local Stripe env.** The Add credits button and
+managed-deployment subscription handoff both call `/api/billing/checkout`.
+Without Stripe configured, that endpoint returns `503`; the local UI may remain
+on the same page without an obvious user-facing explanation.
+
 **Order matters for Slack:**
 1. Save Signing Secret in dashboard
 2. Wait for provisioner to push it (~15 seconds)
@@ -35,6 +72,14 @@ the provisioner isn't running, credentials never reach the cluster.
 **OpenAI key must be in K8s secret, not just the dashboard.** The sandbox gets
 a placeholder from iron-proxy. If the real key isn't in `centaur-infra-env`,
 every LLM call fails with `401 Unauthorized: Incorrect API key provided: OPENAI_A**_KEY`.
+
+**Deployment API keys are reveal-once.** The dashboard stores deployment API key
+hashes in its `api_keys` table. New plaintext keys live in `pending_value` only
+until the provisioner pushes them into `centaur-infra-env` as
+`LOCAL_DEV_API_KEY` / `LOCAL_DEV_API_KEYS`; initial keys also use `reveal_value`
+so the detail page can show them once. If the provisioner is stopped, newly
+created keys appear in the dashboard but will not authenticate against the
+tenant API until the worker patches the secret and restarts the API pod.
 
 ## DNS
 

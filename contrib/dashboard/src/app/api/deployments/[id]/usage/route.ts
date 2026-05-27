@@ -46,12 +46,11 @@ export async function POST(
 
   // This endpoint is called by the Centaur API to report usage events.
   // Authenticated by a deployment-specific webhook secret, not Clerk.
+  const expectedSecret = process.env.CENTAUR_BILLING_EVENTS_SECRET;
   const webhookSecret = request.headers.get("x-webhook-secret");
-  if (!webhookSecret) {
+  if (!expectedSecret || webhookSecret !== expectedSecret) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  // TODO: Validate webhook secret against the deployment's stored secret
 
   const body = await request.json();
   const { event_type, count } = body;
