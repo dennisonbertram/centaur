@@ -225,6 +225,10 @@ uv run pytest
 
 See the [Developer Guide](AGENTS.md) for code conventions and end-to-end testing instructions.
 
+## License
+
+Centaur is open source under the [MIT License](LICENSE).
+
 ## Acknowledgements
 
 Centaur builds on excellent open-source infrastructure, including [FastAPI](https://fastapi.tiangolo.com/), [Kubernetes](https://kubernetes.io/), [mitmproxy](https://mitmproxy.org/), and the agent harnesses teams choose to run inside the sandbox.

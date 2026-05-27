@@ -14,7 +14,7 @@ function canonicalHref(path: string) {
 export default defineConfig({
   rootDir: '.',
   srcDir: '.',
-  colorScheme: 'dark',
+  colorScheme: 'light',
   renderStrategy: 'full-static',
   // The dead-link checker doesn't know about static assets shipped via
   // public/ (like our zip and brand SVGs), so downgrade to a warning rather
@@ -104,6 +104,14 @@ export default defineConfig({
   },
   topNav: [
     {
+      text: 'Paradigm',
+      link: 'https://paradigm.xyz',
+    },
+    {
+      text: 'Tempo',
+      link: 'https://tempo.xyz',
+    },
+    {
       text: 'GitHub',
       link: 'https://github.com/paradigmxyz/centaur',
     },
@@ -123,6 +131,7 @@ export default defineConfig({
   },
   sidebar,
   theme: {
+    colorScheme: 'light',
     // Keep in sync with --centaur-accent in docs/pages/_root.css.
     accentColor: {
       light: '#28c26a',

@@ -1,6 +1,7 @@
 {
   "name": "centaur",
   "private": true,
+  "license": "MIT",
   "packageManager": "pnpm@10.28.1",
   "scripts": {
     "slackbot:delivery-regression": "pnpm --filter slackbot test"

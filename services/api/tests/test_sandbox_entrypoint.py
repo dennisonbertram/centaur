@@ -99,8 +99,10 @@ def test_sandbox_entrypoint_bootstraps_mock_google_adc(tmp_path: Path) -> None:
         "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/mock%40creds.com",
         "universe_domain": "googleapis.com",
     }
-    assert adc["private_key"].startswith("-----BEGIN " + "PRIVATE KEY-----\n")
-    assert adc["private_key"].endswith("-----END " + "PRIVATE KEY-----\n")
+    pem_begin = "-----BEGIN " + "PRIVATE KEY-----\n"
+    pem_end = "-----END " + "PRIVATE KEY-----\n"
+    assert adc["private_key"].startswith(pem_begin)
+    assert adc["private_key"].endswith(pem_end)
 
     codex_config = (home / ".codex" / "config.toml").read_text()
     assert 'model = "gpt-5.5"' in codex_config
