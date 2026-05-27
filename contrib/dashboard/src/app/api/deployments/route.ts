@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { deployments } from "@/lib/schema";
 import { eq } from "drizzle-orm";
 import { logger } from "@/lib/logger";
+import { managedInferenceEnabled } from "@/lib/billing";
 
 export async function POST(request: Request) {
   const { userId } = await auth();
@@ -15,6 +16,9 @@ export async function POST(request: Request) {
 
   const body = await request.json();
   const { name, tier, location } = body;
+  const inferenceMode =
+    body.inferenceMode === "managed" && managedInferenceEnabled() ? "managed" : "byok";
+  const checkout = body.checkout === true;
 
   if (!name || !tier || !location) {
     logger.warn("deployment_create_invalid", { name, tier, location, userId });
@@ -61,8 +65,9 @@ export async function POST(request: Request) {
       tier,
       location,
       slug,
-      status: "provisioning",
+      status: checkout ? "pending_billing" : "provisioning",
       monthlyCost: cost,
+      inferenceMode,
     })
     .returning();
 
@@ -70,9 +75,17 @@ export async function POST(request: Request) {
   // runs Terraform/Helm. The dashboard just records the intent.
   logger.info("deployment_created", {
     id: deployment.id,
-    status: "provisioning",
+      status: deployment.status,
     note: "Provisioner worker will pick this up",
   });
+
+  if (checkout) {
+    return NextResponse.json({
+      ...deployment,
+      checkoutRequired: true,
+      checkoutKind: "subscription",
+    }, { status: 201 });
+  }
 
   return NextResponse.json(deployment, { status: 201 });
 }
