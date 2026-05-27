@@ -17,7 +17,7 @@ import ThreadPanel from '../components/ThreadPanel'
   <section className="home-hero" aria-labelledby="home-title">
     <div className="home-copy">
       <a className="home-lockup-link" href="https://github.com/paradigmxyz/centaur" target="_blank" rel="noopener noreferrer" aria-label="Centaur on GitHub">
-        <img className="home-lockup" src="/brand/lockup-white.svg" alt="Centaur" />
+        <img className="home-lockup" src="/brand/lockup-black.svg" alt="Centaur" />
       </a>
       <h1 id="home-title">Multiplayer, self-hosted, secure agents for Slack.</h1>
 
@@ -33,8 +33,8 @@ Onboard me to Centaur locally. Use https://centaur.run/llms-full.txt and follow 
 ```
       </div>
 
-      <div className="home-built-with" aria-label="Built by">
-        <span>Built by</span>
+      <div className="home-built-with" aria-label="Built by Paradigm and Tempo">
+        <span>Built by Paradigm and Tempo</span>
         <div className="home-logo-row" aria-label="Paradigm and Tempo">
           <a className="home-brand" href="https://paradigm.xyz" aria-label="Paradigm">
             <img src="/paradigm-logo.svg" alt="Paradigm" />
@@ -48,7 +48,7 @@ Onboard me to Centaur locally. Use https://centaur.run/llms-full.txt and follow 
 
     <div className="home-thread-demo" aria-label="Centaur thread preview">
       <ThreadPanel />
-      <div className="home-thread-demo-caption">transcripts from the Paradigm & Tempo Slacks</div>
+      <div className="home-thread-demo-caption">Transcripts from the Paradigm & Tempo Slacks</div>
     </div>
   </section>
 
