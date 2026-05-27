@@ -18,6 +18,7 @@ export const deployments = pgTable("deployments", {
   kubeconfigPath: text("kubeconfig_path"),
   apiKey: text("api_key"),
   monthlyCost: text("monthly_cost"),
+  inferenceMode: text("inference_mode").notNull().default("byok"),
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),

@@ -11,6 +11,8 @@ const WORKER_ID = `worker-${process.pid}-${Date.now()}`;
 const API_KEY_SECRET_NAME = "LOCAL_DEV_API_KEY";
 const API_KEYS_SECRET_NAME = "LOCAL_DEV_API_KEYS";
 const REVOKED_API_KEY_HASHES_SECRET_NAME = "LOCAL_DEV_REVOKED_API_KEY_HASHES";
+const MANAGED_INFERENCE_BASE_URL = "http://api:8000/ai-gateway/v1";
+const MANAGED_INFERENCE_ANTHROPIC_BASE_URL = "http://api:8000/ai-gateway";
 
 function hashApiKey(key: string): string {
   return createHash("sha256").update(key).digest("hex");
@@ -75,6 +77,27 @@ function restartTenantApi(deploymentId: string, kubeconfig: string) {
   });
 }
 
+function managedInferenceSecretValues(deploymentId: string): Record<string, string> {
+  const billingEventsUrl = (process.env.CENTAUR_BILLING_EVENTS_URL || "").trim();
+  const creditCheckUrl = (process.env.CENTAUR_CREDIT_CHECK_URL || "").trim();
+  const billingEventsSecret = (process.env.CENTAUR_BILLING_EVENTS_SECRET || "").trim();
+  const aiGatewayApiKey = (process.env.AI_GATEWAY_API_KEY || "").trim();
+  const sandboxExtraEnv = [
+    { name: "OPENAI_BASE_URL", value: MANAGED_INFERENCE_BASE_URL },
+    { name: "ANTHROPIC_BASE_URL", value: MANAGED_INFERENCE_ANTHROPIC_BASE_URL },
+  ];
+  return {
+    CENTAUR_DEPLOYMENT_ID: deploymentId,
+    CENTAUR_MANAGED_INFERENCE: "1",
+    CENTAUR_AI_GATEWAY_BASE_URL: MANAGED_INFERENCE_BASE_URL,
+    AI_GATEWAY_API_KEY: aiGatewayApiKey,
+    CENTAUR_BILLING_EVENTS_URL: billingEventsUrl,
+    CENTAUR_CREDIT_CHECK_URL: creditCheckUrl,
+    CENTAUR_BILLING_EVENTS_SECRET: billingEventsSecret,
+    KUBERNETES_SANDBOX_EXTRA_ENV: JSON.stringify(sandboxExtraEnv),
+  };
+}
+
 async function claimJob(targetStatus: string): Promise<typeof deployments.$inferSelect | null> {
   // Atomic claim: only one worker gets the row
   const [claimed] = await db.execute<typeof deployments.$inferSelect>(sql`
@@ -108,6 +131,22 @@ async function processProvision() {
   });
 
   if (result.success) {
+    if (job.inferenceMode === "managed") {
+      const kubeconfig = resolveSharedKubeconfig();
+      if (kubeconfig) {
+        try {
+          patchTenantSecret(job.id, kubeconfig, managedInferenceSecretValues(job.id));
+          restartTenantApi(job.id, kubeconfig);
+          log("managed_inference_configured", { id: job.id });
+        } catch (err) {
+          log("managed_inference_config_failed", {
+            id: job.id,
+            error: err instanceof Error ? err.message.slice(0, 200) : String(err),
+          });
+        }
+      }
+    }
+
     if (result.apiKey) {
       await db
         .insert(apiKeys)
@@ -340,12 +379,41 @@ async function processPendingApiKeyRevocations() {
   }
 }
 
+async function processBillingOutbox() {
+  const processUrl = (process.env.CENTAUR_BILLING_OUTBOX_PROCESS_URL || "").trim();
+  const secret = (process.env.CENTAUR_BILLING_EVENTS_SECRET || "").trim();
+  if (!processUrl || !secret) return;
+
+  try {
+    const response = await fetch(processUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-centaur-billing-secret": secret,
+      },
+      body: JSON.stringify({ limit: 25 }),
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const result = await response.json().catch(() => ({}));
+    if (result.processed || result.failed) {
+      log("billing_outbox_processed", result);
+    }
+  } catch (err) {
+    log("billing_outbox_process_failed", {
+      error: err instanceof Error ? err.message.slice(0, 200) : String(err),
+    });
+  }
+}
+
 async function tick() {
   await processProvision();
   await processDestroy();
   await processPendingCredentials();
   await processPendingApiKeys();
   await processPendingApiKeyRevocations();
+  await processBillingOutbox();
 }
 
 async function main() {

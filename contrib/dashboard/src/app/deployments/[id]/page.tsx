@@ -16,6 +16,7 @@ import { DEFAULT_API_KEY_NAME, hashApiKey, keyPrefix } from "@/lib/api-keys";
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   running: "default",
   provisioning: "secondary",
+  pending_billing: "secondary",
   claiming: "secondary",
   error: "destructive",
   stopped: "outline",
@@ -141,7 +142,7 @@ export default async function DeploymentDetailPage({
             </div>
             <p className="text-sm text-muted-foreground">
               {deployment.tier} &middot; {deployment.location} &middot;{" "}
-              {deployment.monthlyCost}
+              {deployment.monthlyCost} &middot; {deployment.inferenceMode} inference
             </p>
           </div>
           <DeleteButton deploymentId={deployment.id} status={deployment.status} />

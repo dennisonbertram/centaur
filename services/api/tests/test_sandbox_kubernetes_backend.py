@@ -200,11 +200,25 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
 
     assert "FIREWALL_HOST=firewall.internal" in env
     # iron-proxy rewrites the placeholder mid-flight.
+    assert env_map["AI_GATEWAY_API_KEY"] == "AI_GATEWAY_API_KEY"
     assert env_map["AMP_API_KEY"] == "AMP_API_KEY"
     assert env_map["OPENAI_API_KEY"] == "OPENAI_API_KEY"
     assert env_map["CENTAUR_TRACE_ID"] == "00000000-0000-0000-0000-000000000123"
     assert env_map["NO_PROXY"] == "localhost,127.0.0.1,firewall.internal,api.internal"
     assert env_map["no_proxy"] == env_map["NO_PROXY"]
+
+
+def test_container_env_uses_sandbox_token_for_managed_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CENTAUR_MANAGED_INFERENCE", "1")
+
+    env = sandbox_container_env("thread-key", "sandbox-id", "firewall.internal")
+    env_map = dict(item.split("=", 1) for item in env)
+
+    assert env_map["AI_GATEWAY_API_KEY"] == env_map["CENTAUR_API_KEY"]
+    assert env_map["OPENAI_API_KEY"] == env_map["CENTAUR_API_KEY"]
+    assert env_map["ANTHROPIC_API_KEY"] == env_map["CENTAUR_API_KEY"]
 
 
 def test_container_env_passes_laminar_otel_config(

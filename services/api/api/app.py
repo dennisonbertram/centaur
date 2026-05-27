@@ -36,6 +36,7 @@ from api.vm_metrics import (
     stop_push_loop,
 )
 from api.routers import (
+    ai_gateway,
     admin,
     attachments as attachments_mod,
     deprecated,
@@ -396,6 +397,7 @@ async def instrument_requests(request, call_next):
 
 
 app.include_router(health.router)
+app.include_router(ai_gateway.router)
 app.include_router(agent_router_mod.router)
 app.include_router(workflow_router_mod.router)
 app.include_router(attachments_mod.router)
